@@ -77,7 +77,8 @@ function expand(paths: readonly string[]): string[] {
   for (const path of paths) {
     if (statSync(path).isDirectory()) {
       for (const entry of readdirSync(path).sort()) {
-        if (entry.endsWith(".jsonl")) files.push(join(path, entry));
+        // 対局ログは日付で切ってある。同じ場所の別の JSONL を読み込まない。
+        if (/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(entry)) files.push(join(path, entry));
       }
     } else {
       files.push(path);

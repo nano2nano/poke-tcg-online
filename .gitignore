@@ -2,6 +2,6 @@ node_modules/
 dist/
 # 対局ログとプレイヤー。実データは git の管理下に置かない。
 data/matches/
-# 書きかけの別名（`accounts.json.writing`）も含める。落ちたときに残り、
-# シークレットのハッシュを丸ごと持っている。
-data/accounts.json*
+# 書きかけの別名（`accounts.jsonl.writing`）と、旧形式の `accounts.json` も含める。
+# プロセスが落ちたときに残り、シークレットのハッシュを丸ごと持っている。
+data/accounts.*

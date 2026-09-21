@@ -9,7 +9,14 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,6 +44,11 @@ const MAX_DISPLAY_NAME = 40;
 
 const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
 
+/** 書き直すかどうかの下限。少ないうちは、割合で見ると何度も書き直すことになる。 */
+const COMPACT_FLOOR = 64;
+/** 実体の何倍まで古い版を許すか。大きくすると読み込みが遅くなり、小さくすると書き直しが増える。 */
+const COMPACT_RATIO = 2;
+
 interface StoredAccount extends Account {
   /** シークレットそのものは持たない。漏れても入れないようにする。 */
   secretHash: string;
@@ -46,6 +58,9 @@ export class AccountStore {
   private readonly accounts = new Map<string, StoredAccount>();
   /** シークレットのハッシュ → 識別子。 */
   private readonly bySecretHash = new Map<string, string>();
+  /** ファイルにある行数。実体より多ければ古い版が溜まっている。 */
+  private lines = 0;
+  private broken = 0;
 
   constructor(private readonly dir: string = DEFAULT_DIR) {
     this.load();
@@ -69,7 +84,7 @@ export class AccountStore {
     };
     this.accounts.set(stored.playerId, stored);
     this.bySecretHash.set(stored.secretHash, stored.playerId);
-    this.save();
+    this.record([stored]);
     return { account: publicOf(stored), secret };
   }
 
@@ -91,7 +106,7 @@ export class AccountStore {
     if (stored === null) return null;
     stored.displayName = cleanName(displayName);
     stored.lastSeenAt = new Date(nowMs).toISOString();
-    this.save();
+    this.record([stored]);
     return publicOf(stored);
   }
 
@@ -99,7 +114,7 @@ export class AccountStore {
     const stored = this.storedBySecret(secret);
     if (stored === null) return null;
     stored.lastSeenAt = new Date(nowMs).toISOString();
-    this.save();
+    this.record([stored]);
     return publicOf(stored);
   }
 
@@ -130,7 +145,7 @@ export class AccountStore {
       else account.draws += 1;
       account.lastSeenAt = at;
     }
-    this.save();
+    this.record([a, b]);
     return [a.rating, b.rating];
   }
 
@@ -145,27 +160,71 @@ export class AccountStore {
   }
 
   private get path(): string {
+    return join(this.dir, "accounts.jsonl");
+  }
+
+  /** 全体を 1 つの配列として持っていた頃のファイル。読み込みのときだけ見る。 */
+  private get legacyPath(): string {
     return join(this.dir, "accounts.json");
   }
 
   private load(): void {
-    if (!existsSync(this.path)) return;
-    const rows = JSON.parse(readFileSync(this.path, "utf8")) as StoredAccount[];
-    for (const row of rows) {
-      this.accounts.set(row.playerId, row);
-      this.bySecretHash.set(row.secretHash, row.playerId);
+    if (existsSync(this.path)) {
+      for (const line of readFileSync(this.path, "utf8").split("\n")) {
+        if (line.trim() === "") continue;
+        let row: StoredAccount;
+        try {
+          row = JSON.parse(line) as StoredAccount;
+        } catch {
+          // 追記の途中で落ちれば書きかけの行が残る。1 行のために全員を失わない。
+          this.broken++;
+          continue;
+        }
+        this.remember(row);
+        this.lines++;
+      }
+      if (this.broken > 0) console.warn(`${this.path}: 読めない行を ${this.broken} 行とばした`);
+      return;
     }
+    if (!existsSync(this.legacyPath)) return;
+    for (const row of JSON.parse(readFileSync(this.legacyPath, "utf8")) as StoredAccount[]) {
+      this.remember(row);
+    }
+    this.compact();
+  }
+
+  private remember(row: StoredAccount): void {
+    // 同じ playerId があとから出てきたら、あとのほうが新しい。
+    this.accounts.set(row.playerId, row);
+    this.bySecretHash.set(row.secretHash, row.playerId);
   }
 
   /**
-   * 書き換えは別名で書いてから差し替える。途中で落ちても、読める古い版が残る。
-   * データベースを置かないのは対局ログと同じ理由で、索引が要る問い合わせが無いからである。
+   * 変わったアカウントだけを 1 行ずつ足す。
+   *
+   * 全体を書き直していたときは、`POST /api/account` を繰り返されるだけで 1 回の書き込みが
+   * 登録数に比例して伸びた。同期で書くので、その間イベントループが止まり、対戦中の手も
+   * 持ち時間のスイープも遅れる。追記なら 1 回のコストが登録数に依らない。
    */
-  private save(): void {
+  private record(rows: StoredAccount[]): void {
+    mkdirSync(this.dir, { recursive: true });
+    appendFileSync(this.path, rows.map((row) => `${JSON.stringify(row)}\n`).join(""), "utf8");
+    this.lines += rows.length;
+    // 追記だけでは古い版が残り続ける。増えたぶんが実体を超えたら書き直して捨てる。
+    if (this.lines > COMPACT_FLOOR && this.lines > this.accounts.size * COMPACT_RATIO) {
+      this.compact();
+    }
+  }
+
+  /** 最新の 1 版だけを書き直す。別名で書いてから差し替えるので、落ちても古い版が残る。 */
+  private compact(): void {
     mkdirSync(this.dir, { recursive: true });
     const temporary = `${this.path}.writing`;
-    writeFileSync(temporary, `${JSON.stringify([...this.accounts.values()], null, 2)}\n`, "utf8");
+    const rows = [...this.accounts.values()].map((row) => `${JSON.stringify(row)}\n`).join("");
+    writeFileSync(temporary, rows, "utf8");
     renameSync(temporary, this.path);
+    this.lines = this.accounts.size;
+    this.broken = 0;
   }
 }
 
