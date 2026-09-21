@@ -1,0 +1,77 @@
+# 型検査と書式と試験を回す。ブランチ保護の required check はこの job の名前（verify）。
+#
+# エンジンは private な submodule なので、取得だけ deploy key（読み取り専用）で行う。
+# リポジトリ自身の checkout には既定のトークンを使い、鍵を渡さない。鍵が要るのは
+# submodule の 1 行だけで、範囲をそこへ閉じる。
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 公開リポジトリなので、既定の権限を読み取りだけに絞る。
+permissions:
+  contents: read
+
+# 同じ ref に新しい push が来たら、走っている方を止める。
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: このリポジトリを取る（submodule は取らない）
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: エンジンを読む鍵が渡っているか確かめる
+        env:
+          ENGINE_DEPLOY_KEY: ${{ secrets.ENGINE_DEPLOY_KEY }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          if [ -n "$ENGINE_DEPLOY_KEY" ]; then
+            exit 0
+          fi
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::error::fork から来た PR にはシークレットが渡らないため、エンジン（private な submodule）を取得できない。この PR を検査するには、同じ変更をこのリポジトリのブランチへ push すること。"
+          else
+            echo "::error::ENGINE_DEPLOY_KEY が空。Settings > Secrets and variables > Actions に、poke-tcg-engine を読める deploy key（SSH 秘密鍵）を同じ名前で登録すること。"
+          fi
+          exit 1
+
+      - name: 鍵を ssh-agent へ載せる
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.ENGINE_DEPLOY_KEY }}
+
+      - name: github.com のホスト鍵を控える
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+
+      # .gitmodules は https の URL を持つ。鍵で取れるのは ssh なので、この 1 回だけ読み替える。
+      # 設定はリポジトリへ書き込まず、このコマンドの中だけで効かせる。
+      - name: エンジン（submodule）を取る
+        run: |
+          git -c url."git@github.com:".insteadOf=https://github.com/ \
+            submodule update --init --depth 1 engine
+          test -f engine/package.json \
+            || { echo "::error::engine/ が空のまま。submodule の取得に失敗している"; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 依存を入れる
+        run: npm ci
+
+      # 型検査、書式、試験 39 件。engine/ 配下は .prettierignore で書式検査の対象外。
+      - name: 検査する
+        run: npm run verify:all

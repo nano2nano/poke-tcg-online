@@ -43,6 +43,16 @@ npm run replay:verify data/matches    # 残っている対局ログを再生し�
 人間の対局は、一様ランダムの自己対戦が踏まない筋を踏む。
 定期に回せば、実際に指された盤面が未知の誤りを探す標本になる。
 
+## CI
+
+`.github/workflows/verify.yml` が push と pull request で `npm run verify:all` を回す。
+job の名前は `verify` で、ブランチ保護の required check はこれを指す。
+
+エンジンは private なので、submodule の取得だけ deploy key（読み取り専用の SSH 秘密鍵）で行う。
+鍵は Actions secret の `ENGINE_DEPLOY_KEY` に置く。リポジトリ自身の checkout には既定の
+トークンを使い、鍵を渡さない。**fork から来た pull request にはシークレットが渡らないため、
+エンジンを取得できず検査が落ちる。** その変更を検査するには、このリポジトリのブランチへ push すること。
+
 ## 手を入れるときに気をつけること
 
 - **座席へ出る値は `src/hub.ts` の `syncFor` と `deltaFor` だけが組み立てる。**
