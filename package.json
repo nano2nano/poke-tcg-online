@@ -1,0 +1,28 @@
+{
+  "name": "poke-tcg-online",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ポケモンカードゲームのオンライン対戦サーバ（poke-tcg-engine をルール判定に使う）",
+  "type": "module",
+  "scripts": {
+    "engine:sync": "git submodule update --init --depth 1 engine",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
+    "start": "tsx src/main.ts",
+    "replay:verify": "tsx tools/replay-verify.ts",
+    "verify:all": "npm run typecheck && npm run fmt:check && npm run test"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/ws": "^8.18.1",
+    "oxfmt": "^0.64.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

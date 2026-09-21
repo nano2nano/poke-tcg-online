@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# 対局ログ。実データは git の管理下に置かない。
+data/matches/
