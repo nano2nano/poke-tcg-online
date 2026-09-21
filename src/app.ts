@@ -261,7 +261,7 @@ function toDeckList(body: unknown): DeckList | null {
   return { cards: cards as DeckList["cards"] };
 }
 
-/** 外から来た本文をマッチングの求めへ直す。省ける欄は、あれば形を確かめる。 */
+/** 外から来た本文を参加要求へ直す。省ける欄は、あれば形を確かめる。 */
 function toJoinRequest(body: unknown): JoinRequest | null {
   if (typeof body !== "object" || body === null) return null;
   const { secret, deck, displayName, roomCode } = body as Record<string, unknown>;

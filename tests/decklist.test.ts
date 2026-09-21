@@ -59,7 +59,7 @@ describe("デッキの文字列の解決", () => {
     expect(result.deck.cards.slice(2).every((id) => id === result.entries[1]?.defId)).toBe(true);
   });
 
-  // ここが本題。455 種の名前が複数の defId を持つので、推測は必ず事故になる。
+  // ここが本題。複数の defId を持つ名前は珍しくないので、推測は必ず事故になる。
   it("同じ名前が複数あるときは、候補を返して拒否する", () => {
     const [name, defs] = ambiguousName();
     const result = resolveDecklist(`${name} 4`);

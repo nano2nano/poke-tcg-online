@@ -15,7 +15,7 @@ let seat = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
-/** 走っているプレイヤーの読み込み。`ensureAccount` がマッチングに使う。 */
+/** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 
 const nameOf = (defId) => cards[defId]?.name ?? defId;
@@ -27,8 +27,8 @@ $("join-button").addEventListener("click", () => {
 /**
  * 人が表示名を触ったか。
  *
- * 読み込みは非同期なので、**返ってくる前に表示名を書き換えて「対戦をさがす」を
- * 押せてしまう。** そこで欄を埋め直すと、打った名前が消えてから送られる。
+ * 読み込みは非同期なので、返ってくる前に表示名を書き換えて「対戦をさがす」を
+ * 押せてしまう。 そこで欄を埋め直すと、打った名前が消えてから送られる。
  */
 let nameTouched = false;
 $("name").addEventListener("input", () => {
@@ -65,7 +65,7 @@ $("concede-button").addEventListener("click", () => {
 async function join() {
   setStatus("デッキを送っています");
   cards = await getJson("/api/cards");
-  // **ここで名前の欄を書き戻さない。** 書き戻すと、入力した名前が消えてから読まれる。
+  // ここで名前の欄を書き戻さない。 書き戻すと、入力した名前が消えてから読まれる。
   await ensureAccount();
   const deck = await deckToSubmit();
   if (deck === null) {
@@ -78,7 +78,7 @@ async function join() {
     secret: storedSecret(),
     deck: { cards: deck.cards },
   };
-  // **表示名の変更は、その人が欄を触ったときだけ送る。** 表示名の変更は対局ログにも残り、
+  // 表示名の変更は、その人が欄を触ったときだけ送る。 表示名の変更は対局ログにも残り、
   // 取り消せない。欄の中身がその人の意思だとは限らない以上、送る条件は「打ったこと」にする。
   if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
   if (room !== "") request.roomCode = room;
@@ -176,7 +176,7 @@ function pickChoice(line, name, defId) {
 /**
  * 相手が見つかるまで取りに行く。
  *
- * **チケットが降りていたら待つのをやめる。** 同じプレイヤーが別のタブから入ると古いチケットは降りる。
+ * チケットが降りていたら待つのをやめる。 同じプレイヤーが別のタブから入ると古いチケットは降りる。
  * それを「まだ待っている」と読むと、このタブは永久に問い合わせ続けることになる。
  */
 async function waitForOpponent(ticket) {
@@ -327,7 +327,7 @@ function renderMoves(moves) {
  * 手の見出し。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
  * ここが知らない型が来ても、型の名前だけは出す。
  *
- * 名前を引くのは **その手を指す直前の盤面** からである。指したあとの盤面では、
+ * 名前を引くのは その手を指す直前の盤面 からである。指したあとの盤面では、
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
 function describeMove(move, view = lastView) {
@@ -436,7 +436,7 @@ function setStatus(text) {
 }
 
 /**
- * プレイヤーのシークレット。**サーバは控えを持たない**ので、失うとその戦績には戻れない。
+ * プレイヤーのシークレット。サーバは控えを持たないので、失うとその戦績には戻れない。
  * この画面は確認用なので、localStorage に置くだけにしておく。
  */
 function storedSecret() {
@@ -446,7 +446,7 @@ function storedSecret() {
 /**
  * プレイヤーを 1 人だけ用意する。
  *
- * **走っている途中の呼び出しをマッチングる。** 画面を開いたときの読み込みと、
+ * 実行中の呼び出しを待ち合わせる。 画面を開いたときの読み込みと、
  * それを待たずに押された「対戦をさがす」が重なると、プレイヤーが 2 人できる。
  * 画面に出ているレーティングと、実際に指すプレイヤーが食い違い、片方が迷子になる。
  */
@@ -455,7 +455,7 @@ function ensureAccount() {
   loadingAccount ??= loadAccount()
     .then((account) => {
       showAccount(account);
-      // **読めたときは必ず欄へ入れる。画面を開いたときの 1 回だけにしない。**
+      // 読めたときは必ず欄へ入れる。画面を開いたときの 1 回だけにしない。
       // 開いたときに失敗すると、欄は既定の「ななし」のまま残る。次に「対戦をさがす」で
       // 読み直して通っても入れ直さないと、その「ななし」が表示名として送られる。
       if (!nameTouched) $("name").value = account.displayName;
@@ -499,7 +499,7 @@ async function loadAccount() {
   return created.account;
 }
 
-/** レーティングと戦績の 1 行。**名前の欄には触れない。** 入力の途中かもしれない。 */
+/** レーティングと戦績の 1 行。名前の欄には触れない。 入力の途中かもしれない。 */
 function showAccount(account) {
   const record =
     account.games === 0
@@ -515,7 +515,7 @@ async function getJson(path) {
 }
 
 /**
- * **応答の可否を見る。** 見ないと、誤りの本文をそのまま中身として読むことになり、
+ * 応答の可否を見る。 見ないと、誤りの本文をそのまま中身として読むことになり、
  * `undefined` を触った先で分かりにくい誤りになる。サーバの言い分をそのまま持ち上げる。
  *
  * ただし **`ok: false` は投げない。** 「デッキのここが規則に通らない」のような、
@@ -553,7 +553,7 @@ for (const [id, step] of [
 ]) {
   $(id).addEventListener("click", () => {
     if (replaying === null) return;
-    // 数えるのは**頼んだ手数**からである。描けた手数から数えると、続けて押したぶんが
+    // 数えるのは頼んだ手数からである。描けた手数から数えると、続けて押したぶんが
     // すべて同じ 1 手への問い合わせになり、6 回押しても 1 手しか進まない。
     goToPly(step(replaying.wanted)).catch((error) => {
       $("replay-status").textContent = `辿れませんでした: ${error.message}`;
@@ -562,7 +562,7 @@ for (const [id, step] of [
 }
 
 async function showHistory() {
-  // **プレイヤーができるのを待つ。** 初めて来た人はシークレットをまだ持たないので、
+  // プレイヤーができるのを待つ。 初めて来た人はシークレットをまだ持たないので、
   // 待たずに送ると `secret: null` になり、「プレイヤーが見つからない」と断られる。
   await ensureAccount();
   if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
@@ -611,7 +611,7 @@ async function openReplay(summary) {
     await goToPly(0);
   } catch (error) {
     // 開けないものを空の欄で見せない。エラーは一覧のところに出す。
-    // **いま開いているものが自分のときだけ閉じる。** 先に別の対戦を開いていれば、
+    // いま開いているものが自分のときだけ閉じる。 先に別の対戦を開いていれば、
     // 遅れて届いたこちらの失敗で、映っているほうを閉じることになる。
     if (replaying === opened) {
       $("replay").hidden = true;
@@ -642,7 +642,7 @@ async function goToPly(ply) {
       ply: wanted,
     }));
   } catch (error) {
-    // **行き先を戻す。** 戻さないと、1 度失敗しただけで次に押したぶんが 1 手飛ぶ。
+    // 行き先を戻す。 戻さないと、1 度失敗しただけで次に押したぶんが 1 手飛ぶ。
     // あとから出したぶんが走っていれば、その行き先のほうが新しいので触らない。
     if (replaying === opened && mine === opened.asked) opened.wanted = opened.ply;
     throw error;
@@ -668,7 +668,7 @@ async function goToPly(ply) {
 /**
  * 座席ごとの射影 2 つを、読み手から見た 1 枚の盤面にする。
  *
- * 相手の側も**相手自身の射影の `self`** から取る。終わった対戦なので、相手の手札も
+ * 相手の側も相手自身の射影の `self` から取る。終わった対戦なので、相手の手札も
  * そのまま見えてよい（6.6 節）。
  */
 function readerBoard(views, seat) {
