@@ -231,7 +231,7 @@ async function route(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/claim") {
-    respondJson(response, 200, { seat: lobby.claim(url.searchParams.get("ticket") ?? "") });
+    respondJson(response, 200, lobby.claim(url.searchParams.get("ticket") ?? ""));
     return;
   }
   serveStatic(url.pathname, response);

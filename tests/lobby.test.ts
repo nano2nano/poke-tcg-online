@@ -44,6 +44,13 @@ function newArena(): Arena {
   };
 }
 
+/** 待っていた側が取りに行って、座れた席を返す。座れていなければ試験を落とす。 */
+function seatOf(lobby: Lobby, ticket: string) {
+  const claimed = lobby.claim(ticket);
+  if (claimed.kind !== "seated") throw new Error(`席が取れていない: ${claimed.kind}`);
+  return claimed.seat;
+}
+
 /** 打ち手を 1 人作り、その合言葉で入る要求を組む。 */
 function player(arena: Arena, name: string, roomCode?: string) {
   const deck = legalDecks()[0];
@@ -61,8 +68,7 @@ describe("相手を見つける", () => {
 
     const second = lobby.join(player(arena, "b", "あいことば"));
     expect(second.ok && "seat" in second && second.seat.seat).toBe(1);
-    const claimed = first.ok ? lobby.claim(first.ticket) : null;
-    expect(claimed?.seat).toBe(0);
+    expect(first.ok ? seatOf(lobby, first.ticket).seat : null).toBe(0);
   });
 
   it("合言葉が違えば繋がない", () => {
@@ -91,8 +97,8 @@ describe("相手を見つける", () => {
     // 2 回目で対戦が始まっていない。待っているのは 1 つだけである。
     expect(second.ok && "seat" in second).toBe(false);
     expect(lobby.waitingCount()).toBe(1);
-    // 古いほうは降りているので、取りに行っても座席は無い。
-    expect(first.ok ? lobby.claim(first.ticket) : null).toBeNull();
+    // 古いほうは降りている。**「待っている」と答えてはいけない。** 古い窓が待ち続ける。
+    expect(first.ok ? lobby.claim(first.ticket).kind : null).toBe("dropped");
 
     // 別の人が来れば、生きているほうの窓と繋がる。
     const other = lobby.join(player(arena, "ほかのひと"));
@@ -121,7 +127,7 @@ describe("相手を見つける", () => {
     lobby.join(player(arena, "b"));
     const third = lobby.join(player(arena, "c"));
     // a と b が繋がり、c だけが残る。
-    expect(first.ok ? lobby.claim(first.ticket) : null).not.toBeNull();
+    expect(first.ok ? lobby.claim(first.ticket).kind : null).toBe("seated");
     expect(third.ok && "seat" in third).toBe(false);
     expect(lobby.waitingCount()).toBe(1);
   });
@@ -146,7 +152,7 @@ describe("座席の接続", () => {
     const { lobby, hub } = arena;
     const first = lobby.join(player(arena, "a", "へや"));
     const second = lobby.join(player(arena, "b", "へや"));
-    const seatA = first.ok ? lobby.claim(first.ticket) : null;
+    const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 
     const socket = recorder();
@@ -167,7 +173,7 @@ describe("座席の接続", () => {
     const { lobby, hub } = arena;
     const first = lobby.join(player(arena, "a", "へや"));
     lobby.join(player(arena, "b", "へや"));
-    const seatA = first.ok ? lobby.claim(first.ticket) : null;
+    const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
 
     const old = recorder();
     const fresh = recorder();
@@ -192,7 +198,7 @@ describe("座席の接続", () => {
     const { lobby, hub, registry } = arena;
     const first = lobby.join(player(arena, "a", "へや"));
     const second = lobby.join(player(arena, "b", "へや"));
-    const seatA = first.ok ? lobby.claim(first.ticket) : null;
+    const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 
     const socketA = recorder();

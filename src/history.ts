@@ -161,14 +161,29 @@ function outcomeFor(result: MatchResult, seat: Player): "win" | "loss" | "draw" 
   return result.winner === seat ? "win" : "loss";
 }
 
-/** 日付で切った JSONL を順に読む。索引が要る問い合わせが無いので、走査で足りる（6.5 節）。 */
+/**
+ * 日付で切った JSONL を順に読む。索引が要る問い合わせが無いので、走査で足りる（6.5 節）。
+ *
+ * **読めない行は飛ばす。** 追記の最中に落ちれば書きかけの行が残る。そこで例外を投げると、
+ * 1 行のために全員の一覧と読み返しが止まる。読めた対戦を読めるままにするほうが要る。
+ * 飛ばしたことは残しておく。黙って減ると、消えたのか壊れたのか分からない。
+ */
 function* readRecords(dir: string): Generator<MatchRecord> {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return;
   for (const entry of readdirSync(dir).sort()) {
     if (!entry.endsWith(".jsonl")) continue;
+    let broken = 0;
     for (const line of readFileSync(join(dir, entry), "utf8").split("\n")) {
       if (line.trim() === "") continue;
-      yield JSON.parse(line) as MatchRecord;
+      let record: MatchRecord;
+      try {
+        record = JSON.parse(line) as MatchRecord;
+      } catch {
+        broken++;
+        continue;
+      }
+      yield record;
     }
+    if (broken > 0) console.warn(`${entry}: 読めない行を ${broken} 行とばした`);
   }
 }

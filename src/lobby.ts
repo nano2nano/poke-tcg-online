@@ -43,6 +43,18 @@ export interface Seated {
   seatToken: string;
 }
 
+/**
+ * 待っている札の行方。
+ *
+ * `dropped` が要るのは、**札が黙って消えることがある**からである。同じ打ち手が
+ * 別の窓から入ると古い札は降りる。それを `waiting` と同じ応答にすると、
+ * 古い窓は「相手を待っています」のまま永久に問い合わせ続ける。
+ */
+export type ClaimOutcome =
+  | { kind: "waiting" }
+  | { kind: "seated"; seat: Seated }
+  | { kind: "dropped" };
+
 export class Lobby {
   /** 待っている人。合言葉ごとに 1 人ずつと、合言葉なしの行列。 */
   private readonly waitingByRoom = new Map<string, Ticket>();
@@ -102,11 +114,20 @@ export class Lobby {
   }
 
   /** 待っている人が相手を見つけたかどうかを取りに来る口。 */
-  claim(ticketId: string): Seated | null {
+  claim(ticketId: string): ClaimOutcome {
     const seat = this.seated.get(ticketId);
-    if (seat === undefined) return null;
-    this.seated.delete(ticketId);
-    return seat;
+    if (seat !== undefined) {
+      this.seated.delete(ticketId);
+      return { kind: "seated", seat };
+    }
+    return this.isWaiting(ticketId) ? { kind: "waiting" } : { kind: "dropped" };
+  }
+
+  private isWaiting(ticketId: string): boolean {
+    for (const waiting of this.waitingByRoom.values()) {
+      if (waiting.ticket === ticketId) return true;
+    }
+    return this.queue.some((waiting) => waiting.ticket === ticketId);
   }
 
   /** その打ち手が待っているものを、どこにいても降ろす。 */

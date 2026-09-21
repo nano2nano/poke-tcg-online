@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { appendFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
@@ -61,6 +61,24 @@ describe("済んだ対戦の一覧", () => {
     expect(forFirst?.outcome).toBe(winner === 0 ? "win" : "loss");
     const forSecond = listMatches(dir, "い")[0];
     expect(forSecond?.outcome).toBe(winner === 1 ? "win" : "loss");
+  });
+
+  /**
+   * 追記の最中に落ちれば、書きかけの行が 1 つ残る。そこで例外を投げると、
+   * その 1 行のために**全員の**一覧と読み返しが止まる。
+   */
+  it("読めない行が混じっても、読める対戦は読める", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-10", ["あ", "い"]);
+    const path = join(dir, `${record.endedAt.slice(0, 10)}.jsonl`);
+    // 書きかけで落ちた行を真似る。
+    appendFileSync(path, `${JSON.stringify(record).slice(0, 200)}\n`);
+    const second = writeMatch(dir, "hist-11", ["あ", "う"]);
+
+    const mine = listMatches(dir, "あ");
+    expect(mine.map((row) => row.matchId).sort()).toEqual([record.matchId, second.matchId].sort());
+    expect(findMatch(dir, "あ", second.matchId)?.matchId).toBe(second.matchId);
   });
 
   it("ログが 1 件も無いところでも落ちない", () => {
