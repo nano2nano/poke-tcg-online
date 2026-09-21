@@ -5,8 +5,15 @@
  * できないので、ここが壊れていると、集めた対局から打ち手の強さが永久に失われる。
  */
 
-import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AccountStore, INITIAL_RATING, K_FACTOR } from "../src/accounts.js";
@@ -32,7 +39,7 @@ describe("打ち手", () => {
     const { store, dir } = newStore();
     const { secret } = store.create("あ", 0);
 
-    const saved = readFileSync(join(dir, "accounts.json"), "utf8");
+    const saved = readFileSync(join(dir, "accounts.jsonl"), "utf8");
     expect(saved).not.toContain(secret);
   });
 
@@ -110,6 +117,69 @@ describe("打ち手", () => {
     expect(renamed?.displayName).toBe("あと");
     expect(renamed?.rating).toBe(won?.rating);
     expect(renamed?.games).toBe(1);
+  });
+
+  /**
+   * `/api/account` はログインなしで繰り返し呼べる。全体を書き直していると、1 回の書き込みが
+   * 登録数に比例して伸び、同期で書くぶんだけイベントループが止まる。
+   */
+  it("1 つ変わったときに書くのは、変わったぶんだけ", () => {
+    const { store, dir } = newStore();
+    const path = join(dir, "accounts.jsonl");
+    for (let i = 0; i < 20; i++) store.create(`p${i}`, 0);
+    const { secret } = store.create("あとから", 0);
+    store.rename(secret, "なまえ", 1);
+
+    // 変わるたびに 1 行ずつ増える。全体を書き直していれば、行数は登録数と同じになる。
+    const lines = readFileSync(path, "utf8").trimEnd().split("\n");
+    expect(lines.length).toBe(22);
+    expect(store.count()).toBe(21);
+    // 最後の 1 行が、いちばん新しい版である。
+    expect(JSON.parse(lines[lines.length - 1] ?? "{}").displayName).toBe("なまえ");
+  });
+
+  it("古い版が溜まったら書き直して捨てる", () => {
+    const { store, dir } = newStore();
+    const path = join(dir, "accounts.jsonl");
+    const { secret } = store.create("あ", 0);
+    for (let i = 0; i < 200; i++) store.touch(secret, i);
+
+    const lines = readFileSync(path, "utf8").trimEnd().split("\n");
+    expect(lines.length).toBeLessThan(200);
+    // 書き直したあとも、読み直せば最新の 1 版が残っている。
+    expect(new AccountStore(dir).bySecret(secret)?.displayName).toBe("あ");
+  });
+
+  it("全体を 1 つの配列で持っていたファイルも読める", () => {
+    const { store, dir } = newStore();
+    const { account, secret } = store.create("むかし", 0);
+    const rows = JSON.parse(readFileSync(join(dir, "accounts.jsonl"), "utf8").trimEnd());
+    rmSync(join(dir, "accounts.jsonl"));
+    writeFileSync(join(dir, "accounts.json"), `${JSON.stringify([rows], null, 2)}\n`, "utf8");
+
+    const reloaded = new AccountStore(dir);
+
+    expect(reloaded.bySecret(secret)?.playerId).toBe(account.playerId);
+    // 読み込みのときに新しい形へ書き直す。次からは追記で済む。
+    expect(existsSync(join(dir, "accounts.jsonl"))).toBe(true);
+  });
+
+  it("読めない行が混じっても、読めるアカウントは読める", () => {
+    const { store, dir } = newStore();
+    const path = join(dir, "accounts.jsonl");
+    const { secret } = store.create("あ", 0);
+    appendFileSync(path, "{壊れている\n");
+    store.create("い", 0);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const reloaded = new AccountStore(dir);
+      expect(reloaded.count()).toBe(2);
+      expect(reloaded.bySecret(secret)?.displayName).toBe("あ");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("書いたものを読み直しても続く", () => {
