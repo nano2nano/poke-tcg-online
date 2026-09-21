@@ -8,7 +8,15 @@
  * 50〜65 ミリ秒、1 手あたり 0.3 ミリ秒である（6.1 節）。索引もキャッシュも置かない。
  */
 
-import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   applyMove,
@@ -95,24 +103,144 @@ export function replayability(
   return { kind: "ok", engineCommitDiffers: record.engine.commit !== fingerprint.commit };
 }
 
-/** その人が指した対戦を、新しい順に返す。 */
+/**
+ * 一覧に必要な項目だけを取り出したもの。キャッシュに載せるので、`moves` は持たない。
+ * 1 局ぶんの JSONL は数十 KB あり、そのまま抱えるとログの総量ぶんメモリを使う。
+ */
+interface ListedMatch {
+  matchId: string;
+  startedAt: string;
+  endedAt: string;
+  playerIds: [string, string];
+  displayNames: [string, string];
+  matchResult: MatchResult;
+  moveCount: number;
+}
+
+/**
+ * 日ごとのファイルを、どこまで読んでキャッシュしたか。
+ *
+ * 追記しかしないログなので、いちど読んだバイト列は二度と変わらない。そのため
+ * 追記ぶんだけを読み足せば、全体を読み直さずに最新の一覧を作れる。`consumed` を
+ * 改行で終わる位置までに限るのは、追記の途中で読むと最後の行が欠けるためである。
+ */
+interface ListedDay {
+  consumed: number;
+  matches: ListedMatch[];
+}
+
+const LISTED = new Map<string, ListedDay>();
+
+/**
+ * 対局ログは日付で切ってあり、ファイル名がその日付になっている（6.5 節）。
+ * 名前で絞るのは、同じディレクトリに置かれた別の JSONL を対局ログとして読まないためである。
+ */
+const DAY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+
+function isDayFile(name: string): boolean {
+  return DAY_FILE.test(name);
+}
+
+/**
+ * キャッシュに載せる対戦数の上限。超えたぶんは載せずに毎回読む。
+ * ログは消えないので、上限を置かないと古い対戦のぶんが際限なく残る。
+ */
+const LISTED_LIMIT = 50_000;
+
+/** テストと計測のためにキャッシュを捨てる。 */
+export function forgetListed(): void {
+  LISTED.clear();
+}
+
+/** そのプレイヤーが対戦したものを、新しい順に返す。 */
 export function listMatches(dir: string, playerId: string): MatchSummary[] {
   const summaries: MatchSummary[] = [];
-  for (const record of readRecords(dir, playerId)) {
-    const seat = seatOf(record, playerId);
+  for (const listed of readListed(dir)) {
+    const seat = listed.playerIds[0] === playerId ? 0 : listed.playerIds[1] === playerId ? 1 : null;
     if (seat === null) continue;
     summaries.push({
-      matchId: record.matchId,
-      startedAt: record.startedAt,
-      endedAt: record.endedAt,
+      matchId: listed.matchId,
+      startedAt: listed.startedAt,
+      endedAt: listed.endedAt,
       seat,
-      opponentName: record.seats[seat === 0 ? 1 : 0].displayName,
-      outcome: outcomeFor(record.matchResult, seat),
-      matchResult: record.matchResult,
-      moveCount: record.moves.length,
+      opponentName: listed.displayNames[seat === 0 ? 1 : 0],
+      outcome: outcomeFor(listed.matchResult, seat),
+      matchResult: listed.matchResult,
+      moveCount: listed.moveCount,
     });
   }
   return summaries.sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
+}
+
+/**
+ * 日ごとのファイルを読んで、一覧に要る項目だけを返す。
+ *
+ * `/api/matches` は誰でも繰り返し呼べる。毎回すべての日を読み直すと、ログが増えるほど
+ * イベントループが止まり、対戦中のプレイヤーの持ち時間が削られる（6.5 節）。
+ */
+function* readListed(dir: string): Generator<ListedMatch> {
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) return;
+  for (const entry of readdirSync(dir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort()) {
+    const path = join(dir, entry);
+    const size = statSync(path).size;
+    const cached = LISTED.get(path);
+    // 縮んでいれば別物に差し替わっている。キャッシュを捨てて読み直す。
+    const day =
+      cached !== undefined && cached.consumed <= size ? cached : { consumed: 0, matches: [] };
+    if (day.consumed < size) {
+      appendListed(path, day, size);
+      if (countListed() <= LISTED_LIMIT) LISTED.set(path, day);
+      else LISTED.delete(path);
+    }
+    yield* day.matches;
+  }
+}
+
+function countListed(): number {
+  let total = 0;
+  for (const day of LISTED.values()) total += day.matches.length;
+  return total;
+}
+
+/** 前に読んだ続きから、改行で終わっているところまでを読み足す。 */
+function appendListed(path: string, day: ListedDay, size: number): void {
+  const length = size - day.consumed;
+  const buffer = Buffer.alloc(length);
+  const file = openSync(path, "r");
+  try {
+    readSync(file, buffer, 0, length, day.consumed);
+  } finally {
+    closeSync(file);
+  }
+  const text = buffer.toString("utf8");
+  const end = text.lastIndexOf("\n");
+  if (end < 0) return;
+  let broken = 0;
+  for (const line of text.slice(0, end).split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      day.matches.push(listedOf(JSON.parse(line) as MatchRecord));
+    } catch {
+      broken++;
+    }
+  }
+  // 追記の途中で落ちれば書きかけの行が残る。1 行のために全員の一覧を止めない。
+  if (broken > 0) console.warn(`${path}: 読めない行を ${broken} 行とばした`);
+  day.consumed += Buffer.byteLength(text.slice(0, end + 1), "utf8");
+}
+
+function listedOf(record: MatchRecord): ListedMatch {
+  return {
+    matchId: record.matchId,
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+    playerIds: [record.seats[0].playerId, record.seats[1].playerId],
+    displayNames: [record.seats[0].displayName, record.seats[1].displayName],
+    matchResult: record.matchResult,
+    moveCount: record.moves.length,
+  };
 }
 
 /**
@@ -276,9 +404,7 @@ function* readRecords(
   order: "oldest-first" | "newest-first" = "oldest-first",
 ): Generator<MatchRecord> {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return;
-  const days = readdirSync(dir)
-    .filter((entry) => entry.endsWith(".jsonl"))
-    .sort();
+  const days = readdirSync(dir).filter(isDayFile).sort();
   if (order === "newest-first") days.reverse();
   for (const entry of days) {
     let broken = 0;

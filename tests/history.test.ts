@@ -15,6 +15,7 @@ import type { Move } from "../src/engine.js";
 import { appendRecord, toRecord, type MatchRecord } from "../src/log.js";
 import {
   findMatch,
+  forgetListed,
   forgetOpened,
   frameAt,
   isMatchId,
@@ -58,6 +59,39 @@ describe("済んだ対戦の一覧", () => {
     expect(mine[0]?.seat).toBe(0);
     expect(listMatches(dir, "う").length).toBe(1);
     expect(listMatches(dir, "だれでもない").length).toBe(0);
+  });
+
+  /**
+   * `/api/matches` は誰でも繰り返し呼べる。毎回すべての日を読み直すと、ログが増えるほど
+   * イベントループが止まり、対戦中のプレイヤーの持ち時間が削られる。追記しかしないログ
+   * なので、いちど読んだバイト列は読み直さずに済む。
+   */
+  it("いちど読んだところを読み直さず、追記ぶんだけを読み足す", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetListed();
+    const first = writeMatch(dir, "hist-cache", ["あ", "い"]);
+    const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
+    // 読めない行は読んだときに知らせが出る。これを「読んだかどうか」の目印に使う。
+    appendFileSync(day, "{壊れている\n");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(listMatches(dir, "あ").length).toBe(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      warn.mockClear();
+      expect(listMatches(dir, "あ").length).toBe(1);
+      expect(warn).not.toHaveBeenCalled();
+
+      // 追記されたぶんは読む。壊れた行はもう読まない。
+      const second = writeMatch(dir, "hist-cache", ["あ", "う"]);
+      expect(second.endedAt.slice(0, 10)).toBe(first.endedAt.slice(0, 10));
+      expect(listMatches(dir, "あ").length).toBe(2);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("読み手から見た勝ち負けを返す", () => {

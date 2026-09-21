@@ -255,7 +255,7 @@ describe("待ち合わせから決着まで", () => {
     }
 
     // ログが 1 行落ちていて、そのまま再生できる。
-    const files = readdirSync(logDir).filter((name) => name.endsWith(".jsonl"));
+    const files = readdirSync(logDir).filter((name) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name));
     expect(files).toHaveLength(1);
     const lines = readFileSync(join(logDir, files[0]!), "utf8").trim().split("\n");
     expect(lines).toHaveLength(1);
