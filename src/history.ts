@@ -10,7 +10,14 @@
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { applyMove, createGame, playerView, projectEvents } from "./engine.js";
+import {
+  applyMove,
+  createGame,
+  legalMoves,
+  movesEqual,
+  playerView,
+  projectEvents,
+} from "./engine.js";
 import type { GameState, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
 import { engineFingerprint, type EngineFingerprint } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
@@ -50,6 +57,14 @@ export interface ReplayFrame {
   events: [PlayerEvent[], PlayerEvent[]];
   /** エンジンの版が記録と違うまま再生している。盤面は合っていないかもしれない（§6.3）。 */
   engineCommitDiffers: boolean;
+  /**
+   * 記録された手が、いまのエンジンでは合法でなくなった地点。無ければ null。
+   *
+   * ここから先は再現できない。**それでも手前までは読める**ので、断らずにここまでを返す。
+   * 版の違いを一律で断らないのが §6.3 の決めで、再生器（`src/replay.ts`）も
+   * 同じ地点を `illegal-move` として記録して止まる。
+   */
+  divergedAt: number | null;
 }
 
 /**
@@ -184,18 +199,39 @@ export function frameAt(
   let playedMove: Move | null = null;
   let beforeState: GameState | null = null;
 
+  let applied = 0;
+  let divergedAt: number | null = null;
+
   for (let index = 0; index < target; index++) {
     const logged = record.moves[index];
     if (logged === undefined) break;
+    /**
+     * **指す前に、いまのエンジンの合法手と突き合わせる。** 版が違えば、記録された手が
+     * 合法でなくなりうる。そのまま `applyMove` へ渡すとエンジンが投げ、口はその文句を
+     * そのまま 400 で外へ出す。読む人に意味が無く、その対戦はここから先へ進めなくなる。
+     * §6.3 は版の違いを警告にとどめると決めているので、止めるのはこの 1 局のこの地点だけにする。
+     */
+    if (!legalMoves(result.state).some((candidate) => movesEqual(candidate, logged.move))) {
+      divergedAt = index;
+      break;
+    }
     beforeState = result.state;
-    result = applyMove(result.state, logged.move);
+    try {
+      result = applyMove(result.state, logged.move);
+    } catch (error) {
+      // 合法手に在ったのに通らないのはエンジン側の話である。外へ文句は出さず、ここで止める。
+      console.warn(`${record.matchId} の ${index} 手目を指せなかった:`, error);
+      divergedAt = index;
+      break;
+    }
     events = result.events;
     playedMove = logged.move;
+    applied = index + 1;
   }
 
   return {
     matchId: record.matchId,
-    ply: target,
+    ply: applied,
     moveCount: record.moves.length,
     views: [playerView(result.state, 0), playerView(result.state, 1)],
     playedMove,
@@ -203,6 +239,7 @@ export function frameAt(
       beforeState === null ? null : [playerView(beforeState, 0), playerView(beforeState, 1)],
     events: [projectEvents(events, 0), projectEvents(events, 1)],
     engineCommitDiffers: record.engine.commit !== fingerprint.commit,
+    divergedAt,
   };
 }
 

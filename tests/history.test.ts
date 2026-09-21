@@ -11,6 +11,7 @@ import { appendFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
+import type { Move } from "../src/engine.js";
 import { appendRecord, toRecord, type MatchRecord } from "../src/log.js";
 import {
   findMatch,
@@ -151,6 +152,55 @@ describe("1 局の読み返し", () => {
     for (const ply of [1, 2, record.moves.length]) {
       expect(frameAt(record, ply).beforeViews).toEqual(frameAt(record, ply - 1).views);
     }
+  });
+
+  /**
+   * エンジンを直すと、記録された手が合法でなくなることがある。6.3 節は版の違いを警告に
+   * とどめると決めているので、**そのまま `applyMove` へ渡してエンジンに投げさせない。**
+   * 投げると口はその文句をそのまま外へ出し、その対戦は食い違う地点より先へ進めなくなる。
+   * 再生器（`src/replay.ts`）は同じ地点を `illegal-move` として記録して止まる。
+   */
+  it("記録された手が合法でなくなっていたら、その手前までを返す", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-diverge", ["あ", "い"]);
+    // 3 手目を、どの局面でも合法にならない手へ差し替える。版が変わった記録の代わりである。
+    const broken: MatchRecord = {
+      ...record,
+      moves: record.moves.map((logged, index) =>
+        index === 3
+          ? { ...logged, move: { type: "PlayBasic", cardInstanceId: "p0-999" } as Move }
+          : logged,
+      ),
+    };
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let frame;
+    try {
+      frame = frameAt(broken, broken.moves.length);
+      // 合法手と突き合わせて止めているので、エンジンへは渡らない。渡って投げたぶんは
+      // 受け止めたうえで知らせが出る。ここでは出ないことが、止めた場所の証拠になる。
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(frame.divergedAt).toBe(3);
+    // 手前までは読める。止まるのはこの 1 局のこの地点だけである。
+    expect(frame.ply).toBe(3);
+    expect(frame.views).toEqual(frameAt(record, 3).views);
+    // 記録そのものの手数は変えない。画面は「どこまで辿れるか」をこれと `divergedAt` で読む。
+    expect(frame.moveCount).toBe(record.moves.length);
+    // 食い違う手前を名指しで頼めば、そこまでは何も起きていない。
+    expect(frameAt(broken, 2).divergedAt).toBeNull();
+    expect(frameAt(broken, 2).ply).toBe(2);
+  });
+
+  it("食い違いが無ければ `divergedAt` は null のまま", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-ok", ["あ", "い"]);
+    expect(frameAt(record, record.moves.length).divergedAt).toBeNull();
   });
 
   /**
