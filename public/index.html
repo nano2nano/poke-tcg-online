@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ポケカ オンライン対戦</title>
+    <link rel="stylesheet" href="style.css" />
+    <!-- 目印は要らないが、無いと毎回 404 が 1 本立つ。空の 1 枚を埋めておく。 -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>" />
+  </head>
+  <body>
+    <header>
+      <h1>ポケカ オンライン対戦</h1>
+      <p class="note">
+        プロトコルの確認用の画面です。盤面は文字で出し、指せる手をそのまま並べます。
+      </p>
+    </header>
+
+    <section id="join">
+      <h2>対戦に入る</h2>
+      <label>名前 <input id="name" value="ななし" /></label>
+      <label>合言葉 <input id="room" placeholder="空なら待ち行列へ" /></label>
+
+      <label for="decklist">デッキ</label>
+      <p class="note">
+        1 行に 1 種類、「カード名 枚数」で書きます。同じ名前のカードが複数あるときは
+        候補を出すので、行のうしろに 1
+        つ選んで書き足してください。空のままなら見本のデッキを使います。
+      </p>
+      <textarea id="decklist" rows="8" placeholder="カード名 4"></textarea>
+      <div class="deck-actions">
+        <button id="check-button" class="secondary">デッキを確かめる</button>
+        <button id="join-button">対戦をさがす</button>
+      </div>
+      <div id="deck-status" class="deck-status"></div>
+      <p id="join-status" role="status"></p>
+    </section>
+
+    <section id="table" hidden>
+      <div id="clock" class="clock"></div>
+      <div class="sides">
+        <div class="side">
+          <h2>相手</h2>
+          <div id="opponent"></div>
+        </div>
+        <div class="side">
+          <h2>自分</h2>
+          <div id="self"></div>
+        </div>
+      </div>
+
+      <h2>指せる手</h2>
+      <div id="moves" class="moves"></div>
+      <button id="concede-button" class="danger">投了する</button>
+
+      <h2>できごと</h2>
+      <ol id="events" class="events"></ol>
+    </section>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+# action は SHA で固定してあるので、更新が来ても気づけない。ここで週ごとに確かめる。
+# dependabot は `# v4` の注釈も新しい版に書き換える。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

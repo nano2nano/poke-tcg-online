@@ -1,0 +1,37 @@
+/**
+ * エンジンの刻印（`docs/spec/battle-server.md` 6.3 節）。
+ *
+ * 刻印が「取れなかった」に落ちても、対戦は普通に動いてしまう。落ちたことに気づけるのは
+ * ここだけなので、値が本当に埋まっていることを試験で押さえる。
+ */
+
+import { describe, expect, it } from "vitest";
+import { commitSeed, engineFingerprint, verifySeedCommitment } from "../src/fingerprint.js";
+
+describe("エンジンの刻印", () => {
+  // 取り込み方を変えたときにパスが外れると "unknown" へ落ち、再生の拒否が黙って無効になる。
+  it("カードデータのハッシュが埋まっている", () => {
+    const fingerprint = engineFingerprint();
+    expect(fingerprint.cardDataSha256).not.toBe("unknown");
+    expect(fingerprint.cardDataSha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("再生の解釈を選ぶための版番号を持つ", () => {
+    expect(engineFingerprint().replaySchemaVersion).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("シャッフルのコミット", () => {
+  it("同じ nonce からは同じ seed とコミットが出る", () => {
+    const first = commitSeed("なんらかの nonce");
+    expect(commitSeed("なんらかの nonce")).toEqual(first);
+    expect(verifySeedCommitment(first)).toBe(true);
+  });
+
+  // 接頭辞を分けないと、コミットを総当たりして seed が出る（seed は 32 ビットしかない）。
+  it("コミットから seed が導けないよう、別々の接頭辞で導く", () => {
+    const commitment = commitSeed("べつの nonce");
+    expect(commitment.commit).not.toContain(commitment.seed.toString(16));
+    expect(verifySeedCommitment({ ...commitment, seed: commitment.seed + 1 })).toBe(false);
+  });
+});
