@@ -20,19 +20,13 @@ export function createClock(bankMs: number = BANK_MS): Clock {
   return { bankMs };
 }
 
-/**
- * `elapsedMs` だけ考えたあとの貯えを返す。1 手の猶予を越えたぶんだけ減る。
- * 貯えが尽きた（0 になった）かどうかは呼び出し側が `bankMs === 0` で見る。
- */
+/** `elapsedMs` だけ考えたあとの貯えを返す。1 手の猶予を越えたぶんだけ減る。 */
 export function consume(clock: Clock, elapsedMs: number): Clock {
   const overrun = Math.max(0, elapsedMs - MOVE_ALLOWANCE_MS);
   return { bankMs: Math.max(0, clock.bankMs - overrun) };
 }
 
-/**
- * 手番側が今の手に使ってよい残り時間。
- * 1 手の猶予と貯えの合計から、すでに考えたぶんを引いた値である。
- */
+/** 手番側が今の手に使ってよい残り時間。時間切れの判定（`isTimedOut`）もこれを見る。 */
 export function moveRemainingMs(clock: Clock, elapsedMs: number): number {
   return Math.max(0, MOVE_ALLOWANCE_MS + clock.bankMs - elapsedMs);
 }
