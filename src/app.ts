@@ -15,6 +15,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { DeckList } from "./engine.js";
 import { cardIndex } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
+import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
 import type { ClientMessage } from "./protocol.js";
@@ -103,7 +104,7 @@ async function route(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/sample-deck") {
-    respondJson(response, 200, readJson("data/sample-deck.json"));
+    respondJson(response, 200, sampleDeck());
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/deck/validate") {
@@ -148,10 +149,6 @@ function serveStatic(pathname: string, response: ServerResponse): void {
   } catch {
     respondJson(response, 404, { error: "not found" });
   }
-}
-
-function readJson(relative: string): unknown {
-  return JSON.parse(readFileSync(join(ROOT, relative), "utf8")) as unknown;
 }
 
 function respondJson(response: ServerResponse, status: number, body: unknown): void {

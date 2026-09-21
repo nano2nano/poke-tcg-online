@@ -1,14 +1,13 @@
 /**
  * 試験の共通の足場。ランダムな合法手で 1 対戦を最後まで指す。
  *
- * 乱数はエンジンの `nextInt` を使う。試験の中だけは `engine/` を直に読む
- * （`src/engine.ts` は本番のコードが要るものだけを通す口であり、試験の都合で広げない）。
+ * エンジンへ触れるのは `src/engine.ts` 経由だけにする。試験の都合で
+ * `engine/` の内部を直に読むと、エンジンの取り込み方を変えたときに直す場所が増える。
  */
 
-import { nextInt } from "../engine/src/rng.js";
-import { bachinkiDecks } from "../engine/src/cardpool/index.js";
-import type { DeckList, GameState, Move, Player } from "../src/engine.js";
-import { legalMoves, registerPoolCards } from "../src/engine.js";
+import type { CardDef, CardDefId, DeckList, GameState, Move, Player } from "../src/engine.js";
+import { legalMoves, loadGeneratedCards, nextInt, registerPoolCards } from "../src/engine.js";
+import { sampleDeck } from "../src/sample-deck.js";
 import { commitSeed } from "../src/fingerprint.js";
 import { createMatch, submitMove, toMove, type Match } from "../src/match.js";
 
@@ -21,10 +20,24 @@ export function ensureCards(): void {
   registered = true;
 }
 
-/** 検査を通る 60 枚を 2 つ。エンジンの構成のうち同名 4 枚の制限を守っているものを使う。 */
+/** 検査を通る 60 枚を 2 つ。登録済みのカードから実行時に組む（`src/sample-deck.ts`）。 */
 export function legalDecks(): [DeckList, DeckList] {
   ensureCards();
-  return bachinkiDecks();
+  return [sampleDeck(), sampleDeck()];
+}
+
+/** 登録済みのカードから 1 つ拾う。試験が `defId` を書き写さないための口。 */
+function findDefId(matches: (def: CardDef) => boolean): CardDefId {
+  ensureCards();
+  const found = [...loadGeneratedCards()]
+    .sort((a, b) => (a.defId < b.defId ? -1 : 1))
+    .find(matches);
+  if (found === undefined) throw new Error("条件に合うカードが登録されていない");
+  return found.defId;
+}
+
+export function basicEnergyDefId(): CardDefId {
+  return findDefId((def) => def.kind === "energy" && def.basic);
 }
 
 export function newMatch(seedNonce: string, nowMs = 0): Match {

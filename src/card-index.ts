@@ -6,7 +6,7 @@
  * 局面に混ぜず一度だけ配る。クライアントは取得して持っておく。
  */
 
-import { loadGeneratedCards } from "../engine/src/cardpool/generated-cards.js";
+import { loadGeneratedCards } from "./engine.js";
 
 export interface CardBrief {
   name: string;

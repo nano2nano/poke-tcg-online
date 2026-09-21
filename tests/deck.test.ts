@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { validateDeck } from "../src/deck.js";
-import { ensureCards, legalDecks } from "./helpers.js";
+import { basicEnergyDefId, ensureCards, legalDecks } from "./helpers.js";
 
 function kinds(deck: { cards: string[] }): string[] {
   return validateDeck(deck).map((violation) => violation.kind);
@@ -31,7 +31,7 @@ describe("デッキの検証", () => {
 
   it("基本エネルギーは同名の制限の外に置く", () => {
     ensureCards();
-    const energy = "kihonhonooenerugi";
+    const energy = basicEnergyDefId();
     const basic = (legalDecks()[0].cards as string[]).find((defId) => defId !== energy) as string;
     const deck = { cards: [basic, ...Array.from({ length: 59 }, () => energy)] };
     expect(kinds(deck)).not.toContain("same-name");
@@ -39,7 +39,7 @@ describe("デッキの検証", () => {
 
   it("たねポケモンが 1 枚もないデッキを弾く", () => {
     ensureCards();
-    const deck = { cards: Array.from({ length: 60 }, () => "kihonhonooenerugi") };
+    const deck = { cards: Array.from({ length: 60 }, () => basicEnergyDefId()) };
     expect(kinds(deck)).toContain("no-basic");
   });
 
