@@ -19,7 +19,9 @@ import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
-import { AccountStore } from "./accounts.js";
+import { AccountStore, type Account } from "./accounts.js";
+import { findMatch, frameAt, listMatches } from "./history.js";
+import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
 import type { ClientMessage } from "./protocol.js";
 import { MatchRegistry } from "./registry.js";
@@ -51,7 +53,8 @@ export interface App {
 
 export function createApp(options: AppOptions = {}): App {
   const now = options.now ?? (() => Date.now());
-  const registry = new MatchRegistry(options.logDir);
+  const logDir = options.logDir ?? DEFAULT_LOG_DIR;
+  const registry = new MatchRegistry(logDir);
   const accounts = new AccountStore(options.accountDir);
   const lobby = new Lobby(registry, accounts, now);
   // 持ち点はログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
@@ -68,7 +71,7 @@ export function createApp(options: AppOptions = {}): App {
   });
 
   const http = createServer((request, response) => {
-    route(request, response, lobby, accounts, now).catch((error: unknown) => {
+    route(request, response, lobby, accounts, now, logDir).catch((error: unknown) => {
       respondJson(response, 400, { error: (error as Error).message });
     });
   });
@@ -117,8 +120,42 @@ async function route(
   lobby: Lobby,
   accounts: AccountStore,
   now: () => number,
+  logDir: string,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
+
+  // 済んだ対戦の一覧と読み返し。どちらも自分が指した対戦しか返さない（6.6 節）。
+  if (request.method === "POST" && url.pathname === "/api/matches") {
+    const account = await accountFromBody(request, accounts);
+    if (account === null) {
+      respondJson(response, 404, { error: "打ち手が見つからない" });
+      return;
+    }
+    respondJson(response, 200, { matches: listMatches(logDir, account.playerId) });
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/replay") {
+    const body = (await readBody(request)) as {
+      secret?: unknown;
+      matchId?: unknown;
+      ply?: unknown;
+    };
+    const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
+    if (account === null) {
+      respondJson(response, 404, { error: "打ち手が見つからない" });
+      return;
+    }
+    const matchId = typeof body.matchId === "string" ? body.matchId : "";
+    const record = findMatch(logDir, account.playerId, matchId);
+    if (record === null) {
+      // 指していない対戦と、存在しない対戦を、同じ応答にする。
+      respondJson(response, 404, { error: "対戦が見つからない" });
+      return;
+    }
+    const ply = typeof body.ply === "number" ? body.ply : 0;
+    respondJson(response, 200, { seats: record.seats, frame: frameAt(record, ply) });
+    return;
+  }
 
   // 打ち手を作る。合言葉を返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
   if (request.method === "POST" && url.pathname === "/api/account") {
@@ -219,6 +256,15 @@ function serveStatic(pathname: string, response: ServerResponse): void {
 function respondJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+/** 本文の `secret` から打ち手を引く。合言葉を URL に載せないのはログと履歴に残るためである。 */
+async function accountFromBody(
+  request: IncomingMessage,
+  accounts: AccountStore,
+): Promise<Account | null> {
+  const body = (await readBody(request)) as { secret?: unknown };
+  return typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {

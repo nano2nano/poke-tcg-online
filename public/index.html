@@ -58,6 +58,38 @@
       <ol id="events" class="events"></ol>
     </section>
 
+    <section id="history">
+      <h2>指した対戦を読み返す</h2>
+      <p class="note">
+        済んだ対戦を 1 手ずつ辿れます。終わった対戦なので、両方の手札まで見えます。
+        読めるのは自分が指した対戦だけです。
+      </p>
+      <button id="history-button" class="secondary">一覧を出す</button>
+      <div id="history-list" class="history-list"></div>
+    </section>
+
+    <section id="replay" hidden>
+      <h2>読み返し</h2>
+      <div class="replay-controls">
+        <button id="replay-first" class="secondary">さいしょ</button>
+        <button id="replay-prev" class="secondary">◀ 1 手</button>
+        <button id="replay-next" class="secondary">1 手 ▶</button>
+        <button id="replay-last" class="secondary">さいご</button>
+        <button id="replay-close" class="secondary">閉じる</button>
+      </div>
+      <p id="replay-status" class="note"></p>
+      <div class="sides">
+        <div class="side">
+          <h2>相手</h2>
+          <div id="replay-opponent"></div>
+        </div>
+        <div class="side">
+          <h2>自分</h2>
+          <div id="replay-self"></div>
+        </div>
+      </div>
+    </section>
+
     <script type="module" src="app.js"></script>
   </body>
 </html>

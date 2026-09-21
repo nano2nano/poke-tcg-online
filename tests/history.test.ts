@@ -1,0 +1,141 @@
+/**
+ * 済んだ対戦の読み返し（`docs/spec/battle-server.md` 6.6 節）。
+ *
+ * 読めるのは自分が指した対戦だけである。終わった対戦は当人どうしには全部見えてよいが、
+ * 他人のデッキと引きが誰にでも見えるなら、それは対戦環境として成り立たない。
+ */
+
+import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createGame, playerView, projectEvents } from "../src/engine.js";
+import { appendRecord, toRecord, type MatchRecord } from "../src/log.js";
+import { findMatch, frameAt, listMatches } from "../src/history.js";
+import { concede } from "../src/match.js";
+import { ensureCards, newMatch, playToEnd } from "./helpers.js";
+
+/** 1 局指して、座席の識別子を差し替えてから書き出す。 */
+function writeMatch(dir: string, nonce: string, players: [string, string]): MatchRecord {
+  const played = playToEnd(newMatch(nonce), nonce.length * 977 + 13);
+  if (played.match.result === null) concede(played.match, 0, 1);
+  const base = toRecord(played.match);
+  const record: MatchRecord = {
+    ...base,
+    seats: [
+      { ...base.seats[0], playerId: players[0], displayName: players[0] },
+      { ...base.seats[1], playerId: players[1], displayName: players[1] },
+    ],
+  };
+  appendRecord(record, dir);
+  return record;
+}
+
+function newDir(): string {
+  return mkdtempSync(join(tmpdir(), "poke-history-"));
+}
+
+describe("済んだ対戦の一覧", () => {
+  it("自分が指した対戦だけを返す", () => {
+    ensureCards();
+    const dir = newDir();
+    writeMatch(dir, "hist-1", ["あ", "い"]);
+    writeMatch(dir, "hist-2", ["う", "え"]);
+
+    const mine = listMatches(dir, "あ");
+    expect(mine.length).toBe(1);
+    expect(mine[0]?.opponentName).toBe("い");
+    expect(mine[0]?.seat).toBe(0);
+    expect(listMatches(dir, "う").length).toBe(1);
+    expect(listMatches(dir, "だれでもない").length).toBe(0);
+  });
+
+  it("読み手から見た勝ち負けを返す", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-3", ["あ", "い"]);
+    const winner = record.matchResult.winner;
+
+    const forFirst = listMatches(dir, "あ")[0];
+    expect(forFirst?.outcome).toBe(winner === 0 ? "win" : "loss");
+    const forSecond = listMatches(dir, "い")[0];
+    expect(forSecond?.outcome).toBe(winner === 1 ? "win" : "loss");
+  });
+
+  it("ログが 1 件も無いところでも落ちない", () => {
+    expect(listMatches(join(newDir(), "そんなところは無い"), "あ")).toEqual([]);
+  });
+});
+
+describe("1 局の読み返し", () => {
+  it("指していない対戦は引けない", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-4", ["あ", "い"]);
+
+    expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
+    // 他人の対戦と、存在しない対戦を、同じ「無い」にする。
+    expect(findMatch(dir, "そとのひと", record.matchId)).toBeNull();
+    expect(findMatch(dir, "あ", "そんな対戦は無い")).toBeNull();
+  });
+
+  it("手の数だけ局面を辿れる", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-5", ["あ", "い"]);
+
+    const start = frameAt(record, 0);
+    expect(start.ply).toBe(0);
+    expect(start.playedMove).toBeNull();
+    expect(start.moveCount).toBe(record.moves.length);
+
+    const end = frameAt(record, record.moves.length);
+    expect(end.ply).toBe(record.moves.length);
+    expect(end.playedMove).toEqual(record.moves.at(-1)?.move);
+
+    // 範囲の外は両端に丸める。手で URL をいじっても落ちない。
+    expect(frameAt(record, -5).ply).toBe(0);
+    expect(frameAt(record, record.moves.length + 100).ply).toBe(record.moves.length);
+  });
+
+  it("指す直前の盤面も一緒に返す", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-7", ["あ", "い"]);
+
+    expect(frameAt(record, 0).beforeViews).toBeNull();
+    // 1 手ぶん手前の盤面が、そのまま「直前」である。
+    for (const ply of [1, 2, record.moves.length]) {
+      expect(frameAt(record, ply).beforeViews).toEqual(frameAt(record, ply - 1).views);
+    }
+  });
+
+  /**
+   * 終わった対戦は、当人どうしには両座席ぶんを見せる（6.6 節）。だから「相手の手札が出る」
+   * ことは漏れではない。**それでも射影を通らない値は出さない**というのが 1 節の S-2 で、
+   * ここが見るのはそちらである。山札の並びは、終わった対戦でも誰にも渡さない。
+   */
+  it("射影の結果しか返さない。山札とサイドの中身は読み返しでも渡さない", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-6", ["あ", "い"]);
+    const frame = frameAt(record, 0);
+
+    const { state, events } = createGame({ seed: record.seed, decks: record.decks });
+    expect(frame.views).toEqual([playerView(state, 0), playerView(state, 1)]);
+    expect(frame.events).toEqual([projectEvents(events, 0), projectEvents(events, 1)]);
+
+    // 生の局面が混じっていれば、山札とサイドが配列として現れる。射影は枚数しか持たない。
+    const payload = JSON.parse(JSON.stringify(frameAt(record, record.moves.length))) as unknown;
+    expect(keysOf(payload)).not.toContain("deck");
+    expect(keysOf(payload)).not.toContain("prizes");
+    expect(keysOf(payload)).toContain("deckCount");
+  });
+});
+
+/** 入れ子をすべて辿って、現れる鍵の名前を集める。 */
+function keysOf(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(keysOf);
+  if (value === null || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, nested]) => [key, ...keysOf(nested)]);
+}

@@ -276,11 +276,14 @@ function renderMoves(moves) {
 /**
  * 手の見出し。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
  * ここが知らない型が来ても、型の名前だけは出す。
+ *
+ * 名前を引くのは **その手を指す直前の盤面** からである。指したあとの盤面では、
+ * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
-function describeMove(move) {
+function describeMove(move, view = lastView) {
   switch (move.type) {
     case "PlayBasic":
-      return `${handCardName(move.cardInstanceId)} をだす`;
+      return `${handCardName(move.cardInstanceId, view)} をだす`;
     case "Evolve":
       return "進化させる";
     case "AttachEnergy":
@@ -304,7 +307,7 @@ function describeMove(move) {
     case "EndTurn":
       return "番を終わる";
     case "AnswerChoice":
-      return describeAnswer(move.answer);
+      return describeAnswer(move.answer, view);
     default:
       return move.type;
   }
@@ -315,18 +318,18 @@ function describeMove(move) {
  * カード、場の個体、位置、番号のいずれかである。
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
-function describeAnswer(answer) {
+function describeAnswer(answer, view) {
   switch (answer.kind) {
     case "accept":
       return "はい";
     case "decline":
       return "いいえ";
     case "card":
-      return handCardName(answer.card);
+      return handCardName(answer.card, view);
     case "cardDef":
       return nameOf(answer.defId);
     case "inPlay":
-      return inPlayName(answer.target);
+      return inPlayName(answer.target, view);
     case "position":
       return `${answer.index + 1} 番目`;
     case "effectIndex":
@@ -341,23 +344,31 @@ function describeAnswer(answer) {
 }
 
 /** 場の個体番号から、いちばん上のカードの名前を引く。 */
-function inPlayName(inPlayId) {
-  if (lastView === null) return inPlayId;
-  for (const side of [lastView.self, lastView.opponent]) {
+function inPlayName(inPlayId, view) {
+  if (!view) return inPlayId;
+  for (const side of [view.self, view.opponent]) {
     for (const pokemon of [side.active, ...side.bench]) {
       if (pokemon === null || pokemon.concealed === true) continue;
       if (pokemon.inPlayId !== inPlayId) continue;
-      const own = side === lastView.self ? "自分の" : "相手の";
+      const own = side === view.self ? "自分の" : "相手の";
       return own + nameOf(pokemon.stack[pokemon.stack.length - 1].defId);
     }
   }
   return inPlayId;
 }
 
-/** 手札の個体番号からカードの名前を引く。盤面に無ければ番号のまま出す。 */
-function handCardName(instanceId) {
-  const card = lastView?.self.hand.find((held) => held.instanceId === instanceId);
-  return card === undefined ? instanceId : nameOf(card.defId);
+/**
+ * 手札の個体番号からカードの名前を引く。盤面に無ければ番号のまま出す。
+ *
+ * 両側を見るのは読み返しのためである。対戦中は相手の手札が `hand` を持たないので、
+ * 自分の手札しか当たらない。
+ */
+function handCardName(instanceId, view) {
+  for (const side of [view?.self, view?.opponent]) {
+    const card = side?.hand?.find((held) => held.instanceId === instanceId);
+    if (card !== undefined) return nameOf(card.defId);
+  }
+  return instanceId;
 }
 
 function addEvent(text) {
@@ -425,6 +436,103 @@ async function postJson(path, body) {
     body: JSON.stringify(body),
   });
   return response.json();
+}
+
+/** 読み返している対戦。開いていなければ null。 */
+let replaying = null;
+
+$("history-button").addEventListener("click", () => {
+  showHistory().catch((error) => setStatus(`一覧を出せませんでした: ${error.message}`));
+});
+
+$("replay-close").addEventListener("click", () => {
+  replaying = null;
+  $("replay").hidden = true;
+});
+
+for (const [id, step] of [
+  ["replay-first", () => 0],
+  ["replay-prev", (ply) => ply - 1],
+  ["replay-next", (ply) => ply + 1],
+  ["replay-last", () => replaying.moveCount],
+]) {
+  $(id).addEventListener("click", () => {
+    if (replaying === null) return;
+    goToPly(step(replaying.ply)).catch((error) => {
+      $("replay-status").textContent = `辿れませんでした: ${error.message}`;
+    });
+  });
+}
+
+async function showHistory() {
+  if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
+  const { matches } = await postJson("/api/matches", { secret: storedSecret() });
+  const list = $("history-list");
+  list.innerHTML = "";
+  if (matches.length === 0) {
+    list.textContent = "まだ読み返せる対戦がありません。";
+    return;
+  }
+  for (const summary of matches) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = describeSummary(summary);
+    button.addEventListener("click", () => {
+      openReplay(summary).catch((error) => setStatus(`開けませんでした: ${error.message}`));
+    });
+    list.append(button);
+  }
+}
+
+function describeSummary(summary) {
+  const outcome = { win: "勝ち", loss: "負け", draw: "引き分け" }[summary.outcome];
+  const how = { normal: "", concede: "（投了）", timeout: "（時間切れ）" }[
+    summary.matchResult.kind
+  ];
+  const when = new Date(summary.endedAt).toLocaleString("ja-JP");
+  return `${when} ${summary.opponentName} と ${outcome}${how} ${summary.moveCount} 手`;
+}
+
+async function openReplay(summary) {
+  replaying = {
+    matchId: summary.matchId,
+    seat: summary.seat,
+    ply: 0,
+    moveCount: summary.moveCount,
+  };
+  $("replay").hidden = false;
+  await goToPly(0);
+}
+
+/** その手数の局面を取りに行って描く。局面を持たないので、毎回サーバが作り直す。 */
+async function goToPly(ply) {
+  if (replaying === null) return;
+  const wanted = Math.max(0, Math.min(ply, replaying.moveCount));
+  const { frame } = await postJson("/api/replay", {
+    secret: storedSecret(),
+    matchId: replaying.matchId,
+    ply: wanted,
+  });
+  replaying.ply = frame.ply;
+
+  const board = readerBoard(frame.views, replaying.seat);
+  $("replay-self").innerHTML = sideHtml(board.self, true);
+  $("replay-opponent").innerHTML = sideHtml(board.opponent, true);
+
+  const before = readerBoard(frame.beforeViews, replaying.seat);
+  const move = frame.playedMove === null ? "対戦の開始時" : describeMove(frame.playedMove, before);
+  $("replay-status").textContent = `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}`;
+}
+
+/**
+ * 座席ごとの射影 2 つを、読み手から見た 1 枚の盤面にする。
+ *
+ * 相手の側も**相手自身の射影の `self`** から取る。終わった対戦なので、相手の手札も
+ * そのまま見えてよい（6.6 節）。
+ */
+function readerBoard(views, seat) {
+  if (!views) return null;
+  return { self: views[seat].self, opponent: views[seat === 0 ? 1 : 0].self };
 }
 
 function escape(text) {

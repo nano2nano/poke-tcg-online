@@ -210,5 +210,30 @@ describe("待ち合わせから決着まで", () => {
     const after = await postJson("/api/account/me", { secret: alpha.secret });
     expect(after.games).toBe(1);
     expect(after.rating).not.toBe(INITIAL_RATING);
+
+    // 指した本人は、その対戦を読み返せる（6.6 節）。
+    const mine = await postJson("/api/matches", { secret: alpha.secret });
+    expect(mine.matches.length).toBe(1);
+    expect(mine.matches[0].matchId).toBe(record.matchId);
+    expect(mine.matches[0].opponentName).toBe("い");
+
+    const start = await postJson("/api/replay", {
+      secret: alpha.secret,
+      matchId: record.matchId,
+      ply: 0,
+    });
+    expect(start.frame.ply).toBe(0);
+    expect(start.frame.moveCount).toBe(record.moves.length);
+    expect(start.frame.views.length).toBe(2);
+
+    // 指していない人には、その対戦は無いものとして返す。
+    const stranger = await postJson("/api/account", { displayName: "よそのひと" });
+    expect((await postJson("/api/matches", { secret: stranger.secret })).matches).toEqual([]);
+    const denied = await fetch(`http://${base}/api/replay`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: stranger.secret, matchId: record.matchId }),
+    });
+    expect(denied.status).toBe(404);
   }, 60_000);
 });
