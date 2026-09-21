@@ -25,6 +25,7 @@ import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
 import type { ClientMessage } from "./protocol.js";
 import { MatchRegistry } from "./registry.js";
+import { RateLimit, type RateLimitOptions } from "./ratelimit.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -34,12 +35,40 @@ export const TIMEOUT_SWEEP_MS = 5_000;
 /** 要求の本文の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
 const MAX_BODY_BYTES = 64 * 1024;
 
+/**
+ * アカウントを作れる速さ。**既定では掛けない。**
+ *
+ * 掛けるかどうかは配置先で決まる。前にプロキシがあって、その向こうの人を見分けられない
+ * 設定のままだと、**来た人全員が 1 人として数えられて、誰もプレイヤーを作れなくなる。**
+ * 止めたいのは機械で回す形だけなのに、止まるのは普通の人のほうである。
+ * 見分けの付け方（`TRUST_PROXY`）を決めたうえで `ACCOUNT_BURST` を置いたときだけ効かせる。
+ *
+ * 効かせても止まるのは 1 か所から回す形だけで、送信元を変えながら来るもの
+ * （IPv6 なら 1 人でいくらでも変えられる）は止まらないし、待てばいくらでも作れる。
+ * 本当に止めるには総数の上限か、使われていないプレイヤーを消すエンドポイントが要る。10 節に残す。
+ */
+const ACCOUNT_LIMIT_DEFAULTS = { refillMs: 10_000, origins: 4_096 };
+
+function accountLimitFromEnv(burst: string | undefined): RateLimitOptions | null {
+  if (burst === undefined || burst.trim() === "") return null;
+  const count = Number(burst);
+  if (!Number.isInteger(count) || count <= 0) {
+    console.warn(`ACCOUNT_BURST は 1 以上の整数で指定する。"${burst}" は読めないので掛けない。`);
+    return null;
+  }
+  return { burst: count, ...ACCOUNT_LIMIT_DEFAULTS };
+}
+
 export interface AppOptions {
   /** 対局ログの置き場。既定は `data/matches/`。 */
   logDir?: string;
   /** 打ち手の置き場。既定は `data/`。 */
   accountDir?: string;
   now?: () => number;
+  /** アカウントを作れる速さ。`null` なら掛けない。既定は `ACCOUNT_BURST` を見る。 */
+  accountLimit?: RateLimitOptions | null;
+  /** 前にいくつプロキシを置いているか。0 なら `x-forwarded-for` を見ない。 */
+  trustedProxies?: number;
 }
 
 export interface App {
@@ -57,6 +86,12 @@ export function createApp(options: AppOptions = {}): App {
   const registry = new MatchRegistry(logDir);
   const accounts = new AccountStore(options.accountDir);
   const lobby = new Lobby(registry, accounts, now);
+  const limitOptions =
+    options.accountLimit === undefined
+      ? accountLimitFromEnv(process.env.ACCOUNT_BURST)
+      : options.accountLimit;
+  const accountLimit = limitOptions === null ? null : new RateLimit(limitOptions);
+  const trustedProxies = options.trustedProxies ?? trustedProxiesFromEnv(process.env.TRUST_PROXY);
   // 持ち点はログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
   const hub = new MatchHub({
     registry,
@@ -71,20 +106,22 @@ export function createApp(options: AppOptions = {}): App {
   });
 
   const http = createServer((request, response) => {
-    route(request, response, lobby, accounts, now, logDir).catch((error: unknown) => {
-      /**
-       * **外へ出してよい文言は `BadRequest` に載っているものだけである。**
-       * 例外の `message` をそのまま返していたときは、口を 1 つ足すたびに
-       * `Cannot read properties of null` のような内部の文言が漏れる口も 1 つ増えていた。
-       * 読む人に意味が無いうえ、実装の中身をそのまま見せることになる。
-       */
-      if (error instanceof BadRequest) {
-        respondJson(response, 400, { error: error.message });
-        return;
-      }
-      console.warn(`${request.method ?? "?"} ${request.url ?? "?"} で落ちた:`, error);
-      respondJson(response, 500, { error: "サーバ側で落ちた" });
-    });
+    route(request, response, lobby, accounts, now, logDir, accountLimit, trustedProxies).catch(
+      (error: unknown) => {
+        /**
+         * **外へ出してよい文言は `BadRequest` に載っているものだけである。**
+         * 例外の `message` をそのまま返していたときは、エンドポイントを 1 つ足すたびに
+         * `Cannot read properties of null` のような内部の文言が漏れる箇所も 1 つ増えていた。
+         * 読む人に意味が無いうえ、実装の中身をそのまま見せることになる。
+         */
+        if (error instanceof BadRequest) {
+          respondJson(response, 400, { error: error.message });
+          return;
+        }
+        console.warn(`${request.method ?? "?"} ${request.url ?? "?"} で落ちた:`, error);
+        respondJson(response, 500, { error: "サーバ側で落ちた" });
+      },
+    );
   });
 
   const wss = new WebSocketServer({ server: http, path: "/ws" });
@@ -132,6 +169,8 @@ async function route(
   accounts: AccountStore,
   now: () => number,
   logDir: string,
+  accountLimit: RateLimit | null,
+  trustedProxies: number,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
 
@@ -182,6 +221,18 @@ async function route(
   // 打ち手を作る。合言葉を返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
   if (request.method === "POST" && url.pathname === "/api/account") {
     const body = (await readBody(request)) as { displayName?: unknown };
+    /**
+     * **作った覚えの無いものが際限なく増えないようにする。** プレイヤーを消すエンドポイントは無く、
+     * 増えるのはメモリと `accounts.jsonl` の行で、後者は起動のたびに同期で読む。
+     * 本文を先に読むのは、形の違う要求で枠を使わせないためである。
+     */
+    if (accountLimit !== null && !accountLimit.take(originOf(request, trustedProxies), now())) {
+      respondJson(response, 429, {
+        code: TOO_MANY_ACCOUNTS,
+        error: "プレイヤーを作る間隔が短すぎる。少し待ってからもう一度どうぞ。",
+      });
+      return;
+    }
     const displayName = typeof body.displayName === "string" ? body.displayName : "";
     respondJson(response, 200, accounts.create(displayName, now()));
     return;
@@ -253,6 +304,47 @@ const MALFORMED = "送られた中身の形が違う";
 
 /** 打ち手が見つからないことを、画面の文言に頼らずに伝える合図。 */
 export const ACCOUNT_NOT_FOUND = "account-not-found";
+
+/** 作る間隔が短すぎることの合図。 */
+export const TOO_MANY_ACCOUNTS = "too-many-accounts";
+
+/**
+ * 設定からプロキシの数を読む。**数でないものは 0 として扱い、黙って見過ごさない。**
+ * `TRUST_PROXY=true` のような書き方をそのまま数に直すと `NaN` になり、比較はすべて
+ * 偽になるので、プロキシを信用しているつもりで信用していない状態になる。
+ */
+function trustedProxiesFromEnv(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") return 0;
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 0) {
+    console.warn(
+      `TRUST_PROXY はプロキシの数（0 以上の整数）で指定する。"${value}" は読めないので 0 とする。`,
+    );
+    return 0;
+  }
+  return count;
+}
+
+/**
+ * どこから来たかの見分け。
+ *
+ * **`x-forwarded-for` は既定では見ない。** あれは送り手が好きに書ける値なので、
+ * 見てしまうと、書き換えながら送るだけで上限を素通りできる。
+ *
+ * **見るときは、間にいくつプロキシがあるかを数えて指す。** `TRUST_PROXY` はその数である。
+ * 右から数えて、信用できるプロキシが書いたぶんを飛ばした先が接続元になる。
+ * 右端を決め打ちにすると、プロキシが 2 つ（CDN とその内側など）あるときにプロキシ自身のアドレスを拾い、
+ * **全員が同じ 1 つとして数えられて、全体が作れなくなる。**
+ * 指した先が無ければ、信用できるプロキシより外は分からないということなので、接続元を使う。
+ */
+function originOf(request: IncomingMessage, trustedProxies: number): string {
+  const direct = request.socket.remoteAddress ?? "unknown";
+  if (trustedProxies <= 0) return direct;
+  const forwarded = request.headers["x-forwarded-for"];
+  const header = Array.isArray(forwarded) ? forwarded.join(",") : forwarded;
+  const hops = (header ?? "").split(",").filter((hop) => hop.trim() !== "");
+  return hops[hops.length - trustedProxies]?.trim() ?? direct;
+}
 
 /** 外へ出してよい断り。これ以外の例外は、文言を外へ出さない。 */
 class BadRequest extends Error {}

@@ -86,7 +86,21 @@ export class AccountStore {
     };
     this.accounts.set(stored.playerId, stored);
     this.bySecretHash.set(stored.secretHash, stored.playerId);
-    this.record([stored]);
+    /**
+     * **書けなかったら、覚えたぶんも戻す。** シークレットを返すのはこのときだけなので、
+     * 500 を返したあとにメモリだけ残ると、誰にも名乗れないアカウントができる。消す
+     * エンドポイントは無く、次の詰め直しでそれがファイルにも載る。
+     *
+     * 覚えるのが先なのは、`record` が詰め直しに入ることがあり、そこで書かれるのは
+     * いま覚えているぶんだからである。先に書くと、追記した行を詰め直しが消してしまう。
+     */
+    try {
+      this.record([stored]);
+    } catch (error) {
+      this.accounts.delete(stored.playerId);
+      this.bySecretHash.delete(stored.secretHash);
+      throw error;
+    }
     return { account: publicOf(stored), secret };
   }
 

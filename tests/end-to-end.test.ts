@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +30,12 @@ let logDir: string;
 beforeAll(async () => {
   ensureCards();
   logDir = mkdtempSync(join(tmpdir(), "poke-online-e2e-"));
-  app = createApp({ logDir, accountDir: logDir });
+  // ここで見たいのは速さの上限ではないので、当たらない値にしておく。上限そのものは下で見る。
+  app = createApp({
+    logDir,
+    accountDir: logDir,
+    accountLimit: { burst: 1_000, refillMs: 1, origins: 16 },
+  });
   await new Promise<void>((resolve) => app.http.listen(0, "127.0.0.1", () => resolve()));
   const { port } = app.http.address() as AddressInfo;
   base = `127.0.0.1:${port}`;
@@ -392,4 +397,122 @@ describe("待ち合わせから決着まで", () => {
     });
     expect(fine.frame.ply).toBe(0);
   }, 60_000);
+});
+
+/**
+ * プレイヤーを消すエンドポイントは無い。作れる速さに上限が無いと、メモリと `accounts.jsonl` の行が
+ * 際限なく伸びる。後者は起動のたびに同期で読むので、増やされたぶんだけ起動が遅くなる。
+ */
+describe("プレイヤーを作れる速さ", () => {
+  it("続けて作りすぎると 429 で断り、合図を付けて返す", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "poke-limit-"));
+    // 戻る速さを 0 にして、ためてあるぶんだけが通る形にする。試験で時間を待たない。
+    const limited = createApp({
+      logDir: dir,
+      accountDir: dir,
+      accountLimit: { burst: 2, refillMs: 0, origins: 16 },
+      // 環境変数に引きずられないよう、ここで固定する。既定を見たい試験ではない。
+      trustedProxies: 0,
+    });
+    const port = await new Promise<number>((resolve) => {
+      limited.http.listen(0, "127.0.0.1", () => {
+        resolve((limited.http.address() as AddressInfo).port);
+      });
+    });
+    const here = `127.0.0.1:${port}`;
+    const create = async (): Promise<Response> =>
+      fetch(`http://${here}/api/account`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ displayName: "たくさん" }),
+      });
+
+    try {
+      expect((await create()).status).toBe(200);
+      expect((await create()).status).toBe(200);
+
+      const refused = await create();
+      expect(refused.status).toBe(429);
+      const answer = (await refused.json()) as JsonBody;
+      expect(answer.code).toBe("too-many-accounts");
+
+      // 断ったぶんは保存もされていない。
+      expect(limited.accounts.count()).toBe(2);
+
+      /**
+       * **`x-forwarded-for` を書き換えても素通りしない。** 既定でその要素を見てしまうと、
+       * 上限を置いた意味がそのまま消える。送り手が好きに書ける値だからである。
+       */
+      const spoofed = await fetch(`http://${here}/api/account`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": "10.0.0.9" },
+        body: JSON.stringify({ displayName: "なりすまし" }),
+      });
+      expect(spoofed.status).toBe(429);
+      expect(limited.accounts.count()).toBe(2);
+
+      // 上限はアカウントを作るエンドポイントだけに掛かる。ほかのエンドポイントはこれまでどおり答える。
+      const others = await fetch(`http://${here}/api/account/me`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret: "そんなシークレットは無い" }),
+      });
+      expect(others.status).toBe(404);
+    } finally {
+      await limited.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * プロキシが 2 つ（CDN とその内側など）あるとき、右端はプロキシ自身のアドレスである。
+   * そこで数えると**全員が同じ 1 つとして数えられ、全体が作れなくなる。**
+   * 信用するプロキシの数を指して、その手前を見る。
+   */
+  it("プロキシの数を指せば、プロキシの向こうの人ごとに数える", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "poke-proxy-"));
+    const proxied = createApp({
+      logDir: dir,
+      accountDir: dir,
+      accountLimit: { burst: 1, refillMs: 0, origins: 16 },
+      trustedProxies: 2,
+    });
+    const port = await new Promise<number>((resolve) => {
+      proxied.http.listen(0, "127.0.0.1", () => {
+        resolve((proxied.http.address() as AddressInfo).port);
+      });
+    });
+    const create = async (chain: string): Promise<number> =>
+      (
+        await fetch(`http://127.0.0.1:${port}/api/account`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-forwarded-for": chain },
+          body: JSON.stringify({ displayName: "プロキシの向こう" }),
+        })
+      ).status;
+
+    try {
+      /**
+       * プロキシは自分が受け取った相手のアドレスを足す。接続元 → 外のプロキシ → 内のプロキシ → ここ、なら
+       * 外のプロキシが「接続元」を、内のプロキシが「外のプロキシ」を足して、要素は 2 つになる。
+       * 接続元はいちばん左、つまり右から数えて 2 つ目である。
+       */
+      expect(await create("203.0.113.1, 198.51.100.7")).toBe(200);
+      // 別の人は、同じプロキシを通っていても別に数える。
+      expect(await create("203.0.113.2, 198.51.100.7")).toBe(200);
+      // 同じ人の 2 回目は断る。
+      expect(await create("203.0.113.1, 198.51.100.7")).toBe(429);
+
+      // 信用する数より要素が少ないときは、プロキシの向こうが分からないので接続元で数える。
+      expect(await create("203.0.113.3")).toBe(200);
+      expect(await create("203.0.113.4")).toBe(429);
+
+      // 送り手が要素を足しても、右から数えるので信用できるプロキシが書いた値に当たる。
+      expect(await create("9.9.9.9, 203.0.113.5, 198.51.100.7")).toBe(200);
+      expect(await create("8.8.8.8, 203.0.113.5, 198.51.100.7")).toBe(429);
+    } finally {
+      await proxied.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
