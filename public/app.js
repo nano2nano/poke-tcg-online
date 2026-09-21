@@ -35,13 +35,7 @@ $("name").addEventListener("input", () => {
   nameTouched = true;
 });
 
-ensureAccount()
-  .then((account) => {
-    // 触られていなければ登録名を入れる。触られていれば、その人のものが優先する。
-    if (!nameTouched) $("name").value = account.displayName;
-    showAccount(account);
-  })
-  .catch((error) => setStatus(`打ち手を読めませんでした: ${error.message}`));
+ensureAccount().catch((error) => setStatus(`打ち手を読めませんでした: ${error.message}`));
 
 /** 持ち点と戦績を引き直す。対戦が終われば動くので、そのたびに読む。 */
 async function refreshAccount() {
@@ -82,9 +76,11 @@ async function join() {
   const room = $("room").value.trim();
   const request = {
     secret: storedSecret(),
-    displayName: $("name").value.trim() || "ななし",
     deck: { cards: deck.cards },
   };
+  // **名乗り直しは、その人が欄を触ったときだけ送る。** 名乗り直しは対局ログにも残り、
+  // 取り消せない。欄の中身がその人の意思だとは限らない以上、送る条件は「打ったこと」にする。
+  if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
   if (room !== "") request.roomCode = room;
 
   const outcome = await postJson("/api/join", request);
@@ -446,10 +442,19 @@ function storedSecret() {
  */
 function ensureAccount() {
   // 失敗したものを覚えると二度と作り直せないので、そのときだけ忘れる。
-  loadingAccount ??= loadAccount().catch((error) => {
-    loadingAccount = null;
-    throw error;
-  });
+  loadingAccount ??= loadAccount()
+    .then((account) => {
+      showAccount(account);
+      // **読めたときは必ず欄へ入れる。画面を開いたときの 1 回だけにしない。**
+      // 開いたときに失敗すると、欄は既定の「ななし」のまま残る。次に「対戦をさがす」で
+      // 読み直して通っても入れ直さないと、その「ななし」が名乗りとして送られる。
+      if (!nameTouched) $("name").value = account.displayName;
+      return account;
+    })
+    .catch((error) => {
+      loadingAccount = null;
+      throw error;
+    });
   return loadingAccount;
 }
 
