@@ -176,33 +176,55 @@ describe("入れなかった理由", () => {
 
   /**
    * 形の合わないものを素通りさせると、中身を触った先で落ちる。そこで出る文句は
-   * 内側の作りの話でしかなく、読む人には意味が無い。口で落として同じ形で断る。
+   * 内側の作りの話でしかなく、読む人には意味が無い。
+   *
+   * **口を 1 つずつ確かめるのではなく、POST を受ける口を並べて全部に同じ本文を送る。**
+   * この漏れは「直した口の隣が直っていない」形で 2 度出ている。例を 1 つ足すやり方では、
+   * 次に足した口がまた抜ける。
    */
-  it("形の合わない中身は、口で断って内側の文句を出さない", async () => {
+  it("どの口でも、形の合わない本文は同じ形で断り、内側の文句を出さない", async () => {
     const account = await postJson("/api/account", { displayName: "形が変な人" });
-    const malformed = [
-      { secret: account.secret, deck: legalDecks()[0], displayName: null },
-      { secret: account.secret, deck: legalDecks()[0], roomCode: 7 },
-      { secret: account.secret, deck: { cards: "デッキ" } },
-      { secret: account.secret, deck: { cards: [1, 2] } },
-      { secret: account.secret },
-      { secret: null, deck: legalDecks()[0] },
-      "デッキでも何でもない",
+    const endpoints = [
+      "/api/join",
+      "/api/deck/validate",
+      "/api/decklist/resolve",
+      "/api/matches",
+      "/api/replay",
+      "/api/account",
+      "/api/account/me",
+    ];
+    // JSON として読めるが object ではないもの、object だが欄の型が違うもの、壊れた JSON。
+    const malformed: string[] = [
+      "null",
+      "7",
+      '"ただの文字列"',
+      "[1, 2, 3]",
+      "{",
+      JSON.stringify({ secret: null, deck: legalDecks()[0] }),
+      JSON.stringify({ secret: account.secret, deck: { cards: "デッキ" } }),
+      JSON.stringify({ secret: account.secret, deck: { cards: [1, 2] } }),
+      JSON.stringify({ secret: account.secret, deck: legalDecks()[0], displayName: null }),
+      JSON.stringify({ secret: account.secret, deck: legalDecks()[0], roomCode: 7 }),
+      JSON.stringify({ secret: 7 }),
+      JSON.stringify({ text: 7 }),
+      JSON.stringify({ matchId: 7, ply: "さいしょ" }),
     ];
 
-    for (const body of malformed) {
-      const response = await fetch(`http://${base}/api/join`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      expect(response.status).toBe(400);
-      const answer = (await response.json()) as JsonBody;
-      expect(answer.ok).toBe(false);
-      const errors = (answer.errors ?? []) as string[];
-      expect(errors.length).toBeGreaterThan(0);
-      // 内側の文句が漏れていない。
-      expect(errors.join(" ")).not.toMatch(/is not a function|undefined|TypeError/);
+    for (const path of endpoints) {
+      for (const body of malformed) {
+        const response = await fetch(`http://${base}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        });
+        // 形が合っていれば普通に答えてよい。落ちて 500 になっていないことがここの眼目である。
+        expect(response.status, `${path} ← ${body}`).toBeLessThan(500);
+        const answer = (await response.json()) as JsonBody;
+        const said = JSON.stringify(answer);
+        expect(said, `${path} ← ${body}`).not.toMatch(
+          /is not a function|Cannot read|TypeError|JSON at position|Unexpected token/,
+        );
+      }
     }
 
     // 形が通れば、断りの中身はこれまでどおりである。
@@ -212,6 +234,24 @@ describe("入れなかった理由", () => {
       body: JSON.stringify({ secret: "そんな合言葉は無い", deck: legalDecks()[0] }),
     });
     expect(((await fine.json()) as JsonBody).errors).toEqual(["打ち手が見つからない"]);
+  });
+
+  /**
+   * 打ち手が消えたときだけ合言葉を捨てられるように、番号ではなく合図を返す。
+   * 静的ファイルの取りこぼしも 404 を返すので、番号だけでは見分けられない。
+   */
+  it("知らない合言葉の 404 と、無い道の 404 を見分けられる", async () => {
+    const gone = await fetch(`http://${base}/api/account/me`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "そんな合言葉は無い" }),
+    });
+    expect(gone.status).toBe(404);
+    expect(((await gone.json()) as JsonBody).code).toBe("account-not-found");
+
+    const nowhere = await fetch(`http://${base}/api/account/me/nowhere`, { method: "POST" });
+    expect(nowhere.status).toBe(404);
+    expect(((await nowhere.json()) as JsonBody).code).toBeUndefined();
   });
 });
 

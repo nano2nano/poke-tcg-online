@@ -486,11 +486,13 @@ async function loadAccount() {
     });
     if (response.ok) return response.json();
     /**
-     * **消すのは 404 のときだけである。** サーバは合言葉の控えを持たないので、
-     * ここで消すと、その打ち手の持ち点も戦績も読み返しも戻らない。
-     * 入れ替えの最中の 502 や、切れた回線を「打ち手が消えた」と読み違えない。
+     * **消すのは、サーバが「その打ち手はいない」と言ったときだけである。**
+     * サーバは合言葉の控えを持たないので、ここで消すと持ち点も戦績も読み返しも戻らない。
+     * 404 という番号だけでは足りない。静的ファイルの取りこぼしも、前の版が動いている
+     * サーバも、間に挟まった中継も 404 を返す。合図が付いている応答だけを本物とする。
      */
-    if (response.status !== 404) {
+    const failure = await response.json().catch(() => null);
+    if (failure?.code !== "account-not-found") {
       throw new Error(`打ち手を読めなかった（${response.status}）。合言葉はそのまま残してある。`);
     }
     localStorage.removeItem("poke-account-secret");
