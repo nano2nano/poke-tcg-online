@@ -395,6 +395,86 @@ describe("名指しになっていない識別子では走査しない", () => {
 });
 
 /**
+ * キャッシュが溢れたとき、**残すのは新しい日である。** いちばん伸びるのは今日のファイルで、
+ * 伸びるたびに丸ごと読み直すことになれば、キャッシュを置いた意味が無くなる。
+ * 捨てる向きが決まっていないと、古い日と新しい日が毎回お互いを追い出し続ける。
+ */
+describe("キャッシュが溢れたとき", () => {
+  it("いま伸びている日を残し、読み直しが繰り返されない", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    // 日を 2 つぶん置いて、合わせて上限を超える形にする。
+    forgetListed(3);
+
+    const old = writeMatch(dir, "hist-20", ["あ", "い"]);
+    const oldDay = join(dir, `${old.endedAt.slice(0, 10)}.jsonl`);
+    appendFileSync(oldDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`);
+
+    // 今日のぶん。読めない行を植えておく。頭から読み直せば必ず断りが出る。
+    const todayDay = join(dir, "2099-01-01.jsonl");
+    writeFileSync(todayDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`, "utf8");
+    appendFileSync(todayDay, `{"matchId":"こわれた"\n`);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(listMatches(dir, "あ").length).toBe(3);
+      expect(warn).toHaveBeenCalled();
+
+      // 今日のファイルが伸びる。ここで今日のぶんを捨てると、次から毎回読み直しになる。
+      appendFileSync(todayDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`);
+      warn.mockClear();
+      // 何度呼んでも、今日のファイルを頭から読み直さない（読み直せば植えた行で断りが出る）。
+      for (let i = 0; i < 5; i++) expect(listMatches(dir, "あ").length).toBe(4);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      forgetListed();
+    }
+  });
+
+  /**
+   * **1 日だけで上限を超えても、いちばん新しい日は覚える。** そこがいちばん読まれて、
+   * いちばん伸びる。覚えないと毎回そのファイルを頭から読むことになり、上限を置いた目的
+   * （イベントループを止めない）と逆のことが起きる。古い日は読み直しになるが、
+   * そちらは伸びないので、読み直しの大きさは増えない。
+   */
+  it("1 日だけで上限を超えても、いちばん新しい日は覚える", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    forgetListed(2);
+
+    const old = writeMatch(dir, "hist-21", ["あ", "い"]);
+
+    // 上限（2）を 1 日だけで超える、いちばん新しい日。読めない行を植えておく。
+    const big = join(dir, "2099-12-31.jsonl");
+    writeFileSync(
+      big,
+      [0, 1, 2]
+        .map((i) => `${JSON.stringify({ ...old, matchId: `${randomUUID()}-${i}` })}\n`)
+        .join(""),
+      "utf8",
+    );
+    appendFileSync(big, `{"matchId":"こわれた"\n`);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(listMatches(dir, "あ").length).toBe(4);
+      expect(warn).toHaveBeenCalled();
+
+      // 2 度目からは、その日を頭から読み直さない。読み直せば植えた行の断りが出る。
+      warn.mockClear();
+      for (let i = 0; i < 3; i++) expect(listMatches(dir, "あ").length).toBe(4);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      forgetListed();
+    }
+  });
+});
+
+/**
  * 一覧と読み返しは、**同じファイルの集合**を見なければならない。片方だけが拾うと、
  * 一覧に出るのに開けない対戦ができる。アカウントの保存先を同じディレクトリに置くと、
  * それを対戦記録として読んで断りを出すことにもなる。
@@ -446,6 +526,51 @@ describe("読み返しとエンジンの版", () => {
     expect(replayability(record, older)).toEqual({ kind: "ok", engineCommitDiffers: true });
     expect(frameAt(record, 1, older).engineCommitDiffers).toBe(true);
     expect(frameAt(record, 1, now).engineCommitDiffers).toBe(false);
+  });
+});
+
+/**
+ * ファイルが縮んだことは読むだけでは分からない。**読んだかどうかで覚え直すと、
+ * 0 バイトに縮んだ日は読むものが無く、古いほうが上限を食ったまま残る。**
+ * `logrotate` の `copytruncate` は、まさにこれを起こす。
+ */
+describe("縮んだ日のキャッシュ", () => {
+  it("0 バイトに縮んだ日を、古いままにしない", () => {
+    const dir = newDir();
+    forgetOpened();
+    forgetListed(3);
+    try {
+      const first = writeMatch(dir, "hist-21", ["あ", "い"]);
+      const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
+      expect(listMatches(dir, "あ").length).toBe(1);
+
+      // 中身だけ捨てる（ファイルは残る）。一覧からも消える。
+      writeFileSync(day, "", "utf8");
+      expect(listMatches(dir, "あ").length).toBe(0);
+
+      /**
+       * 古いほうが残っていると、そのぶん上限を食う。ここでは上限 3 に対して
+       * 1 つ残っている形になり、**2 日ぶんしか入らなくなる。**
+       */
+      appendFileSync(day, `${JSON.stringify({ ...first, matchId: randomUUID() })}\n`);
+      appendFileSync(day, `${JSON.stringify({ ...first, matchId: randomUUID() })}\n`);
+      appendFileSync(day, `${JSON.stringify({ ...first, matchId: randomUUID() })}\n`);
+      expect(listMatches(dir, "あ").length).toBe(3);
+
+      // 上限ちょうどなので、覚えられている。読み直せば植えた行で断りが出る。
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        appendFileSync(day, `{"matchId":"こわれた"\n`);
+        expect(listMatches(dir, "あ").length).toBe(3);
+        warn.mockClear();
+        expect(listMatches(dir, "あ").length).toBe(3);
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    } finally {
+      forgetListed();
+    }
   });
 });
 
