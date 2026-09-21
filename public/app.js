@@ -181,12 +181,23 @@ function pickChoice(line, name, defId) {
  */
 async function waitForOpponent(ticket) {
   for (;;) {
-    const claimed = await getJson(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
-    if (claimed.kind === "seated") {
+    let claimed = null;
+    try {
+      claimed = await getJson(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
+      setStatus("相手を待っています");
+    } catch {
+      /**
+       * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
+       * やめるとその対戦に座らないまま時間切れで負ける。札は何度でも使えるので、
+       * 取り直せばよい。本当に降りていれば、繋がった時点で `dropped` が返る。
+       */
+      setStatus("相手を待っています（つながりが悪いので取り直しています）");
+    }
+    if (claimed?.kind === "seated") {
       openMatch(claimed.seat);
       return;
     }
-    if (claimed.kind === "dropped") {
+    if (claimed?.kind === "dropped") {
       setStatus("別の窓から入り直したので、この窓は待つのをやめました。");
       return;
     }

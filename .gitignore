@@ -2,4 +2,6 @@ node_modules/
 dist/
 # 対局ログと打ち手。実データは git の管理下に置かない。
 data/matches/
-data/accounts.json
+# 書きかけの別名（`accounts.json.writing`）も含める。落ちたときに残り、
+# 合言葉のハッシュを丸ごと持っている。
+data/accounts.json*

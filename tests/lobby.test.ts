@@ -168,6 +168,72 @@ describe("相手を見つける", () => {
     expect(outcome.ok).toBe(false);
     expect(lobby.waitingCount()).toBe(0);
   });
+
+  /**
+   * 名乗り直しは置き場とそれ以後の対局ログに残り、取り消せない。断られた側から見れば
+   * 何も起きていないのに、名前だけが変わっていることになる。
+   */
+  it("入れなかった人の名乗りは書き換えない", () => {
+    ensureCards();
+    const arena = newArena();
+    const { secret, account } = arena.accounts.create("まえ", 0);
+
+    const outcome = arena.lobby.join({ secret, deck: { cards: [] }, displayName: "あと" });
+
+    expect(outcome.ok).toBe(false);
+    expect(arena.accounts.byPlayerId(account.playerId)?.displayName).toBe("まえ");
+  });
+
+  it("入れた人の名乗りは書き換える", () => {
+    ensureCards();
+    const arena = newArena();
+    const { secret, account } = arena.accounts.create("まえ", 0);
+
+    const outcome = arena.lobby.join({ secret, deck: legalDecks()[0], displayName: "あと" });
+
+    expect(outcome.ok).toBe(true);
+    expect(arena.accounts.byPlayerId(account.playerId)?.displayName).toBe("あと");
+  });
+});
+
+/**
+ * 引き取り口は、待っていた人が座席を受け取る唯一の道である。1 度読んだら消す作りだと、
+ * その応答が回線の不調で落ちただけで、**対戦は始まっているのに座れない人**ができる。
+ * その人は時間切れで負け、記録には普通の負けとして残る。
+ */
+describe("席の引き取り", () => {
+  it("同じ札で何度取りに来ても同じ座席を返す", () => {
+    ensureCards();
+    const arena = newArena();
+    const { lobby } = arena;
+    const first = lobby.join(player(arena, "a", "へや"));
+    lobby.join(player(arena, "b", "へや"));
+    if (!first.ok) throw new Error("入れていない");
+
+    const once = lobby.claim(first.ticket);
+    const twice = lobby.claim(first.ticket);
+
+    expect(once.kind).toBe("seated");
+    expect(twice).toEqual(once);
+  });
+
+  it("対戦が終われば引き取り口は残らない", () => {
+    ensureCards();
+    const arena = newArena();
+    const { lobby, registry } = arena;
+    const first = lobby.join(player(arena, "a", "へや"));
+    lobby.join(player(arena, "b", "へや"));
+    if (!first.ok) throw new Error("入れていない");
+    const seat = seatOf(lobby, first.ticket);
+
+    // 時間切れで終わらせる。持ち時間は 1 手ぶんと貯えで 16 分あるので、そこを越える。
+    const [ended] = registry.sweepTimeouts(60 * 60_000);
+    if (ended === undefined) throw new Error("対戦が終わっていない");
+    registry.retire(ended);
+    expect(registry.bySeatToken(seat.seatToken)).toBeUndefined();
+
+    expect(lobby.claim(first.ticket).kind).toBe("dropped");
+  });
 });
 
 /**

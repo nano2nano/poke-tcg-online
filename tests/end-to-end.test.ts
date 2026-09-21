@@ -173,6 +173,46 @@ describe("入れなかった理由", () => {
     expect(body.ok).toBe(false);
     expect((body.errors as string[]).length).toBeGreaterThan(0);
   });
+
+  /**
+   * 形の合わないものを素通りさせると、中身を触った先で落ちる。そこで出る文句は
+   * 内側の作りの話でしかなく、読む人には意味が無い。口で落として同じ形で断る。
+   */
+  it("形の合わない中身は、口で断って内側の文句を出さない", async () => {
+    const account = await postJson("/api/account", { displayName: "形が変な人" });
+    const malformed = [
+      { secret: account.secret, deck: legalDecks()[0], displayName: null },
+      { secret: account.secret, deck: legalDecks()[0], roomCode: 7 },
+      { secret: account.secret, deck: { cards: "デッキ" } },
+      { secret: account.secret, deck: { cards: [1, 2] } },
+      { secret: account.secret },
+      { secret: null, deck: legalDecks()[0] },
+      "デッキでも何でもない",
+    ];
+
+    for (const body of malformed) {
+      const response = await fetch(`http://${base}/api/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      const answer = (await response.json()) as JsonBody;
+      expect(answer.ok).toBe(false);
+      const errors = (answer.errors ?? []) as string[];
+      expect(errors.length).toBeGreaterThan(0);
+      // 内側の文句が漏れていない。
+      expect(errors.join(" ")).not.toMatch(/is not a function|undefined|TypeError/);
+    }
+
+    // 形が通れば、断りの中身はこれまでどおりである。
+    const fine = await fetch(`http://${base}/api/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "そんな合言葉は無い", deck: legalDecks()[0] }),
+    });
+    expect(((await fine.json()) as JsonBody).errors).toEqual(["打ち手が見つからない"]);
+  });
 });
 
 describe("待ち合わせから決着まで", () => {

@@ -221,13 +221,22 @@ async function route(
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/deck/validate") {
-    const deck = (await readBody(request)) as DeckList;
+    const deck = toDeckList(await readBody(request));
+    if (deck === null) {
+      respondJson(response, 400, { ok: false, errors: [MALFORMED] });
+      return;
+    }
     const errors = validateDeck(deck).map(describeViolation);
     respondJson(response, 200, { ok: errors.length === 0, errors });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/join") {
-    const outcome = lobby.join((await readBody(request)) as JoinRequest);
+    const joining = toJoinRequest(await readBody(request));
+    if (joining === null) {
+      respondJson(response, 400, { ok: false, errors: [MALFORMED] });
+      return;
+    }
+    const outcome = lobby.join(joining);
     respondJson(response, outcome.ok ? 200 : 400, outcome);
     return;
   }
@@ -236,6 +245,37 @@ async function route(
     return;
   }
   serveStatic(url.pathname, response);
+}
+
+const MALFORMED = "送られた中身の形が違う";
+
+/**
+ * 外から来た本文をデッキへ直す。**形の合わないものは口で落とす。**
+ * 素通りさせると中身を触った先で落ち、その場の文句（`filter is not a function` など）が
+ * そのまま外へ出る。読む人に意味が無く、内側の作りだけが分かる。
+ */
+function toDeckList(body: unknown): DeckList | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { cards } = body as Record<string, unknown>;
+  if (!Array.isArray(cards) || cards.some((card) => typeof card !== "string")) return null;
+  return { cards: cards as DeckList["cards"] };
+}
+
+/** 外から来た本文を待ち合わせの求めへ直す。省ける欄は、あれば形を確かめる。 */
+function toJoinRequest(body: unknown): JoinRequest | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { secret, deck, displayName, roomCode } = body as Record<string, unknown>;
+  if (typeof secret !== "string") return null;
+  if (displayName !== undefined && typeof displayName !== "string") return null;
+  if (roomCode !== undefined && typeof roomCode !== "string") return null;
+  const cards = toDeckList(deck);
+  if (cards === null) return null;
+  return {
+    secret,
+    deck: cards,
+    ...(displayName === undefined ? {} : { displayName }),
+    ...(roomCode === undefined ? {} : { roomCode }),
+  };
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {

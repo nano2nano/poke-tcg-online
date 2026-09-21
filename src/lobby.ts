@@ -71,16 +71,24 @@ export class Lobby {
   join(request: JoinRequest): JoinOutcome {
     const nowMs = this.now();
     // 合言葉を先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
-    const account =
-      request.displayName === undefined
-        ? this.accounts.touch(request.secret, nowMs)
-        : this.accounts.rename(request.secret, request.displayName, nowMs);
-    if (account === null) return { ok: false, errors: ["打ち手が見つからない"] };
+    // ここでは読むだけで、置き場は書き換えない。
+    const known = this.accounts.bySecret(request.secret);
+    if (known === null) return { ok: false, errors: ["打ち手が見つからない"] };
 
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {
       return { ok: false, errors: violations.map(describeViolation) };
     }
+
+    /**
+     * **置き場を書き換えるのは、入れると決まってからである。** 先に書くと、デッキで
+     * 断られた人の名乗りだけが変わって残る。断られた側から見れば何も起きていないのに、
+     * 置き場でもそれ以後の対局ログでも名前が変わっている。
+     */
+    const account =
+      (request.displayName === undefined
+        ? this.accounts.touch(request.secret, nowMs)
+        : this.accounts.rename(request.secret, request.displayName, nowMs)) ?? known;
 
     const ticket: Ticket = {
       ticket: newToken(),
@@ -113,14 +121,29 @@ export class Lobby {
     return { ok: true, ticket: ticket.ticket, seat: seats[1] };
   }
 
-  /** 待っている人が相手を見つけたかどうかを取りに来る口。 */
+  /**
+   * 待っている人が相手を見つけたかどうかを取りに来る口。
+   *
+   * **取りに来ても消さない。** 1 度読んだら消す作りだと、その応答が回線の不調で
+   * 落ちたときに、次に取りに来た人へ「もう降りている」と答えることになる。
+   * 対戦のほうは始まっているので、その人は座らないまま時間切れで負ける。
+   * 札そのものが引き取りの合鍵なので、同じ札で何度取りに来ても同じ座席を返す。
+   */
   claim(ticketId: string): ClaimOutcome {
+    this.forgetFinished();
     const seat = this.seated.get(ticketId);
-    if (seat !== undefined) {
-      this.seated.delete(ticketId);
-      return { kind: "seated", seat };
-    }
+    if (seat !== undefined) return { kind: "seated", seat };
     return this.isWaiting(ticketId) ? { kind: "waiting" } : { kind: "dropped" };
+  }
+
+  /**
+   * 終わった対戦の引き取り口を落とす。消さなくなったぶん、ここで溜まりを止める。
+   * 生きているかどうかは台帳が知っている（`retire` が座席トークンを外す）。
+   */
+  private forgetFinished(): void {
+    for (const [ticketId, seat] of this.seated) {
+      if (this.registry.bySeatToken(seat.seatToken) === undefined) this.seated.delete(ticketId);
+    }
   }
 
   private isWaiting(ticketId: string): boolean {
