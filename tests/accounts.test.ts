@@ -50,6 +50,29 @@ describe("打ち手", () => {
     expect(store.create("あ".repeat(100), 0).account.displayName.length).toBe(40);
   });
 
+  /**
+   * 表示名は画面と対局ログの両方へ出る。UTF-16 の長さで切ると、絵文字のような
+   * 2 つ組の文字が半分になったものが、そのまま置き場にも記録にも入る。
+   */
+  it("長い名前を切るとき、文字を割らない", () => {
+    const { store } = newStore();
+    // どれも 1 文字で、UTF-16 では 2 つぶんの長さを持つ。
+    const long = "🎴".repeat(100);
+    const name = store.create(long, 0).account.displayName;
+
+    expect([...name]).toHaveLength(40);
+    expect(name).toBe("🎴".repeat(40));
+    // 半端な片割れが残っていない。残っていれば往復で形が変わる。
+    expect(JSON.parse(JSON.stringify(name))).toBe(name);
+    expect(name).not.toContain("\uFFFD");
+    expect([...name].every((char) => char === "🎴")).toBe(true);
+
+    // 2 つ組と普通の文字が混じっていても、数えるのは文字のほうである。
+    const mixed = store.create(`${"🎴".repeat(39)}あいう`, 0).account.displayName;
+    expect([...mixed]).toHaveLength(40);
+    expect(mixed.endsWith("あ")).toBe(true);
+  });
+
   it("名乗り直しても持ち点と戦績は動かない", () => {
     const { store } = newStore();
     const { account, secret } = store.create("まえ", 0);

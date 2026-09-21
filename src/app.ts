@@ -20,7 +20,7 @@ import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
 import { AccountStore, type Account } from "./accounts.js";
-import { findMatch, frameAt, listMatches, replayability } from "./history.js";
+import { findMatch, frameAt, isMatchId, listMatches, replayability } from "./history.js";
 import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
 import type { ClientMessage } from "./protocol.js";
@@ -145,8 +145,9 @@ async function route(
       respondJson(response, 404, { error: "打ち手が見つからない" });
       return;
     }
-    const matchId = typeof body.matchId === "string" ? body.matchId : "";
-    const record = findMatch(logDir, account.playerId, matchId);
+    // 形を確かめてから走査に入る。名指しになっていない値で全部の日を読まない（6.6 節）。
+    const matchId = typeof body.matchId === "string" && isMatchId(body.matchId) ? body.matchId : "";
+    const record = matchId === "" ? null : findMatch(logDir, account.playerId, matchId);
     if (record === null) {
       // 指していない対戦と、存在しない対戦を、同じ応答にする。
       respondJson(response, 404, { error: "対戦が見つからない" });

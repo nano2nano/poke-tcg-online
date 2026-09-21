@@ -182,9 +182,11 @@ function hash(secret: string): string {
 
 function cleanName(displayName: string): string {
   // 制御文字を落とすのは、表示名が画面と対局ログの両方へ出るためである。
+  // **切るのは文字の単位である。** UTF-16 の長さで切ると、絵文字が半分になったものが
+  // そのまま置き場にも対局ログにも入る。
   const cleaned = [...displayName.trim()]
     .filter((char) => (char.codePointAt(0) ?? 0) >= 0x20)
-    .join("")
-    .slice(0, MAX_DISPLAY_NAME);
+    .slice(0, MAX_DISPLAY_NAME)
+    .join("");
   return cleaned === "" ? "ななし" : cleaned;
 }

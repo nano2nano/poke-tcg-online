@@ -24,10 +24,21 @@ $("join-button").addEventListener("click", () => {
   join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
 });
 
+/**
+ * 人が名乗りを触ったか。
+ *
+ * 読み込みは非同期なので、**返ってくる前に名乗りを書き換えて「対戦をさがす」を
+ * 押せてしまう。** そこで欄を埋め直すと、打った名前が消えてから送られる。
+ */
+let nameTouched = false;
+$("name").addEventListener("input", () => {
+  nameTouched = true;
+});
+
 ensureAccount()
   .then((account) => {
-    // 名乗りを埋めるのはここだけである。以後は打った人のものなので上書きしない。
-    $("name").value = account.displayName;
+    // 触られていなければ登録名を入れる。触られていれば、その人のものが優先する。
+    if (!nameTouched) $("name").value = account.displayName;
     showAccount(account);
   })
   .catch((error) => setStatus(`打ち手を読めませんでした: ${error.message}`));

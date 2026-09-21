@@ -7,6 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { appendFileSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -275,7 +276,8 @@ describe("待ち合わせから決着まで", () => {
      */
     const planted: MatchRecord = {
       ...record,
-      matchId: "べつのカードデータで指した対戦",
+      // 口は識別子の形を確かめてから走査に入るので、ここも本物と同じ形にする。
+      matchId: randomUUID(),
       engine: { ...record.engine, cardDataSha256: "ちがうカードデータ" },
     };
     appendFileSync(
@@ -288,5 +290,26 @@ describe("待ち合わせから決着まで", () => {
       body: JSON.stringify({ secret: alpha.secret, matchId: planted.matchId }),
     });
     expect(stale.status).toBe(409);
+
+    /**
+     * **名指しになっていない識別子で走査を始めさせない。** 空文字はどの行にも含まれるので、
+     * 通すと 1 回の問い合わせで全部の日を解析することになる。打ち手は誰でも作れるので、
+     * これを繰り返されると進行中の対戦の手も持ち時間の見回りも止まる。
+     */
+    for (const bad of ["", "   ", "べつのかたち", "../../etc/passwd", "%"]) {
+      const refused = await fetch(`http://${base}/api/replay`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret: alpha.secret, matchId: bad }),
+      });
+      expect(refused.status).toBe(404);
+    }
+    // 形が通れば、これまでどおり引ける。
+    const fine = await postJson("/api/replay", {
+      secret: alpha.secret,
+      matchId: record.matchId,
+      ply: 0,
+    });
+    expect(fine.frame.ply).toBe(0);
   }, 60_000);
 });

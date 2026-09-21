@@ -122,6 +122,11 @@ const OPENED_LIMIT = 4;
  * 読み返すのがたいてい最近の対戦だからである。
  */
 export function findMatch(dir: string, playerId: string, matchId: string): MatchRecord | null {
+  // **すべての行に当たる識別子では走査しない。** 空文字はどの行にも含まれるので
+  // ふるいが素通りになり、全部の日を解析することになる。しかも当たらないので
+  // 覚えることもなく、送られるたびに同じ走査が起きる。
+  // 外から来る値の形は口が確かめる（`isMatchId`）。ここはその最後の歯止めである。
+  if (matchId.trim() === "") return null;
   const key = `${dir}\u0000${matchId}`;
   const opened = OPENED.get(key);
   // 覚えていても座席は毎回確かめる。読めるのは自分が指した対戦だけである（6.6 節）。
@@ -133,6 +138,19 @@ export function findMatch(dir: string, playerId: string, matchId: string): Match
     return seatOf(record, playerId) === null ? null : record;
   }
   return null;
+}
+
+/**
+ * 外から来た値が、対戦の識別子の形をしているか。`randomUUID()` が出すものだけを受ける。
+ *
+ * **走査の入口を守るためのものなので、緩めない。** 形の確かめを通ったものだけが
+ * ログを読みに行く。読み返しは 1 局を名指しで引くので、名指しになっていない値で
+ * 走査を始めさせない。
+ */
+const MATCH_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isMatchId(value: string): boolean {
+  return MATCH_ID.test(value);
 }
 
 function remember(key: string, record: MatchRecord): void {

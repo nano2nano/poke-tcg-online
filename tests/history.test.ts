@@ -5,13 +5,21 @@
  * 他人のデッキと引きが誰にでも見えるなら、それは対戦環境として成り立たない。
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
 import { appendRecord, toRecord, type MatchRecord } from "../src/log.js";
-import { findMatch, forgetOpened, frameAt, listMatches, replayability } from "../src/history.js";
+import {
+  findMatch,
+  forgetOpened,
+  frameAt,
+  isMatchId,
+  listMatches,
+  replayability,
+} from "../src/history.js";
 import { engineFingerprint } from "../src/fingerprint.js";
 import { concede } from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
@@ -200,6 +208,74 @@ describe("開いている対戦を覚えておく", () => {
     const later = writeMatch(dir, "hist-15", ["あ", "う"]);
     expect(findMatch(dir, "あ", later.matchId)?.matchId).toBe(later.matchId);
     expect(findMatch(dir, "あ", first.matchId)?.matchId).toBe(first.matchId);
+  });
+});
+
+/**
+ * 読み返しは 1 局を名指しで引く。名指しになっていない値を通すと、ふるいが素通りして
+ * 全部の日を解析することになる。**打ち手は誰でも作れるので、これは繰り返し送れる。**
+ * その間は進行中の対戦の手も持ち時間の見回りも止まる。
+ */
+describe("名指しになっていない識別子では走査しない", () => {
+  it("対戦の識別子の形だけを通す", () => {
+    // `randomUUID()` が出す形。
+    expect(isMatchId("6f9619ff-8b86-d011-b42d-00c04fc964ff")).toBe(true);
+    expect(isMatchId(randomUUID())).toBe(true);
+
+    // すべての行に当たるもの、当たらないが走査だけさせるもの、どちらも通さない。
+    for (const bad of [
+      "",
+      " ",
+      "   ",
+      "\n",
+      "べつのかたち",
+      "6f9619ff-8b86-d011-b42d-00c04fc964f", // 1 文字足りない
+      "6f9619ff-8b86-d011-b42d-00c04fc964ff ", // うしろに空白
+      "zzzzzzzz-8b86-d011-b42d-00c04fc964ff", // 16 進でない
+      "../../etc/passwd",
+      "%",
+    ]) {
+      expect(isMatchId(bad)).toBe(false);
+    }
+  });
+
+  /**
+   * 「引けない」だけでは足りない。空の識別子は**走査したうえで**当たらないので、
+   * 結果だけ見ると直っていなくても通ってしまう。ここは**走査したかどうか**を見る。
+   *
+   * 読めない行を 1 つ植えておくと、走査すれば必ず `console.warn` が出る。
+   * それが出ないことが、行を 1 つも読んでいないことの証拠になる。
+   */
+  it("空の識別子では、ログを読みに行きもしない", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    const record = writeMatch(dir, "hist-16", ["あ", "い"]);
+    // 形は通るが無い対戦の識別子を持つ、書きかけの行を植える。
+    // ふるいはこの行に当たるので、走査すれば必ず解析に失敗して断りが出る。
+    const absent = randomUUID();
+    appendFileSync(
+      join(dir, `${record.endedAt.slice(0, 10)}.jsonl`),
+      `{"matchId":"${absent}","moves":[\n`,
+    );
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // 走査は起きるので、読めない行の断りが出る。
+      expect(findMatch(dir, "あ", absent)).toBeNull();
+      expect(warn).toHaveBeenCalled();
+
+      // 空文字と空白は、走査そのものが起きない。
+      warn.mockClear();
+      expect(findMatch(dir, "あ", "")).toBeNull();
+      expect(findMatch(dir, "あ", "   ")).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+
+      // 本物はこれまでどおり引ける。
+      expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
