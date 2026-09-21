@@ -54,6 +54,23 @@ export interface LoggedMove {
   elapsedMs: number;
   /** 手の出どころ。今は人間だけだが、混ざったときに見分けられるよう欄を先に置く。 */
   source: "human";
+  /**
+   * そのとき規則が許していた手の数と、選ばれた手のその中での位置。
+   *
+   * どちらも再生で作り直せる。**持つ理由は学習ではなく照合である。** エンジンを直すと
+   * 合法手の集合が変わりうるが、記録した手が新しい集合にも入っていれば再生は黙って通る。
+   * 数と位置を突き合わせれば、「通ったが別のゲームになった」対戦を機械が挙げられる。
+   */
+  candidates: number;
+  chosen: number;
+  /**
+   * 画面が実際に人へ見せた手の、`legalMoves` の中での位置。全部見せたなら null。
+   *
+   * **これだけは再生で作り直せない。** `legalMoves` は規則が許す手を全部返すが、画面が
+   * 全部見せるとは限らない。見せなかった手まで「人が選ばなかった手」として学ぶと、
+   * 模倣も人を相手にした評価も歪む。値はクライアントの自己申告で、規則の判定には使わない。
+   */
+  offered: number[] | null;
 }
 
 export interface Match {
@@ -134,6 +151,7 @@ export function submitMove(
   stateVersion: number,
   move: Move,
   nowMs: number,
+  offered: number[] | null = null,
 ): SubmitOutcome {
   const mover = toMove(match);
   if (mover === null) return { ok: false, reason: "match-over" };
@@ -141,7 +159,8 @@ export function submitMove(
   if (stateVersion !== match.version) return { ok: false, reason: "stale-version" };
 
   const legal = legalMoves(match.state);
-  if (!legal.some((candidate) => movesEqual(candidate, move))) {
+  const chosen = legal.findIndex((candidate) => movesEqual(candidate, move));
+  if (chosen < 0) {
     return { ok: false, reason: "illegal-move" };
   }
 
@@ -149,7 +168,14 @@ export function submitMove(
   const applied = applyMove(match.state, move);
   match.state = applied.state;
   match.version += 1;
-  match.moves.push({ move, elapsedMs, source: "human" });
+  match.moves.push({
+    move,
+    elapsedMs,
+    source: "human",
+    candidates: legal.length,
+    chosen,
+    offered: normalizeOffered(offered, legal.length),
+  });
   match.clocks[seat] = consume(match.clocks[seat], elapsedMs);
   match.turnStartedAtMs = nowMs;
 
@@ -217,6 +243,20 @@ export function clockView(match: Match, nowMs: number): ClockView {
 function finish(match: Match, result: MatchResult, nowMs: number): void {
   match.result = result;
   match.endedAt = new Date(nowMs).toISOString();
+}
+
+/**
+ * クライアントの自己申告を、記録に載せてよい形へ均す。
+ *
+ * 規則の判定には使わない値なので、壊れていても手を拒まない。合法手の範囲に無い位置と
+ * 重複を落とし、全部見せたのと同じなら null（＝全部）へ畳む。
+ */
+function normalizeOffered(offered: number[] | null, candidates: number): number[] | null {
+  if (offered === null) return null;
+  const kept = [...new Set(offered)]
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < candidates)
+    .sort((a, b) => a - b);
+  return kept.length === candidates ? null : kept;
 }
 
 /** `game-started` が運ぶ先攻を読む。イベントの語彙が唯一の出どころである。 */

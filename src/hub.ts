@@ -90,7 +90,14 @@ export class MatchHub {
         send(socket, { t: "pong" });
         return;
       case "move": {
-        const outcome = submitMove(match, seat, message.stateVersion, message.move, this.now());
+        const outcome = submitMove(
+          match,
+          seat,
+          message.stateVersion,
+          message.move,
+          this.now(),
+          message.offered ?? null,
+        );
         if (!outcome.ok) {
           send(socket, { t: "reject", reason: outcome.reason, stateVersion: match.version });
           // 画面が古いことが理由なら、正しい局面を送り直す。

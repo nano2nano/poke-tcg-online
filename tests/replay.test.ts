@@ -10,6 +10,7 @@ import { gzipSync } from "node:zlib";
 import { engineFingerprint } from "../src/fingerprint.js";
 import { toRecord } from "../src/log.js";
 import { concede } from "../src/match.js";
+import type { Player } from "../src/engine.js";
 import { initialCardIds, inspectState } from "../src/engine-invariants.js";
 import { replay, seedCommitmentHolds } from "../src/replay.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
@@ -109,6 +110,66 @@ describe("対局ログの再生", () => {
 
     const result = replay(tampered, { fingerprint: engineFingerprint() });
     expect(result.failures[0]?.kind).toBe("illegal-move");
+  });
+
+  it("1 手ごとに、そのときの合法手の数と選ばれた位置が残る", () => {
+    ensureCards();
+    const played = playToEnd(newMatch("replay-9"), 4242);
+    const record = toRecord(played.match);
+
+    expect(record.schemaVersion).toBeGreaterThanOrEqual(2);
+    expect(record.moves.length).toBeGreaterThan(0);
+    for (const logged of record.moves) {
+      expect(logged.candidates).toBeGreaterThan(0);
+      expect(logged.chosen).toBeGreaterThanOrEqual(0);
+      expect(logged.chosen).toBeLessThan(logged.candidates);
+      // 参照クライアントは合法手を全部ボタンにするので、絞り込みは記録されない。
+      expect(logged.offered).toBeNull();
+    }
+  });
+
+  // 記録した手が新しい合法手にも入っていると、手の検査だけでは再生が黙って通る。
+  // 集合そのものが変わったことに気づけるかを確かめる。
+  it("合法手の集合が変わった対戦は、手が合法のままでも再生が気づく", () => {
+    ensureCards();
+    const played = playToEnd(newMatch("replay-10"), 777);
+    const record = toRecord(played.match);
+    const first = record.moves[0];
+    if (first === undefined) throw new Error("手が 1 つも無い");
+    const tampered = {
+      ...record,
+      moves: [{ ...first, candidates: first.candidates + 1 }, ...record.moves.slice(1)],
+    };
+
+    const result = replay(tampered, { fingerprint: engineFingerprint() });
+    expect(result.failures[0]?.kind).toBe("choice-set-mismatch");
+    // 手そのものは合法なので、再生は止まらず最後まで進む。
+    expect(result.applied).toBe(record.moves.length);
+  });
+
+  it("先攻の食い違いに再生が気づく", () => {
+    ensureCards();
+    const played = playToEnd(newMatch("replay-11"), 31415);
+    const record = toRecord(played.match);
+    const tampered = { ...record, firstPlayer: (record.firstPlayer === 0 ? 1 : 0) as Player };
+
+    const result = replay(tampered, { fingerprint: engineFingerprint() });
+    expect(result.failures.some((failure) => failure.kind === "first-player-mismatch")).toBe(true);
+  });
+
+  it("版 1 のログには、合法手の数の検査を掛けない", () => {
+    ensureCards();
+    const played = playToEnd(newMatch("replay-12"), 2718);
+    const record = toRecord(played.match);
+    const first = record.moves[0];
+    if (first === undefined) throw new Error("手が 1 つも無い");
+    const old = {
+      ...record,
+      schemaVersion: 1,
+      moves: [{ ...first, candidates: first.candidates + 1 }, ...record.moves.slice(1)],
+    };
+
+    expect(replay(old, { fingerprint: engineFingerprint() }).failures).toEqual([]);
   });
 
   it("1 局のログは gzip で 1 KB 台に収まる", () => {

@@ -77,6 +77,6 @@ jobs:
       - name: 依存を入れる
         run: npm ci
 
-      # 型検査、書式、試験 39 件。engine/ 配下は .prettierignore で書式検査の対象外。
+      # 型検査、書式、全テスト。engine/ 配下は .prettierignore で書式検査の対象外。
       - name: 検査する
         run: npm run verify:all

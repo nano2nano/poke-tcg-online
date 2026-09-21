@@ -23,7 +23,16 @@ export interface ClockView {
 
 export type ClientMessage =
   | { t: "hello"; seatToken: string }
-  | { t: "move"; stateVersion: number; move: Move }
+  | {
+      t: "move";
+      stateVersion: number;
+      move: Move;
+      /**
+       * 画面が実際に見せた手の、`legalMoves` の中での位置（6.2 節）。全部見せたなら省く。
+       * 記録にだけ使う自己申告で、手を受理するかどうかの判断には入らない。
+       */
+      offered?: number[];
+    }
   | { t: "concede" }
   | { t: "ping" };
 

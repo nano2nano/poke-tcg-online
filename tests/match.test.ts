@@ -99,6 +99,50 @@ describe("決着", () => {
     expect(match.moves).toHaveLength(0);
   });
 
+  // 画面が絞り込んだかどうかは再生で作り直せないので、申告をそのまま持つしかない（6.2 節）。
+  it("画面が見せた手の申告を、そのまま記録に残す", () => {
+    ensureCards();
+    const match = newMatch("submit-9");
+    // 一部だけ見せた形を作りたいので、合法手が 3 つ以上ある局面まで進める。
+    while (legalMoves(match.state).length < 3 && toMove(match) !== null) {
+      const seat = toMove(match) as Player;
+      expect(submitMove(match, seat, match.version, firstLegal(match), 0).ok).toBe(true);
+    }
+    const mover = toMove(match) as Player;
+    const legal = legalMoves(match.state);
+    const before = match.moves.length;
+
+    // 0 番と、合法手の最後の 1 つだけを見せた画面のつもり。
+    const shown = [0, legal.length - 1];
+    expect(submitMove(match, mover, match.version, legal[0] as Move, 0, shown).ok).toBe(true);
+    expect(match.moves[before]?.offered).toEqual(shown);
+    expect(match.moves[before]?.candidates).toBe(legal.length);
+    expect(match.moves[before]?.chosen).toBe(0);
+  });
+
+  it("全部見せた申告と、範囲外の申告を、記録に載せる前に均す", () => {
+    ensureCards();
+    const all = newMatch("submit-10");
+    const moverAll = toMove(all) as Player;
+    const everything = legalMoves(all.state).map((_, index) => index);
+    expect(submitMove(all, moverAll, all.version, firstLegal(all), 0, everything).ok).toBe(true);
+    // 全部見せたなら「絞り込んでいない」と同じなので null へ畳む。
+    expect(all.moves[0]?.offered).toBeNull();
+
+    const broken = newMatch("submit-11");
+    const moverBroken = toMove(broken) as Player;
+    const count = legalMoves(broken.state).length;
+    const outcome = submitMove(broken, moverBroken, broken.version, firstLegal(broken), 0, [
+      0,
+      0,
+      -1,
+      count + 5,
+    ]);
+    // 規則の判定には使わない値なので、壊れていても手は通す。
+    expect(outcome.ok).toBe(true);
+    expect(broken.moves[0]?.offered).toEqual([0]);
+  });
+
   it("決着したあとは手を受け付けない", () => {
     ensureCards();
     const match = newMatch("finish-4");

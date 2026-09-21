@@ -12,8 +12,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** ログのレコードの形の版。読み手はこれを見て解釈を選ぶ。 */
-export const REPLAY_SCHEMA_VERSION = 1;
+/**
+ * ログのレコードの形の版。読み手はこれを見て解釈を選ぶ。
+ *
+ * 2: 1 手ごとに `candidates` / `chosen` / `offered` を持つ（6.2 節）。
+ */
+export const REPLAY_SCHEMA_VERSION = 2;
 
 export interface EngineFingerprint {
   /** エンジンの submodule が指す commit。取れなければ "unknown"。 */
