@@ -78,7 +78,8 @@ async function join() {
 
   const outcome = await postJson("/api/join", request);
   if (!outcome.ok) {
-    setStatus(`デッキが通りませんでした:\n${outcome.errors.join("\n")}`);
+    // 断られる理由はデッキとは限らない。打ち手が見つからないこともここへ来る。
+    setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
     return;
   }
   if (outcome.seat !== undefined) {
@@ -488,6 +489,10 @@ async function getJson(path) {
 /**
  * **応答の可否を見る。** 見ないと、誤りの本文をそのまま中身として読むことになり、
  * `undefined` を触った先で分かりにくい誤りになる。サーバの言い分をそのまま持ち上げる。
+ *
+ * ただし **`ok: false` は投げない。** 「デッキのここが規則に通らない」のような、
+ * 呼び手が読んで人に見せるための断りである。投げると理由が落ちて、
+ * 「400 が返った」しか出せなくなる。通信が失敗したこととは別の話である。
  */
 async function postJson(path, body) {
   const response = await fetch(path, {
@@ -496,8 +501,8 @@ async function postJson(path, body) {
     body: JSON.stringify(body),
   });
   const answer = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(answer?.error ?? `${path} が ${response.status} を返した`);
-  return answer;
+  if (response.ok || answer?.ok === false) return answer;
+  throw new Error(answer?.error ?? `${path} が ${response.status} を返した`);
 }
 
 /** 読み返している対戦。開いていなければ null。 */
@@ -558,7 +563,7 @@ function describeSummary(summary) {
 }
 
 async function openReplay(summary) {
-  replaying = {
+  const opened = {
     matchId: summary.matchId,
     seat: summary.seat,
     /** 描けている手数。 */
@@ -569,13 +574,18 @@ async function openReplay(summary) {
     // 出した順に番号を振る。返ってくる順は、これと同じとは限らない。
     asked: 0,
   };
+  replaying = opened;
   $("replay").hidden = false;
   try {
     await goToPly(0);
   } catch (error) {
     // 開けないものを空の欄で見せない。断りは一覧のところに出す。
-    $("replay").hidden = true;
-    replaying = null;
+    // **いま開いているものが自分のときだけ閉じる。** 先に別の対戦を開いていれば、
+    // 遅れて届いたこちらの失敗で、映っているほうを閉じることになる。
+    if (replaying === opened) {
+      $("replay").hidden = true;
+      replaying = null;
+    }
     throw error;
   }
 }

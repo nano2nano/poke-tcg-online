@@ -141,6 +141,39 @@ describe("人が書いたデッキ", () => {
   });
 });
 
+/**
+ * 断りの理由は画面まで届かなければ意味がない。`/api/join` の断りは `error` の 1 行ではなく
+ * `errors` の並びで返るので、画面はこの形を読む。ここが変わると理由が黙って落ちる。
+ */
+describe("入れなかった理由", () => {
+  it("断りは 400 と `ok: false` と理由の並びで返る", async () => {
+    const response = await fetch(`http://${base}/api/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "そんな合言葉は無い", deck: legalDecks()[0] }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as JsonBody;
+    expect(body.ok).toBe(false);
+    expect(body.errors).toEqual(["打ち手が見つからない"]);
+    // 1 行の `error` は持たない。画面がそちらだけを見ると理由が落ちる。
+    expect(body.error).toBeUndefined();
+  });
+
+  it("デッキが通らないときも、通らない箇所が並びで返る", async () => {
+    const account = await postJson("/api/account", { displayName: "デッキが変な人" });
+    const response = await fetch(`http://${base}/api/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: account.secret, deck: { cards: [] } }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as JsonBody;
+    expect(body.ok).toBe(false);
+    expect((body.errors as string[]).length).toBeGreaterThan(0);
+  });
+});
+
 describe("待ち合わせから決着まで", () => {
   it("2 人が繋がり、1 局を最後まで指し、ログが再生できる", async () => {
     const deck = legalDecks()[0];

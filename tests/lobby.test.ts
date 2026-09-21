@@ -7,7 +7,7 @@ import { AccountStore } from "../src/accounts.js";
 import { MatchRegistry } from "../src/registry.js";
 import type { ServerMessage } from "../src/protocol.js";
 import { ensureCards, legalDecks } from "./helpers.js";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -198,6 +198,36 @@ describe("決着の後始末で落ちない", () => {
     expect(() => hub.handle(socket, seatA?.seatToken ?? "", { t: "concede" })).not.toThrow();
     expect(socket.sent.at(-1)?.t).toBe("ended");
     expect(registry.live()).toHaveLength(0);
+  });
+
+  /**
+   * 持ち点は対局ログから作り直せる、というのが 7.2 節である。書けなかった対戦で
+   * 持ち点だけ動かすと、一覧にも出ない対戦のぶん差が付いて、どこから来た差か言えなくなる。
+   */
+  it("対局ログを書けなかった対戦では、持ち点を動かさない", () => {
+    ensureCards();
+    const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
+    // 置き場そのものをファイルにして、その下へ書けないようにする。
+    const blocked = join(dir, "書けない");
+    writeFileSync(blocked, "");
+    const registry = new MatchRegistry(blocked);
+    const accounts = new AccountStore(dir);
+    let applied = 0;
+    const hub = new MatchHub({ registry, now: () => 0, onFinish: () => applied++ });
+    const lobby = new Lobby(registry, accounts, () => 0);
+    const arena = { lobby, registry, hub, accounts };
+    const first = lobby.join(player(arena, "a", "へや"));
+    lobby.join(player(arena, "b", "へや"));
+    const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
+
+    const socket = recorder();
+    hub.attach(socket, seatA?.seatToken ?? "");
+    expect(() => hub.handle(socket, seatA?.seatToken ?? "", { t: "concede" })).not.toThrow();
+
+    // 決着は届き、対戦は台帳を離れる。それでも持ち点は動かさない。
+    expect(socket.sent.at(-1)?.t).toBe("ended");
+    expect(registry.live()).toHaveLength(0);
+    expect(applied).toBe(0);
   });
 
   it("1 局の後始末で落ちても、同じ見回りの別の対戦は終わる", () => {
