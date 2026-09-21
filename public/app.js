@@ -207,6 +207,15 @@ async function waitForOpponent(ticket) {
       setStatus("別の窓から入り直したので、この窓は待つのをやめました。");
       return;
     }
+    /**
+     * **知らない答えで待ち続けない。** 「まだ待っている」以外は、こちらが知らない形でも
+     * 待つのをやめる。入れ替えのあとに古いタブが新しい答えを受け取ることがあり、
+     * 待ち続けると `dropped` を足す前と同じ「永久に問い合わせ続ける」に戻る。
+     */
+    if (claimed !== null && claimed.kind !== "waiting") {
+      setStatus("受付の記録が無くなりました。もう一度「対戦をさがす」を押してください。");
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 }

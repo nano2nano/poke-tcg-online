@@ -54,22 +54,44 @@ export interface Seated {
  * 取りに行く前に相手が投了するか時間切れになると、席そのものはもう無い。
  * これを `dropped` と同じにすると「別の窓から入り直した」と嘘を出すことになる。
  * その人は指していないが打ち手としては数えられていて、持ち点も動き、記録も残っている。
+ *
+ * `unknown` が別に要るのは、**知らないチケットと、降ろしたチケットは別である**からである。
+ * ロビーはメモリにしか無いので、サーバを入れ替えればチケットは全部知らないものになる。
+ * 覚えていられる数を超えたぶんも同じである。これを `dropped` と答えると、
+ * ウィンドウを 1 つしか開いていない人に「別のウィンドウから入り直した」と言うことになる。
  */
 export type ClaimOutcome =
   | { kind: "waiting" }
   | { kind: "seated"; seat: Seated }
   | { kind: "finished"; matchId: string }
-  | { kind: "dropped" };
+  | { kind: "dropped" }
+  | { kind: "unknown" };
 
 /**
- * 引き取り口をいくつ覚えておくか。取りに来るのは 1 秒ごとなので、待っている人の数を
- * 大きく超えていれば足りる。溢れたぶんは `dropped` に見えるが、それは元の作りと同じである。
+ * 引き取り口をいくつ覚えておくか。超えたぶんは、**終わった対戦の席から**捨てる。
+ * 終わっていない席は残すので、同時に進んでいる対戦が多ければこの数を超えて持つ。
  */
 const SEATED_LIMIT = 256;
+
+/**
+ * 降ろしたチケットをいくつ覚えておくか。降ろされたウィンドウが次に取りに来るまで持てばよい。
+ * 溢れたぶんは `unknown` になる。「知らない」は、いつでも本当のことである。
+ */
+const DROPPED_LIMIT = 256;
+
+/**
+ * 捨てた席の対戦の識別子をいくつ覚えておくか。持つのは 2 つの文字列だけなので、
+ * 席より多く持てる。
+ */
+const FINISHED_LIMIT = 4_096;
 
 export class Lobby {
   /** 待っている人。合言葉ごとに 1 人ずつと、合言葉なしの行列。 */
   private readonly waitingByRoom = new Map<string, Ticket>();
+  /** こちらから降ろしたチケット。知らないチケットと区別するためだけに持つ。 */
+  private readonly dropped = new Set<string>();
+  /** 溢れて捨てた席の、対戦の識別子。席が無くなっても「もう終わっている」と答えるために持つ。 */
+  private readonly finished = new Map<string, string>();
   private readonly queue: Ticket[] = [];
   /** 相手が見つかった人の引き取り口。本人が取りに来るまで置く。 */
   private readonly seated = new Map<string, Seated>();
@@ -78,6 +100,8 @@ export class Lobby {
     private readonly registry: MatchRegistry,
     private readonly accounts: AccountStore,
     private readonly now: () => number = () => Date.now(),
+    /** 覚えておく席の数。試験が 256 局を作らずに済むように差し替えられる。 */
+    private readonly seatedLimit: number = SEATED_LIMIT,
   ) {}
 
   join(request: JoinRequest): JoinOutcome {
@@ -154,19 +178,56 @@ export class Lobby {
       }
       return { kind: "seated", seat };
     }
-    return this.isWaiting(ticketId) ? { kind: "waiting" } : { kind: "dropped" };
+    /**
+     * 席そのものは溢れて捨てても、**終わった対戦があったことは答えられるようにする。**
+     * ここで `unknown` を返すと、画面は「もう一度さがせ」と言う。その人はもう 1 局
+     * 始めてしまうが、1 局目はレーティングを動かしログにも残っていて、本人はそこへ
+     * 辿り着けない。
+     */
+    const finished = this.finished.get(ticketId);
+    if (finished !== undefined) return { kind: "finished", matchId: finished };
+    if (this.isWaiting(ticketId)) return { kind: "waiting" };
+    return this.dropped.has(ticketId) ? { kind: "dropped" } : { kind: "unknown" };
   }
 
   /**
-   * 引き取り口を覚える。消さなくなったぶん、入った順に古いものを捨てて溜まりを止める。
-   * 終わった対戦のぶんも、取りに来た人へ「もう終わっている」と答えるために残す。
+   * 席を覚える。溢れたときに捨てるのは、**対戦がもう終わっている席だけ**である。
+   * 終わった席も、取りに来た人へ「もう終わっている」と答えるために少しは残る。
+   *
+   * 古い順に捨てると、まだ対戦中の人の席まで消える。その人は取りに来ても席をもらえず、
+   * 画面は入り直せと言い、入り直せば 2 局目が始まって 1 局目は時間切れの負けとして残る。
+   * 1 手も指していないのにである。
+   *
+   * **1 回に見るのは上限の数までにする。** 進んでいる対戦が上限を超えているときは、
+   * 捨てられる席が無いので、全部を見ても何も減らない。覚える数は進んでいる対戦の数で
+   * 頭打ちになり、それは 1 局ぶんの局面より小さい。
    */
   private rememberSeated(ticketId: string, seat: Seated): void {
     this.seated.set(ticketId, seat);
-    while (this.seated.size > SEATED_LIMIT) {
-      const oldest = this.seated.keys().next().value;
+    if (this.seated.size <= this.seatedLimit) return;
+    // 溢れたぶんだけを、古い順に捨てる。終わった席も「もう終わっている」と答えるために要るので、
+    // 終わっているというだけでまとめて捨てない。
+    let seen = 0;
+    for (const [id, old] of this.seated) {
+      if (this.seated.size <= this.seatedLimit || seen++ >= this.seatedLimit) break;
+      if (id === ticketId) continue;
+      if (this.registry.bySeatToken(old.seatToken) !== undefined) continue;
+      this.seated.delete(id);
+      this.rememberFinished(id, old.matchId);
+    }
+  }
+
+  /**
+   * 捨てた席の対戦の識別子を覚える。席そのものより桁違いに小さいので、席の上限とは
+   * 別に、もっと多く持てる。
+   */
+  private rememberFinished(ticketId: string, matchId: string): void {
+    this.finished.delete(ticketId);
+    this.finished.set(ticketId, matchId);
+    while (this.finished.size > FINISHED_LIMIT) {
+      const oldest = this.finished.keys().next().value;
       if (oldest === undefined) break;
-      this.seated.delete(oldest);
+      this.finished.delete(oldest);
     }
   }
 
@@ -180,20 +241,46 @@ export class Lobby {
   /** その打ち手が待っているものを、どこにいても降ろす。 */
   private dropWaiting(playerId: string): void {
     for (const [room, waiting] of this.waitingByRoom) {
-      if (waiting.seat.playerId === playerId) this.waitingByRoom.delete(room);
+      if (waiting.seat.playerId === playerId) {
+        this.waitingByRoom.delete(room);
+        this.rememberDropped(waiting.ticket);
+      }
     }
     for (let index = this.queue.length - 1; index >= 0; index--) {
-      if (this.queue[index]?.seat.playerId === playerId) this.queue.splice(index, 1);
+      const waiting = this.queue[index];
+      if (waiting?.seat.playerId === playerId) {
+        this.queue.splice(index, 1);
+        this.rememberDropped(waiting.ticket);
+      }
+    }
+  }
+
+  private rememberDropped(ticketId: string): void {
+    this.dropped.add(ticketId);
+    while (this.dropped.size > DROPPED_LIMIT) {
+      const oldest = this.dropped.values().next().value;
+      if (oldest === undefined) break;
+      this.dropped.delete(oldest);
     }
   }
 
   /** 待つのをやめる。 */
   leave(ticketId: string): void {
+    let found = false;
     for (const [room, waiting] of this.waitingByRoom) {
-      if (waiting.ticket === ticketId) this.waitingByRoom.delete(room);
+      if (waiting.ticket === ticketId) {
+        this.waitingByRoom.delete(room);
+        found = true;
+      }
     }
     const index = this.queue.findIndex((waiting) => waiting.ticket === ticketId);
-    if (index >= 0) this.queue.splice(index, 1);
+    if (index >= 0) {
+      this.queue.splice(index, 1);
+      found = true;
+    }
+    // 知らないチケットを「降ろした」と覚えない。覚えると、知らないものに「降りている」と答え、
+    // 呼ばれた回数だけ本物の記録を押し出すことになる。
+    if (found) this.rememberDropped(ticketId);
   }
 
   waitingCount(): number {
