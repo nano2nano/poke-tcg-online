@@ -180,13 +180,36 @@ function hash(secret: string): string {
   return createHash("sha256").update(`account:${secret}`).digest("hex");
 }
 
+/**
+ * 見えない字。制御文字（Cc）と書式文字（Cf）の両方を落とす。
+ *
+ * **0x20 より下だけでは足りない。** DEL と 0x80〜0x9f は Cc、向きを変える U+202E や
+ * 幅の無い U+FEFF は Cf にあり、どちらも数値では下に来ない。U+202E が名前に入ると、
+ * 一覧に並んだ相手の名前がうしろから読める形で出る。
+ *
+ * 相方を失った片割れ（Cs）も同じ扱いにする。それだけでは字にならず、書き出すときに
+ * 別の値へ化けるので、置き場にも対局ログにも入れない。
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}]/u;
+
+/**
+ * 見えないが、字を繋ぐために要るもの。
+ *
+ * ZWJ は絵文字を 1 文字に繋ぎ、ZWNJ はデーヴァナーガリーやペルシア文字で
+ * 繋がりを断つ。**落とすと、その人の名前が別の字になる。** 向きは変えないので残す。
+ */
+const JOINERS = new Set(["\u200c", "\u200d"]);
+
 function cleanName(displayName: string): string {
-  // 制御文字を落とすのは、表示名が画面と対局ログの両方へ出るためである。
+  // 見えない字を落とすのは、表示名が画面と対局ログの両方へ出るためである。
   // **切るのは文字の単位である。** UTF-16 の長さで切ると、絵文字が半分になったものが
   // そのまま置き場にも対局ログにも入る。
   const cleaned = [...displayName.trim()]
-    .filter((char) => (char.codePointAt(0) ?? 0) >= 0x20)
+    .filter((char) => JOINERS.has(char) || !INVISIBLE.test(char))
     .slice(0, MAX_DISPLAY_NAME)
-    .join("");
+    .join("")
+    // 繋ぐ相手を失った端の繋ぎ字は、それだけでは字にならない。
+    .replace(/^[\u200c\u200d]+|[\u200c\u200d]+$/gu, "")
+    .trim();
   return cleaned === "" ? "ななし" : cleaned;
 }

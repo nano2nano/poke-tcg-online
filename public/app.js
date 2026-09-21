@@ -545,6 +545,9 @@ for (const [id, step] of [
 }
 
 async function showHistory() {
+  // **打ち手ができるのを待つ。** 初めて来た人は合言葉をまだ持たないので、
+  // 待たずに送ると `secret: null` になり、「打ち手が見つからない」と断られる。
+  await ensureAccount();
   if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
   const { matches } = await postJson("/api/matches", { secret: storedSecret() });
   const list = $("history-list");

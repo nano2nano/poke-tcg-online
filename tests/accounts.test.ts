@@ -73,6 +73,32 @@ describe("打ち手", () => {
     expect(mixed.endsWith("あ")).toBe(true);
   });
 
+  /**
+   * 表示名は一覧にも対局ログにも出る。見えない字を通すと、並んだ名前が
+   * 読み手の目に別のものとして映る。
+   */
+  it("見えない字を落とし、字を繋ぐものは残す", () => {
+    const { store } = newStore();
+    const name = (raw: string) => store.create(raw, 0).account.displayName;
+
+    // どれも 0x20 より上にあるが、画面には出ない。
+    expect(name("あ\u007fい\u0085う\u009f")).toBe("あいう");
+    expect(name("あ\ufeffい")).toBe("あい");
+    // 向きを変える字。残すと、一覧に並んだ名前がうしろから読める形で出る。
+    expect(name("あいう\u202e")).toBe("あいう");
+    expect(name("\u202eあいう")).toBe("あいう");
+    // 相方を失った片割れは、書き出すときに別の値へ化ける。
+    expect(name("あ\ud800い")).toBe("あい");
+    // 見えない字だけの名前は、名乗っていないのと同じである。
+    expect(name("\u202e\u200b\u00ad")).toBe("ななし");
+
+    // ZWJ は絵文字を 1 つに繋ぐ。落とすと 3 人が並んだ別の字になる。
+    const family = "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}";
+    expect(name(family)).toBe(family);
+    // 繋ぐ相手のいない端の繋ぎ字は、それだけでは字にならない。
+    expect(name("\u200dあい\u200d")).toBe("あい");
+  });
+
   it("名乗り直しても持ち点と戦績は動かない", () => {
     const { store } = newStore();
     const { account, secret } = store.create("まえ", 0);
