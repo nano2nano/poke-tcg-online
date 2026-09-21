@@ -1,10 +1,10 @@
 /**
- * 待ち合わせ（HTTP）と対戦（WebSocket）を 1 つの口に組み立てる
+ * マッチング（HTTP）と対戦（WebSocket）を 1 つのサーバへ組み立てる
  * （`docs/spec/battle-server.md` 3 節、7 節）。
  *
- * 押し出しが要るのは対戦が始まってからで、待ち合わせは要求と応答で足りる。
+ * サーバからのプッシュが要るのは対戦が始まってからで、マッチングは要求と応答で足りる。
  * 起動そのものは `src/main.ts` が行う。ここを関数に切ってあるのは、
- * 通しの試験が同じ組み立てを任意の口で立ち上げられるようにするためである。
+ * 通しのテストが同じ組み立てを任意のポートで立ち上げられるようにするためである。
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -28,16 +28,16 @@ import { MatchRegistry } from "./registry.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** 持ち時間の掃き。手番側が考えている限り時計は進むので、定期に見る必要がある。 */
+/** 持ち時間のスイープ。手番側が考えている限り時計は進むので、定期に見る必要がある。 */
 export const TIMEOUT_SWEEP_MS = 5_000;
 
 /** 要求の本文の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
 const MAX_BODY_BYTES = 64 * 1024;
 
 export interface AppOptions {
-  /** 対局ログの置き場。既定は `data/matches/`。 */
+  /** 対局ログの保存先。既定は `data/matches/`。 */
   logDir?: string;
-  /** 打ち手の置き場。既定は `data/`。 */
+  /** アカウントストアの保存先。既定は `data/`。 */
   accountDir?: string;
   now?: () => number;
 }
@@ -57,7 +57,7 @@ export function createApp(options: AppOptions = {}): App {
   const registry = new MatchRegistry(logDir);
   const accounts = new AccountStore(options.accountDir);
   const lobby = new Lobby(registry, accounts, now);
-  // 持ち点はログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
+  // レーティングはログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
   const hub = new MatchHub({
     registry,
     now,
@@ -128,7 +128,7 @@ async function route(
   if (request.method === "POST" && url.pathname === "/api/matches") {
     const account = await accountFromBody(request, accounts);
     if (account === null) {
-      respondJson(response, 404, { error: "打ち手が見つからない" });
+      respondJson(response, 404, { error: "プレイヤーが見つからない" });
       return;
     }
     respondJson(response, 200, { matches: listMatches(logDir, account.playerId) });
@@ -142,7 +142,7 @@ async function route(
     };
     const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
     if (account === null) {
-      respondJson(response, 404, { error: "打ち手が見つからない" });
+      respondJson(response, 404, { error: "プレイヤーが見つからない" });
       return;
     }
     // 形を確かめてから走査に入る。名指しになっていない値で全部の日を読まない（6.6 節）。
@@ -168,19 +168,19 @@ async function route(
     return;
   }
 
-  // 打ち手を作る。合言葉を返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
+  // プレイヤーを作る。シークレットを返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
   if (request.method === "POST" && url.pathname === "/api/account") {
     const body = (await readBody(request)) as { displayName?: unknown };
     const displayName = typeof body.displayName === "string" ? body.displayName : "";
     respondJson(response, 200, accounts.create(displayName, now()));
     return;
   }
-  // 自分の戦績を見る。合言葉は本文で受け取る。URL に載せるとログや履歴に残る。
+  // 自分の戦績を見る。シークレットは本文で受け取る。URL に載せるとログや履歴に残る。
   if (request.method === "POST" && url.pathname === "/api/account/me") {
     const body = (await readBody(request)) as { secret?: unknown };
     const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
     if (account === null) {
-      respondJson(response, 404, { error: "打ち手が見つからない" });
+      respondJson(response, 404, { error: "プレイヤーが見つからない" });
       return;
     }
     respondJson(response, 200, account);
@@ -250,8 +250,8 @@ async function route(
 const MALFORMED = "送られた中身の形が違う";
 
 /**
- * 外から来た本文をデッキへ直す。**形の合わないものは口で落とす。**
- * 素通りさせると中身を触った先で落ち、その場の文句（`filter is not a function` など）が
+ * 外から来た本文をデッキへ直す。**形の合わないものはエンドポイントの入口で落とす。**
+ * 素通りさせると中身を触った先で落ち、その場の例外メッセージ（`filter is not a function` など）が
  * そのまま外へ出る。読む人に意味が無く、内側の作りだけが分かる。
  */
 function toDeckList(body: unknown): DeckList | null {
@@ -261,7 +261,7 @@ function toDeckList(body: unknown): DeckList | null {
   return { cards: cards as DeckList["cards"] };
 }
 
-/** 外から来た本文を待ち合わせの求めへ直す。省ける欄は、あれば形を確かめる。 */
+/** 外から来た本文をマッチングの求めへ直す。省ける欄は、あれば形を確かめる。 */
 function toJoinRequest(body: unknown): JoinRequest | null {
   if (typeof body !== "object" || body === null) return null;
   const { secret, deck, displayName, roomCode } = body as Record<string, unknown>;
@@ -309,7 +309,7 @@ function respondJson(response: ServerResponse, status: number, body: unknown): v
   response.end(JSON.stringify(body));
 }
 
-/** 本文の `secret` から打ち手を引く。合言葉を URL に載せないのはログと履歴に残るためである。 */
+/** 本文の `secret` からプレイヤーを引く。シークレットを URL に載せないのはログと履歴に残るためである。 */
 async function accountFromBody(
   request: IncomingMessage,
   accounts: AccountStore,

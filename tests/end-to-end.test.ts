@@ -1,8 +1,8 @@
 /**
- * 待ち合わせから決着まで、実際の HTTP と WebSocket を通して 1 局指す。
+ * マッチングから決着まで、実際の HTTP と WebSocket を通して 1 局指す。
  *
- * 各層の試験が通っていても、配線が違えば人は 1 手も指せない。
- * ここだけは本物の口を開いて、外から見える経路だけで対戦を成立させる。
+ * 各層のテストが通っていても、配線が違えば人は 1 手も指せない。
+ * ここだけは本物のサーバを立てて、外から見える経路だけで対戦を成立させる。
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -40,7 +40,7 @@ afterAll(async () => {
   await app.close();
 });
 
-/** 応答の形は試験の中でだけ広げて読む。サーバ側の型は `protocol.ts` が持つ。 */
+/** 応答の形はテストの中でだけ広げて読む。サーバ側の型は `protocol.ts` が持つ。 */
 type JsonBody = Record<string, any>;
 
 async function postJson(path: string, body: unknown): Promise<JsonBody> {
@@ -83,7 +83,7 @@ function seatClient(seatToken: string, ended: (message: ServerMessage) => void):
 }
 
 /**
- * 見本のデッキを、人が書くのと同じ文字列へ起こす。**カードの名前を試験へ書き写さない**ため、
+ * サンプルデッキを、人が書くのと同じ文字列へ起こす。**カードの名前をテストへ書き写さない**ため、
  * 名前は登録済みの定義から引く。同じ名前が複数あるときは `defId` を書き添える形にする。
  */
 function sampleDecklistText(): string {
@@ -111,7 +111,7 @@ describe("人が書いたデッキ", () => {
 
     expect(outcome.errors).toEqual([]);
     expect(outcome.ok).toBe(true);
-    // 並びも含めて正本なので、枚数だけでなく列そのものを見る。
+    // 順序まで含めて情報源なので、枚数だけでなく列そのものを見る。
     expect(outcome.deck.cards).toEqual(sampleDeck().cards);
   });
 
@@ -143,20 +143,20 @@ describe("人が書いたデッキ", () => {
 });
 
 /**
- * 断りの理由は画面まで届かなければ意味がない。`/api/join` の断りは `error` の 1 行ではなく
+ * エラーの理由は画面まで届かなければ意味がない。`/api/join` のエラー応答は `error` の 1 行ではなく
  * `errors` の並びで返るので、画面はこの形を読む。ここが変わると理由が黙って落ちる。
  */
 describe("入れなかった理由", () => {
-  it("断りは 400 と `ok: false` と理由の並びで返る", async () => {
+  it("エラー応答は 400 と `ok: false` と理由の並びで返る", async () => {
     const response = await fetch(`http://${base}/api/join`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ secret: "そんな合言葉は無い", deck: legalDecks()[0] }),
+      body: JSON.stringify({ secret: "そんなシークレットは無い", deck: legalDecks()[0] }),
     });
     expect(response.status).toBe(400);
     const body = (await response.json()) as JsonBody;
     expect(body.ok).toBe(false);
-    expect(body.errors).toEqual(["打ち手が見つからない"]);
+    expect(body.errors).toEqual(["プレイヤーが見つからない"]);
     // 1 行の `error` は持たない。画面がそちらだけを見ると理由が落ちる。
     expect(body.error).toBeUndefined();
   });
@@ -175,10 +175,10 @@ describe("入れなかった理由", () => {
   });
 
   /**
-   * 形の合わないものを素通りさせると、中身を触った先で落ちる。そこで出る文句は
-   * 内側の作りの話でしかなく、読む人には意味が無い。口で落として同じ形で断る。
+   * 形の合わないものを素通りさせると、中身を触った先で落ちる。そこで出る例外メッセージは
+   * 内側の作りの話でしかなく、読む人には意味が無い。エンドポイントの入口で落として、同じ形のエラーを返す。
    */
-  it("形の合わない中身は、口で断って内側の文句を出さない", async () => {
+  it("形の合わない中身は、エンドポイントの入口で弾いて内側の例外メッセージを出さない", async () => {
     const account = await postJson("/api/account", { displayName: "形が変な人" });
     const malformed = [
       { secret: account.secret, deck: legalDecks()[0], displayName: null },
@@ -201,21 +201,21 @@ describe("入れなかった理由", () => {
       expect(answer.ok).toBe(false);
       const errors = (answer.errors ?? []) as string[];
       expect(errors.length).toBeGreaterThan(0);
-      // 内側の文句が漏れていない。
+      // 内側の例外メッセージが漏れていない。
       expect(errors.join(" ")).not.toMatch(/is not a function|undefined|TypeError/);
     }
 
-    // 形が通れば、断りの中身はこれまでどおりである。
+    // 形が通れば、エラーの中身はこれまでどおりである。
     const fine = await fetch(`http://${base}/api/join`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ secret: "そんな合言葉は無い", deck: legalDecks()[0] }),
+      body: JSON.stringify({ secret: "そんなシークレットは無い", deck: legalDecks()[0] }),
     });
-    expect(((await fine.json()) as JsonBody).errors).toEqual(["打ち手が見つからない"]);
+    expect(((await fine.json()) as JsonBody).errors).toEqual(["プレイヤーが見つからない"]);
   });
 });
 
-describe("待ち合わせから決着まで", () => {
+describe("マッチングから決着まで", () => {
   it("2 人が繋がり、1 局を最後まで指し、ログが再生できる", async () => {
     const deck = legalDecks()[0];
     const alpha = await postJson("/api/account", { displayName: "あ" });
@@ -273,14 +273,14 @@ describe("待ち合わせから決着まで", () => {
     expect(result.applied).toBe(record.moves.length);
     expect(record.moves.length).toBeGreaterThan(10);
 
-    // 打ち手とその強さが対戦ごとに残る。あとから結び直すことはできない（7.2 節）。
+    // プレイヤーとその強さが対戦ごとに残る。あとから結び直すことはできない（7.2 節）。
     expect(record.seats.map((seat) => seat.playerId)).toEqual([
       alpha.account.playerId,
       beta.account.playerId,
     ]);
     expect(record.seats.map((seat) => seat.rating)).toEqual([INITIAL_RATING, INITIAL_RATING]);
 
-    // 決着が持ち点へ入っている。記録に残るのは対戦を始めた時点の値なので、こちらだけが動く。
+    // 決着がレーティングへ入っている。記録に残るのは対戦を始めた時点の値なので、こちらだけが動く。
     const after = await postJson("/api/account/me", { secret: alpha.secret });
     expect(after.games).toBe(1);
     expect(after.rating).not.toBe(INITIAL_RATING);
@@ -312,11 +312,11 @@ describe("待ち合わせから決着まで", () => {
 
     /**
      * カードの定義が変わった記録は読み返さない（§6.3）。そのまま再生すると、誤りを出さずに
-     * 違う盤面を見せる。別のカードデータで指したことにした 1 行を植えて、口が断るのを見る。
+     * 違う盤面を見せる。別のカードデータで指したことにした 1 行を植えて、エンドポイントが弾くのを見る。
      */
     const planted: MatchRecord = {
       ...record,
-      // 口は識別子の形を確かめてから走査に入るので、ここも本物と同じ形にする。
+      // エンドポイントは識別子の形を確かめてから走査に入るので、ここも本物と同じ形にする。
       matchId: randomUUID(),
       engine: { ...record.engine, cardDataSha256: "ちがうカードデータ" },
     };
@@ -333,8 +333,8 @@ describe("待ち合わせから決着まで", () => {
 
     /**
      * **名指しになっていない識別子で走査を始めさせない。** 空文字はどの行にも含まれるので、
-     * 通すと 1 回の問い合わせで全部の日を解析することになる。打ち手は誰でも作れるので、
-     * これを繰り返されると進行中の対戦の手も持ち時間の見回りも止まる。
+     * 通すと 1 回の問い合わせで全部の日を解析することになる。プレイヤーは誰でも作れるので、
+     * これを繰り返されると進行中の対戦の手も持ち時間のスイープも止まる。
      */
     for (const bad of ["", "   ", "べつのかたち", "../../etc/passwd", "%"]) {
       const refused = await fetch(`http://${base}/api/replay`, {

@@ -37,9 +37,9 @@ export interface SeatInfo {
   playerId: string;
   displayName: string;
   /**
-   * 対戦を始めた時点の持ち点。**あとから座席と人を結び直すことはできない**ので、
+   * 対戦を始めた時点のレーティング。**あとから座席と人を結び直すことはできない**ので、
    * ここで持たなければこの対戦には二度と付けられない。
-   * 終わったあとの持ち点は、対戦の並びから導けるので持たない。
+   * 終わったあとのレーティングは、対戦の並びから導けるので持たない。
    */
   rating: number;
 }
@@ -106,7 +106,7 @@ export interface CreateMatchOptions {
   seatTokens: [string, string];
   nowMs: number;
   startedAt: string;
-  /** 試験のために固定したいときだけ渡す。既定は 256 ビットの乱数。 */
+  /** テストのために固定したいときだけ渡す。既定は 256 ビットの乱数。 */
   seedCommitment?: SeedCommitment;
   bankMs?: number;
 }
@@ -214,10 +214,10 @@ export function applyTimeout(match: Match, nowMs: number): boolean {
 }
 
 /**
- * 座席 0 から見た結果。勝ち 1・引き分け 0.5・負け 0。持ち点の計算がこれを使う。
+ * 座席 0 から見た結果。勝ち 1・引き分け 0.5・負け 0。レーティングの計算がこれを使う。
  *
  * 投了と時間切れも普通の勝敗として数える。規則上の敗北条件ではない（2.3 節）ことは
- * `matchResult.kind` が区別して持っているので、持ち点の側で分ける必要はない。
+ * `matchResult.kind` が区別して持っているので、レーティングの側で分ける必要はない。
  */
 export function scoreForSeatZero(result: MatchResult): number {
   if (result.kind === "normal" && result.winner === null) return 0.5;

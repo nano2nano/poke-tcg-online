@@ -4,7 +4,7 @@
  * **カードの識別子をこのリポジトリへ書き込まないため**に、固定のデッキ表を持たない。
  * カードの定義はすべてエンジンの側にあり、ここが持つのは「何を満たせばデッキか」だけである。
  *
- * 参照クライアント（`public/`）と試験がこれを使う。対戦の本番でこれが使われることはない。
+ * 参照クライアント（`public/`）とテストがこれを使う。対戦の本番でこれが使われることはない。
  * 人が組んだデッキは `POST /api/join` が運ぶ。
  */
 
@@ -40,7 +40,7 @@ export function sampleDeck(): DeckList {
   const energy = defs.find(isBasicEnergy);
 
   if (basics.length < BASIC_KINDS || energy === undefined) {
-    throw new Error("見本のデッキを組めるだけのカードが登録されていない");
+    throw new Error("サンプルデッキを組めるだけのカードが登録されていない");
   }
 
   const cards: CardDefId[] = [];
@@ -52,7 +52,7 @@ export function sampleDeck(): DeckList {
   const deck: DeckList = { cards };
   const violations = validateDeck(deck);
   if (violations.length > 0) {
-    throw new Error(`見本のデッキが検査を通らない: ${violations.map((v) => v.kind).join(", ")}`);
+    throw new Error(`サンプルデッキが検査を通らない: ${violations.map((v) => v.kind).join(", ")}`);
   }
   cached = deck;
   return deck;

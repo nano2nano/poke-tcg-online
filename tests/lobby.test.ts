@@ -44,14 +44,14 @@ function newArena(): Arena {
   };
 }
 
-/** 待っていた側が取りに行って、座れた席を返す。座れていなければ試験を落とす。 */
+/** 待っていた側が取りに行って、座れた席を返す。座れていなければテストを落とす。 */
 function seatOf(lobby: Lobby, ticket: string) {
   const claimed = lobby.claim(ticket);
   if (claimed.kind !== "seated") throw new Error(`席が取れていない: ${claimed.kind}`);
   return claimed.seat;
 }
 
-/** 打ち手を 1 人作り、その合言葉で入る要求を組む。 */
+/** プレイヤーを 1 人作り、そのシークレットで入る要求を組む。 */
 function player(arena: Arena, name: string, roomCode?: string) {
   const deck = legalDecks()[0];
   const { secret } = arena.accounts.create(name, 0);
@@ -59,7 +59,7 @@ function player(arena: Arena, name: string, roomCode?: string) {
 }
 
 describe("相手を見つける", () => {
-  it("同じ合言葉の 2 人を繋ぐ", () => {
+  it("同じルームコードの 2 人を繋ぐ", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
@@ -71,7 +71,7 @@ describe("相手を見つける", () => {
     expect(first.ok ? seatOf(lobby, first.ticket).seat : null).toBe(0);
   });
 
-  it("合言葉が違えば繋がない", () => {
+  it("ルームコードが違えば繋がない", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
@@ -82,36 +82,36 @@ describe("相手を見つける", () => {
   });
 
   /**
-   * 別の窓を開いたり、待っている間に読み込み直すと、同じ打ち手が 2 回入ってくる。
-   * 自分と自分の対戦が 1 局として記録に残り、その打ち手に 1 勝 1 敗が付いてしまう。
+   * 別のタブを開いたり、待っている間に読み込み直すと、同じプレイヤーが 2 回入ってくる。
+   * 自分と自分の対戦が 1 局として記録に残り、そのプレイヤーに 1 勝 1 敗が付いてしまう。
    */
-  it("同じ打ち手は自分と当たらない", () => {
+  it("同じプレイヤーは自分と当たらない", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
     const deck = legalDecks()[0]!;
-    const { secret } = arena.accounts.create("ふたつの窓", 0);
+    const { secret } = arena.accounts.create("ふたつのタブ", 0);
 
     const first = lobby.join({ secret, deck });
     const second = lobby.join({ secret, deck });
     // 2 回目で対戦が始まっていない。待っているのは 1 つだけである。
     expect(second.ok && "seat" in second).toBe(false);
     expect(lobby.waitingCount()).toBe(1);
-    // 古いほうは降りている。**「待っている」と答えてはいけない。** 古い窓が待ち続ける。
+    // 古いほうは降りている。**「待っている」と答えてはいけない。** 古いタブが待ち続ける。
     expect(first.ok ? lobby.claim(first.ticket).kind : null).toBe("dropped");
 
-    // 別の人が来れば、生きているほうの窓と繋がる。
+    // 別の人が来れば、生きているほうのタブと繋がる。
     const other = lobby.join(player(arena, "ほかのひと"));
     expect(other.ok && "seat" in other).toBe(true);
     expect(lobby.waitingCount()).toBe(0);
   });
 
-  it("合言葉でも自分と当たらない", () => {
+  it("ルームコードでも自分と当たらない", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
     const deck = legalDecks()[0]!;
-    const { secret } = arena.accounts.create("ふたつの窓", 0);
+    const { secret } = arena.accounts.create("ふたつのタブ", 0);
 
     lobby.join({ secret, deck, roomCode: "へや" });
     const second = lobby.join({ secret, deck, roomCode: "へや" });
@@ -119,7 +119,7 @@ describe("相手を見つける", () => {
     expect(lobby.waitingCount()).toBe(1);
   });
 
-  it("待ち行列は先に待っていた人から繋ぐ", () => {
+  it("マッチングキューは先に待っていた人から繋ぐ", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
@@ -133,10 +133,10 @@ describe("相手を見つける", () => {
   });
 
   /**
-   * 記録に残すのは**対戦が始まった時点**の持ち点である（7.2 節）。待っている間に
-   * 別の窓の対戦が終われば持ち点は動く。札を取ったときの値を残すと、記録がずれる。
+   * 記録に残すのは**対戦が始まった時点**のレーティングである（7.2 節）。待っている間に
+   * 別のタブの対戦が終わればレーティングは動く。チケットを取ったときの値を残すと、記録がずれる。
    */
-  it("記録に残る持ち点は、待ち始めた時点ではなく対戦が始まった時点のもの", () => {
+  it("記録に残るレーティングは、待ち始めた時点ではなく対戦が始まった時点のもの", () => {
     ensureCards();
     const arena = newArena();
     const { lobby, accounts } = arena;
@@ -145,7 +145,7 @@ describe("相手を見つける", () => {
     const deck = legalDecks()[0]!;
 
     lobby.join({ secret: waiting.secret, deck, roomCode: "へや" });
-    // 待っている間に、別のところで 1 局終わって持ち点が動く。
+    // 待っている間に、別のところで 1 局終わってレーティングが動く。
     const third = accounts.create("よその人", 0);
     accounts.applyResult([waiting.account.playerId, third.account.playerId], 1, 0);
     const moved = accounts.byPlayerId(waiting.account.playerId)?.rating ?? 0;
@@ -157,7 +157,7 @@ describe("相手を見つける", () => {
     expect(match?.seats[0]?.rating).toBe(moved);
   });
 
-  it("検査を通らないデッキでは待ち行列に入れない", () => {
+  it("検査を通らないデッキではマッチングキューに入れない", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
@@ -170,10 +170,10 @@ describe("相手を見つける", () => {
   });
 
   /**
-   * 名乗り直しは置き場とそれ以後の対局ログに残り、取り消せない。断られた側から見れば
+   * 表示名の変更はストアとそれ以後の対局ログに残り、取り消せない。断られた側から見れば
    * 何も起きていないのに、名前だけが変わっていることになる。
    */
-  it("入れなかった人の名乗りは書き換えない", () => {
+  it("入れなかった人の表示名は書き換えない", () => {
     ensureCards();
     const arena = newArena();
     const { secret, account } = arena.accounts.create("まえ", 0);
@@ -184,7 +184,7 @@ describe("相手を見つける", () => {
     expect(arena.accounts.byPlayerId(account.playerId)?.displayName).toBe("まえ");
   });
 
-  it("入れた人の名乗りは書き換える", () => {
+  it("入れた人の表示名は書き換える", () => {
     ensureCards();
     const arena = newArena();
     const { secret, account } = arena.accounts.create("まえ", 0);
@@ -197,12 +197,12 @@ describe("相手を見つける", () => {
 });
 
 /**
- * 引き取り口は、待っていた人が座席を受け取る唯一の道である。1 度読んだら消す作りだと、
+ * 引き換え待ちの座席は、待っていた人が座席を受け取る唯一の道である。1 度読んだら消す作りだと、
  * その応答が回線の不調で落ちただけで、**対戦は始まっているのに座れない人**ができる。
  * その人は時間切れで負け、記録には普通の負けとして残る。
  */
 describe("席の引き取り", () => {
-  it("同じ札で何度取りに来ても同じ座席を返す", () => {
+  it("同じチケットで何度取りに来ても同じ座席を返す", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
@@ -217,7 +217,7 @@ describe("席の引き取り", () => {
     expect(twice).toEqual(once);
   });
 
-  it("対戦が終われば引き取り口は残らない", () => {
+  it("対戦が終われば引き換え待ちの座席は残らない", () => {
     ensureCards();
     const arena = newArena();
     const { lobby, registry } = arena;
@@ -226,7 +226,7 @@ describe("席の引き取り", () => {
     if (!first.ok) throw new Error("入れていない");
     const seat = seatOf(lobby, first.ticket);
 
-    // 時間切れで終わらせる。持ち時間は 1 手ぶんと貯えで 16 分あるので、そこを越える。
+    // 時間切れで終わらせる。持ち時間は 1 手ぶんとバンクで 16 分あるので、そこを越える。
     const [ended] = registry.sweepTimeouts(60 * 60_000);
     if (ended === undefined) throw new Error("対戦が終わっていない");
     registry.retire(ended);
@@ -237,12 +237,12 @@ describe("席の引き取り", () => {
 });
 
 /**
- * 決着の後始末は、持ち時間の見回りと WebSocket の処理から呼ばれる。そこから例外が漏れると
- * 走っているもの全体が止まり、**同じ見回りで終わらせるはずだった別の対戦まで残る。**
- * 置き場へ書けないことは本番で普通に起こる（読めない場所を渡した、いっぱいになった）。
+ * 決着の後始末は、持ち時間のスイープと WebSocket の処理から呼ばれる。そこから例外が漏れると
+ * 走っているもの全体が止まり、**同じスイープで終わらせるはずだった別の対戦まで残る。**
+ * ストアへ書けないことは本番で普通に起こる（読めない場所を渡した、いっぱいになった）。
  */
 describe("決着の後始末で落ちない", () => {
-  it("持ち点を保存できなくても、対戦は終わって決着は届く", () => {
+  it("レーティングを保存できなくても、対戦は終わって決着は届く", () => {
     ensureCards();
     const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
     const registry = new MatchRegistry(dir);
@@ -251,7 +251,7 @@ describe("決着の後始末で落ちない", () => {
       registry,
       now: () => 0,
       onFinish: () => {
-        throw new Error("置き場へ書けない");
+        throw new Error("ストアへ書けない");
       },
     });
     const lobby = new Lobby(registry, accounts, () => 0);
@@ -267,13 +267,13 @@ describe("決着の後始末で落ちない", () => {
   });
 
   /**
-   * 持ち点は対局ログから作り直せる、というのが 7.2 節である。書けなかった対戦で
-   * 持ち点だけ動かすと、一覧にも出ない対戦のぶん差が付いて、どこから来た差か言えなくなる。
+   * レーティングは対局ログから作り直せる、というのが 7.2 節である。書けなかった対戦で
+   * レーティングだけ動かすと、一覧にも出ない対戦のぶん差が付いて、どこから来た差か言えなくなる。
    */
-  it("対局ログを書けなかった対戦では、持ち点を動かさない", () => {
+  it("対局ログを書けなかった対戦では、レーティングを動かさない", () => {
     ensureCards();
     const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
-    // 置き場そのものをファイルにして、その下へ書けないようにする。
+    // ストアそのものをファイルにして、その下へ書けないようにする。
     const blocked = join(dir, "書けない");
     writeFileSync(blocked, "");
     const registry = new MatchRegistry(blocked);
@@ -290,13 +290,13 @@ describe("決着の後始末で落ちない", () => {
     hub.attach(socket, seatA?.seatToken ?? "");
     expect(() => hub.handle(socket, seatA?.seatToken ?? "", { t: "concede" })).not.toThrow();
 
-    // 決着は届き、対戦は台帳を離れる。それでも持ち点は動かさない。
+    // 決着は届き、対戦はレジストリを離れる。それでもレーティングは動かさない。
     expect(socket.sent.at(-1)?.t).toBe("ended");
     expect(registry.live()).toHaveLength(0);
     expect(applied).toBe(0);
   });
 
-  it("1 局の後始末で落ちても、同じ見回りの別の対戦は終わる", () => {
+  it("1 局の後始末で落ちても、同じスイープの別の対戦は終わる", () => {
     ensureCards();
     const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
     const registry = new MatchRegistry(dir);
@@ -308,7 +308,7 @@ describe("決着の後始末で落ちない", () => {
       now: () => 60 * 60 * 1000,
       onFinish: () => {
         seen++;
-        if (seen === 1) throw new Error("置き場へ書けない");
+        if (seen === 1) throw new Error("ストアへ書けない");
       },
     });
     const lobby = new Lobby(registry, accounts, () => 0);
@@ -398,7 +398,7 @@ describe("座席の接続", () => {
         expect(typeof ended.seed).toBe("number");
       }
     }
-    // 終わった対戦は台帳を離れる。
+    // 終わった対戦はレジストリを離れる。
     expect(registry.live()).toHaveLength(0);
   });
 });

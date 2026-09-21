@@ -182,7 +182,7 @@ describe("1 局の読み返し", () => {
  */
 /**
  * 読み返しは 1 手進めるたびに 1 局を引き直す。そのたびに全部の日を走査すると、
- * その間ずっと進行中の対戦の手も持ち時間の見回りも止まる。
+ * その間ずっと進行中の対戦の手も持ち時間のスイープも止まる。
  */
 describe("開いている対戦を覚えておく", () => {
   it("覚えていても、指していない人には渡さない", () => {
@@ -212,9 +212,9 @@ describe("開いている対戦を覚えておく", () => {
 });
 
 /**
- * 読み返しは 1 局を名指しで引く。名指しになっていない値を通すと、ふるいが素通りして
- * 全部の日を解析することになる。**打ち手は誰でも作れるので、これは繰り返し送れる。**
- * その間は進行中の対戦の手も持ち時間の見回りも止まる。
+ * 読み返しは 1 局を名指しで引く。名指しになっていない値を通すと、事前フィルタが素通りして
+ * 全部の日を解析することになる。**プレイヤーは誰でも作れるので、これは繰り返し送れる。**
+ * その間は進行中の対戦の手も持ち時間のスイープも止まる。
  */
 describe("名指しになっていない識別子では走査しない", () => {
   it("対戦の識別子の形だけを通す", () => {
@@ -252,7 +252,7 @@ describe("名指しになっていない識別子では走査しない", () => {
     forgetOpened();
     const record = writeMatch(dir, "hist-16", ["あ", "い"]);
     // 形は通るが無い対戦の識別子を持つ、書きかけの行を植える。
-    // ふるいはこの行に当たるので、走査すれば必ず解析に失敗して断りが出る。
+    // 事前フィルタはこの行に当たるので、走査すれば必ず解析に失敗して警告が出る。
     const absent = randomUUID();
     appendFileSync(
       join(dir, `${record.endedAt.slice(0, 10)}.jsonl`),
@@ -261,7 +261,7 @@ describe("名指しになっていない識別子では走査しない", () => {
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      // 走査は起きるので、読めない行の断りが出る。
+      // 走査は起きるので、読めない行の警告が出る。
       expect(findMatch(dir, "あ", absent)).toBeNull();
       expect(warn).toHaveBeenCalled();
 
@@ -291,12 +291,12 @@ describe("読み返しとエンジンの版", () => {
     expect(other.kind).toBe("card-data-mismatch");
   });
 
-  it("エンジンの版が違うだけなら読み返せる。ただし断りを付ける", () => {
+  it("エンジンの版が違うだけなら読み返せる。ただし警告を付ける", () => {
     ensureCards();
     const dir = newDir();
     const record = writeMatch(dir, "hist-9", ["あ", "い"]);
     const now = engineFingerprint();
-    const older = { ...now, commit: "ふるいコミット" };
+    const older = { ...now, commit: "べつのコミット" };
 
     // 版を理由に一律で捨てると、直した誤りに触れていない大多数の対戦まで読めなくなる。
     expect(replayability(record, older)).toEqual({ kind: "ok", engineCommitDiffers: true });

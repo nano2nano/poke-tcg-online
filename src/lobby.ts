@@ -1,10 +1,10 @@
 /**
  * 相手を見つける（`docs/spec/battle-server.md` 7 節）。
  *
- * 合言葉と、待ち行列 1 本だけを持つ。レーティングで帯を分けない。
+ * ルームコードと、マッチングキュー 1 本だけを持つ。レーティング帯で分けない。
  * 人が少ないうちは待ち時間が伸びるだけである。
  *
- * 待ち合わせは要求と応答で足りるので HTTP に載せる。押し出しが要るのは
+ * マッチングは要求と応答で足りるので HTTP に載せる。サーバからのプッシュが要るのは
  * 対戦が始まってからで、そこから先が WebSocket である（3.1 節）。
  */
 
@@ -16,12 +16,12 @@ import { MatchRegistry, newToken } from "./registry.js";
 import type { AccountStore } from "./accounts.js";
 
 export interface JoinRequest {
-  /** 打ち手の合言葉（7.2 節）。これが無い対戦は始めない。 */
+  /** プレイヤーのシークレット（7.2 節）。これが無い対戦は始めない。 */
   secret: string;
   deck: DeckList;
-  /** 名乗り直すとき。省けば登録済みの表示名を使う。 */
+  /** 表示名を変えるとき。省けば登録済みの表示名を使う。 */
   displayName?: string;
-  /** 同じ文字列を入れた 2 人を繋ぐ。無ければ待ち行列へ入る。 */
+  /** 同じ文字列を入れた 2 人を繋ぐ。無ければマッチングキューへ入る。 */
   roomCode?: string;
 }
 
@@ -44,11 +44,11 @@ export interface Seated {
 }
 
 /**
- * 待っている札の行方。
+ * 待っているチケットの行方。
  *
- * `dropped` が要るのは、**札が黙って消えることがある**からである。同じ打ち手が
- * 別の窓から入ると古い札は降りる。それを `waiting` と同じ応答にすると、
- * 古い窓は「相手を待っています」のまま永久に問い合わせ続ける。
+ * `dropped` が要るのは、**チケットが黙って消えることがある**からである。同じプレイヤーが
+ * 別のタブから入ると古いチケットは降りる。それを `waiting` と同じ応答にすると、
+ * 古いタブは「相手を待っています」のまま永久に問い合わせ続ける。
  */
 export type ClaimOutcome =
   | { kind: "waiting" }
@@ -56,10 +56,10 @@ export type ClaimOutcome =
   | { kind: "dropped" };
 
 export class Lobby {
-  /** 待っている人。合言葉ごとに 1 人ずつと、合言葉なしの行列。 */
+  /** 待っている人。ルームコードごとに 1 人ずつと、ルームコードなしのキュー。 */
   private readonly waitingByRoom = new Map<string, Ticket>();
   private readonly queue: Ticket[] = [];
-  /** 相手が見つかった人の引き取り口。本人が取りに来るまで置く。 */
+  /** マッチングが成立した人の座席。本人が引き換えに来るまで置く。 */
   private readonly seated = new Map<string, Seated>();
 
   constructor(
@@ -70,10 +70,10 @@ export class Lobby {
 
   join(request: JoinRequest): JoinOutcome {
     const nowMs = this.now();
-    // 合言葉を先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
-    // ここでは読むだけで、置き場は書き換えない。
+    // シークレットを先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
+    // ここでは読むだけで、ストアは書き換えない。
     const known = this.accounts.bySecret(request.secret);
-    if (known === null) return { ok: false, errors: ["打ち手が見つからない"] };
+    if (known === null) return { ok: false, errors: ["プレイヤーが見つからない"] };
 
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {
@@ -81,9 +81,9 @@ export class Lobby {
     }
 
     /**
-     * **置き場を書き換えるのは、入れると決まってからである。** 先に書くと、デッキで
-     * 断られた人の名乗りだけが変わって残る。断られた側から見れば何も起きていないのに、
-     * 置き場でもそれ以後の対局ログでも名前が変わっている。
+     * **ストアを書き換えるのは、入れると決まってからである。** 先に書くと、デッキで
+     * 断られた人の表示名だけが変わって残る。断られた側から見れば何も起きていないのに、
+     * ストアでもそれ以後の対局ログでも名前が変わっている。
      */
     const account =
       (request.displayName === undefined
@@ -92,7 +92,7 @@ export class Lobby {
 
     const ticket: Ticket = {
       ticket: newToken(),
-      // ここの持ち点は仮である。記録に残すのは**対戦が始まった時点**の値で、`start` が読み直す。
+      // ここのレーティングは仮である。記録に残すのは**対戦が始まった時点**の値で、`start` が読み直す。
       seat: {
         playerId: account.playerId,
         displayName: account.displayName,
@@ -103,9 +103,9 @@ export class Lobby {
     };
 
     /**
-     * **同じ打ち手は 1 つしか待たせない。** 別の窓を開いたり、待っている間に読み込み直すと、
+     * **同じプレイヤーは 1 つしか待たせない。** 別のタブを開いたり、待っている間に読み込み直すと、
      * 同じ `playerId` が両側に座りうる。自分と自分の対戦が 1 局として記録に残り、
-     * その打ち手に 1 勝 1 敗が付く。古いほうを降ろせば、自分に当たること自体が起きない。
+     * そのプレイヤーに 1 勝 1 敗が付く。古いほうを降ろせば、自分に当たること自体が起きない。
      */
     this.dropWaiting(account.playerId);
 
@@ -122,12 +122,12 @@ export class Lobby {
   }
 
   /**
-   * 待っている人が相手を見つけたかどうかを取りに来る口。
+   * 待っている人が相手を見つけたかどうかを引き換えに来るエンドポイント。
    *
    * **取りに来ても消さない。** 1 度読んだら消す作りだと、その応答が回線の不調で
    * 落ちたときに、次に取りに来た人へ「もう降りている」と答えることになる。
    * 対戦のほうは始まっているので、その人は座らないまま時間切れで負ける。
-   * 札そのものが引き取りの合鍵なので、同じ札で何度取りに来ても同じ座席を返す。
+   * チケットそのものが引き換えの鍵なので、同じチケットで何度取りに来ても同じ座席を返す。
    */
   claim(ticketId: string): ClaimOutcome {
     this.forgetFinished();
@@ -137,8 +137,8 @@ export class Lobby {
   }
 
   /**
-   * 終わった対戦の引き取り口を落とす。消さなくなったぶん、ここで溜まりを止める。
-   * 生きているかどうかは台帳が知っている（`retire` が座席トークンを外す）。
+   * 終わった対戦の座席を落とす。引き換え後も消さないぶん、ここで滞留を止める。
+   * 生きているかどうかはレジストリが知っている（`retire` が座席トークンを外す）。
    */
   private forgetFinished(): void {
     for (const [ticketId, seat] of this.seated) {
@@ -153,7 +153,7 @@ export class Lobby {
     return this.queue.some((waiting) => waiting.ticket === ticketId);
   }
 
-  /** その打ち手が待っているものを、どこにいても降ろす。 */
+  /** そのプレイヤーが待っているものを、どこにいても降ろす。 */
   private dropWaiting(playerId: string): void {
     for (const [room, waiting] of this.waitingByRoom) {
       if (waiting.seat.playerId === playerId) this.waitingByRoom.delete(room);
@@ -186,7 +186,7 @@ export class Lobby {
     return this.queue.shift() ?? null;
   }
 
-  /** 札の座席を、今の持ち点と名乗りで取り直す。打ち手が消えていれば札のままを使う。 */
+  /** チケットの座席を、今のレーティングと表示名で取り直す。プレイヤーが消えていればチケットのままを使う。 */
   private seatNow(ticket: Ticket): SeatInfo {
     const account = this.accounts.byPlayerId(ticket.seat.playerId);
     if (account === null) return ticket.seat;
@@ -206,8 +206,8 @@ export class Lobby {
     const nowMs = this.now();
     const seatTokens: [string, string] = [newToken(), newToken()];
     /**
-     * **持ち点は今この場で読み直す**（7.2 節）。待っている間に別の窓の対戦が終われば
-     * 持ち点は動いている。札を取ったときの値を残すと、記録が「対戦を始めた時点」でなくなる。
+     * **レーティングは今この場で読み直す**（7.2 節）。待っている間に別のタブの対戦が終われば
+     * レーティングは動いている。チケットを取ったときの値を残すと、記録が「対戦を始めた時点」でなくなる。
      */
     const seats: [SeatInfo, SeatInfo] = [this.seatNow(first), this.seatNow(second)];
     const match = createMatch({

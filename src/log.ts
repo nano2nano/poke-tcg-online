@@ -1,7 +1,7 @@
 /**
  * 対局ログ（`docs/spec/battle-server.md` 6 節）。
  *
- * 正本は seed と move 列である。局面もイベントも保存しない。エンジンの C-4
+ * 唯一の情報源は seed と move 列である。局面もイベントも保存しない。エンジンの C-4
  * （同一 seed ＋同一 move 列 → 同一の状態列とイベント列）がこれを保証する。
  *
  * 実測（一様ランダムの自己対戦 20 局）では、move 列は 1 局 12.2 KB（gzip 0.63 KB）、
@@ -64,7 +64,7 @@ export function toRecord(match: Match): MatchRecord {
   };
 }
 
-/** 既定の置き場。`createApp` も読み返しのためにこれを引く。 */
+/** 既定の保存先。`createApp` も読み返しのためにこれを引く。 */
 export const DEFAULT_LOG_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",

@@ -6,10 +6,10 @@
  * 実際に時刻を読むのは配信層（`src/hub.ts`）1 箇所だけとする。
  */
 
-/** 1 手に使ってよい時間。これを越えたぶんが貯えから引かれる。 */
+/** 1 手に使ってよい時間。これを越えたぶんがバンクから引かれる。 */
 export const MOVE_ALLOWANCE_MS = 60_000;
 
-/** 座席ごとの貯え。使い切った座席は時間切れ負けになる。 */
+/** 座席ごとのバンク。使い切った座席は時間切れ負けになる。 */
 export const BANK_MS = 15 * 60_000;
 
 export interface Clock {
@@ -20,7 +20,7 @@ export function createClock(bankMs: number = BANK_MS): Clock {
   return { bankMs };
 }
 
-/** `elapsedMs` だけ考えたあとの貯えを返す。1 手の猶予を越えたぶんだけ減る。 */
+/** `elapsedMs` だけ考えたあとのバンクを返す。1 手の猶予を越えたぶんだけ減る。 */
 export function consume(clock: Clock, elapsedMs: number): Clock {
   const overrun = Math.max(0, elapsedMs - MOVE_ALLOWANCE_MS);
   return { bankMs: Math.max(0, clock.bankMs - overrun) };

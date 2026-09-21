@@ -13,9 +13,9 @@ let cards = {};
 let socket = null;
 let seat = null;
 let stateVersion = 0;
-/** 直近の盤面。手の見出しで個体番号からカードの名前を引くのに使う。 */
+/** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
-/** 走っている打ち手の読み込み。`ensureAccount` が待ち合わせに使う。 */
+/** 走っているプレイヤーの読み込み。`ensureAccount` がマッチングに使う。 */
 let loadingAccount = null;
 
 const nameOf = (defId) => cards[defId]?.name ?? defId;
@@ -25,9 +25,9 @@ $("join-button").addEventListener("click", () => {
 });
 
 /**
- * 人が名乗りを触ったか。
+ * 人が表示名を触ったか。
  *
- * 読み込みは非同期なので、**返ってくる前に名乗りを書き換えて「対戦をさがす」を
+ * 読み込みは非同期なので、**返ってくる前に表示名を書き換えて「対戦をさがす」を
  * 押せてしまう。** そこで欄を埋め直すと、打った名前が消えてから送られる。
  */
 let nameTouched = false;
@@ -35,9 +35,9 @@ $("name").addEventListener("input", () => {
   nameTouched = true;
 });
 
-ensureAccount().catch((error) => setStatus(`打ち手を読めませんでした: ${error.message}`));
+ensureAccount().catch((error) => setStatus(`プレイヤーを読めませんでした: ${error.message}`));
 
-/** 持ち点と戦績を引き直す。対戦が終われば動くので、そのたびに読む。 */
+/** レーティングと戦績を引き直す。対戦が終われば動くので、そのたびに読む。 */
 async function refreshAccount() {
   const secret = storedSecret();
   if (secret === null) return;
@@ -78,14 +78,14 @@ async function join() {
     secret: storedSecret(),
     deck: { cards: deck.cards },
   };
-  // **名乗り直しは、その人が欄を触ったときだけ送る。** 名乗り直しは対局ログにも残り、
+  // **表示名の変更は、その人が欄を触ったときだけ送る。** 表示名の変更は対局ログにも残り、
   // 取り消せない。欄の中身がその人の意思だとは限らない以上、送る条件は「打ったこと」にする。
   if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
   if (room !== "") request.roomCode = room;
 
   const outcome = await postJson("/api/join", request);
   if (!outcome.ok) {
-    // 断られる理由はデッキとは限らない。打ち手が見つからないこともここへ来る。
+    // 断られる理由はデッキとは限らない。プレイヤーが見つからないこともここへ来る。
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
     return;
   }
@@ -97,10 +97,10 @@ async function join() {
   await waitForOpponent(outcome.ticket);
 }
 
-/** 書かれていれば解決した結果、空なら見本のデッキ。通らなければ null。 */
+/** 書かれていれば解決した結果、空ならサンプルデッキ。通らなければ null。 */
 async function deckToSubmit() {
   if ($("decklist").value.trim() === "") {
-    showDeckStatus(["見本のデッキで対戦します。"], "ok");
+    showDeckStatus(["サンプルデッキで対戦します。"], "ok");
     return getJson("/api/sample-deck");
   }
   return checkDeck();
@@ -123,7 +123,7 @@ async function checkDeck() {
   return null;
 }
 
-/** 破れの一覧。曖昧な行だけは、選べる候補を押せる形で出す。 */
+/** 違反の一覧。曖昧な行だけは、選べる候補を押せる形で出す。 */
 function showDeckStatus(messages, tone, failures = []) {
   const box = $("deck-status");
   box.innerHTML = "";
@@ -176,8 +176,8 @@ function pickChoice(line, name, defId) {
 /**
  * 相手が見つかるまで取りに行く。
  *
- * **札が降りていたら待つのをやめる。** 同じ打ち手が別の窓から入ると古い札は降りる。
- * それを「まだ待っている」と読むと、この窓は永久に問い合わせ続けることになる。
+ * **チケットが降りていたら待つのをやめる。** 同じプレイヤーが別のタブから入ると古いチケットは降りる。
+ * それを「まだ待っている」と読むと、このタブは永久に問い合わせ続けることになる。
  */
 async function waitForOpponent(ticket) {
   for (;;) {
@@ -188,7 +188,7 @@ async function waitForOpponent(ticket) {
     } catch {
       /**
        * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
-       * やめるとその対戦に座らないまま時間切れで負ける。札は何度でも使えるので、
+       * やめるとその対戦に座らないまま時間切れで負ける。チケットは何度でも使えるので、
        * 取り直せばよい。本当に降りていれば、繋がった時点で `dropped` が返る。
        */
       setStatus("相手を待っています（つながりが悪いので取り直しています）");
@@ -198,7 +198,7 @@ async function waitForOpponent(ticket) {
       return;
     }
     if (claimed?.kind === "dropped") {
-      setStatus("別の窓から入り直したので、この窓は待つのをやめました。");
+      setStatus("別のタブから入り直したので、このタブは待つのをやめました。");
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -234,7 +234,7 @@ function receive(message) {
       renderMoves(null);
       addEvent(describeEnd(message));
       $("clock").textContent = "対戦は終わりました";
-      // 決着で持ち点が動く。開いた時点の値のまま置かない。
+      // 決着でレーティングが動く。開いた時点の値のまま置かない。
       refreshAccount().catch(() => {});
       return;
     case "reject":
@@ -393,7 +393,7 @@ function describeAnswer(answer, view) {
   }
 }
 
-/** 場の個体番号から、いちばん上のカードの名前を引く。 */
+/** 場のインスタンス ID から、いちばん上のカードの名前を引く。 */
 function inPlayName(inPlayId, view) {
   if (!view) return inPlayId;
   for (const side of [view.self, view.opponent]) {
@@ -408,7 +408,7 @@ function inPlayName(inPlayId, view) {
 }
 
 /**
- * 手札の個体番号からカードの名前を引く。盤面に無ければ番号のまま出す。
+ * 手札のインスタンス ID からカードの名前を引く。盤面に無ければ番号のまま出す。
  *
  * 両側を見るのは読み返しのためである。対戦中は相手の手札が `hand` を持たないので、
  * 自分の手札しか当たらない。
@@ -436,7 +436,7 @@ function setStatus(text) {
 }
 
 /**
- * 打ち手の合言葉。**サーバは控えを持たない**ので、失うとその戦績には戻れない。
+ * プレイヤーのシークレット。**サーバは控えを持たない**ので、失うとその戦績には戻れない。
  * この画面は確認用なので、localStorage に置くだけにしておく。
  */
 function storedSecret() {
@@ -444,11 +444,11 @@ function storedSecret() {
 }
 
 /**
- * 打ち手を 1 人だけ用意する。
+ * プレイヤーを 1 人だけ用意する。
  *
- * **走っている途中の呼び出しを待ち合わせる。** 画面を開いたときの読み込みと、
- * それを待たずに押された「対戦をさがす」が重なると、打ち手が 2 人できる。
- * 画面に出ている持ち点と、実際に指す打ち手が食い違い、片方が迷子になる。
+ * **走っている途中の呼び出しをマッチングる。** 画面を開いたときの読み込みと、
+ * それを待たずに押された「対戦をさがす」が重なると、プレイヤーが 2 人できる。
+ * 画面に出ているレーティングと、実際に指すプレイヤーが食い違い、片方が迷子になる。
  */
 function ensureAccount() {
   // 失敗したものを覚えると二度と作り直せないので、そのときだけ忘れる。
@@ -457,7 +457,7 @@ function ensureAccount() {
       showAccount(account);
       // **読めたときは必ず欄へ入れる。画面を開いたときの 1 回だけにしない。**
       // 開いたときに失敗すると、欄は既定の「ななし」のまま残る。次に「対戦をさがす」で
-      // 読み直して通っても入れ直さないと、その「ななし」が名乗りとして送られる。
+      // 読み直して通っても入れ直さないと、その「ななし」が表示名として送られる。
       if (!nameTouched) $("name").value = account.displayName;
       return account;
     })
@@ -468,7 +468,7 @@ function ensureAccount() {
   return loadingAccount;
 }
 
-/** 合言葉が無ければ打ち手を作る。あれば戦績を読み直す。 */
+/** シークレットが無ければプレイヤーを作る。あれば戦績を読み直す。 */
 async function loadAccount() {
   const secret = storedSecret();
   if (secret !== null) {
@@ -479,31 +479,33 @@ async function loadAccount() {
     });
     if (response.ok) return response.json();
     /**
-     * **消すのは 404 のときだけである。** サーバは合言葉の控えを持たないので、
-     * ここで消すと、その打ち手の持ち点も戦績も読み返しも戻らない。
-     * 入れ替えの最中の 502 や、切れた回線を「打ち手が消えた」と読み違えない。
+     * **消すのは 404 のときだけである。** サーバはシークレットの控えを持たないので、
+     * ここで消すと、そのプレイヤーのレーティングも戦績も読み返しも戻らない。
+     * 入れ替えの最中の 502 や、切れた回線を「プレイヤーが消えた」と読み違えない。
      */
     if (response.status !== 404) {
-      throw new Error(`打ち手を読めなかった（${response.status}）。合言葉はそのまま残してある。`);
+      throw new Error(
+        `プレイヤーを読めなかった（${response.status}）。シークレットはそのまま残してある。`,
+      );
     }
     localStorage.removeItem("poke-account-secret");
   }
   const created = await postJson("/api/account", {
     displayName: $("name").value.trim() || "ななし",
   });
-  // 合言葉として置けるのは文字列だけである。`undefined` を置くと次に開くまで直らない。
-  if (typeof created?.secret !== "string") throw new Error("打ち手を作れなかった");
+  // シークレットとして置けるのは文字列だけである。`undefined` を置くと次に開くまで直らない。
+  if (typeof created?.secret !== "string") throw new Error("プレイヤーを作れなかった");
   localStorage.setItem("poke-account-secret", created.secret);
   return created.account;
 }
 
-/** 持ち点と戦績の 1 行。**名前の欄には触れない。** 入力の途中かもしれない。 */
+/** レーティングと戦績の 1 行。**名前の欄には触れない。** 入力の途中かもしれない。 */
 function showAccount(account) {
   const record =
     account.games === 0
       ? "まだ対戦していません"
       : `${account.games} 戦 ${account.wins} 勝 ${account.losses} 敗 ${account.draws} 分`;
-  $("account").textContent = `持ち点 ${account.rating}（${record}）`;
+  $("account").textContent = `レーティング ${account.rating}（${record}）`;
 }
 
 async function getJson(path) {
@@ -517,7 +519,7 @@ async function getJson(path) {
  * `undefined` を触った先で分かりにくい誤りになる。サーバの言い分をそのまま持ち上げる。
  *
  * ただし **`ok: false` は投げない。** 「デッキのここが規則に通らない」のような、
- * 呼び手が読んで人に見せるための断りである。投げると理由が落ちて、
+ * 呼び手が読んで人に見せるためのエラー応答である。投げると理由が落ちて、
  * 「400 が返った」しか出せなくなる。通信が失敗したこととは別の話である。
  */
 async function postJson(path, body) {
@@ -560,8 +562,8 @@ for (const [id, step] of [
 }
 
 async function showHistory() {
-  // **打ち手ができるのを待つ。** 初めて来た人は合言葉をまだ持たないので、
-  // 待たずに送ると `secret: null` になり、「打ち手が見つからない」と断られる。
+  // **プレイヤーができるのを待つ。** 初めて来た人はシークレットをまだ持たないので、
+  // 待たずに送ると `secret: null` になり、「プレイヤーが見つからない」と断られる。
   await ensureAccount();
   if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
   const { matches } = await postJson("/api/matches", { secret: storedSecret() });
@@ -608,7 +610,7 @@ async function openReplay(summary) {
   try {
     await goToPly(0);
   } catch (error) {
-    // 開けないものを空の欄で見せない。断りは一覧のところに出す。
+    // 開けないものを空の欄で見せない。エラーは一覧のところに出す。
     // **いま開いているものが自分のときだけ閉じる。** 先に別の対戦を開いていれば、
     // 遅れて届いたこちらの失敗で、映っているほうを閉じることになる。
     if (replaying === opened) {

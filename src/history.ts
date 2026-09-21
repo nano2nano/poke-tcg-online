@@ -105,7 +105,7 @@ export function listMatches(dir: string, playerId: string): MatchSummary[] {
  *
  * 読み返しは 1 手進めるたびにここを通る。そのたびに全部の日を走査し直すと、
  * 175 手の対戦を辿るのに走査が 175 回起きて、**その間ずっと進行中の対戦の手も
- * 持ち時間の見回りも止まる。**
+ * 持ち時間のスイープも止まる。**
  *
  * これを置けるのは、**追記しかしないログだから**である。終わった対戦の 1 行は
  * 二度と書き変わらないので、覚えた値が古くなることがない。索引ではないので、
@@ -123,9 +123,9 @@ const OPENED_LIMIT = 4;
  */
 export function findMatch(dir: string, playerId: string, matchId: string): MatchRecord | null {
   // **すべての行に当たる識別子では走査しない。** 空文字はどの行にも含まれるので
-  // ふるいが素通りになり、全部の日を解析することになる。しかも当たらないので
+  // 事前フィルタが素通りになり、全部の日を解析することになる。しかも当たらないので
   // 覚えることもなく、送られるたびに同じ走査が起きる。
-  // 外から来る値の形は口が確かめる（`isMatchId`）。ここはその最後の歯止めである。
+  // 外から来る値の形はエンドポイントが確かめる（`isMatchId`）。ここはその最後のガードである。
   if (matchId.trim() === "") return null;
   const key = `${dir}\u0000${matchId}`;
   const opened = OPENED.get(key);
@@ -155,14 +155,14 @@ export function isMatchId(value: string): boolean {
 
 function remember(key: string, record: MatchRecord): void {
   OPENED.set(key, record);
-  // 入った順に捨てる。開いているものだけを持つので、深く数える値打ちがない。
+  // 入った順に捨てる。開いているものだけを持つので、厳密に数える価値はない。
   for (const old of OPENED.keys()) {
     if (OPENED.size <= OPENED_LIMIT) break;
     OPENED.delete(old);
   }
 }
 
-/** 覚えているものを捨てる。試験が同じ置き場を作り直すときに使う。 */
+/** 覚えているものを捨てる。テストが同じディレクトリを作り直すときに使う。 */
 export function forgetOpened(): void {
   OPENED.clear();
 }
@@ -227,7 +227,7 @@ function outcomeFor(result: MatchResult, seat: Player): "win" | "loss" | "draw" 
  *
  * `needle` を渡すと、**その文字列を含まない行は解析しない。** 走査そのものは減らないが、
  * 1 行あたりの費用が `JSON.parse` から部分文字列の検索に落ちる。見つけたところで
- * 呼び手が抜ければ、そこで読むのも止まる。ふるいなので、当たった行は呼び手が確かめる。
+ * 呼び手が抜ければ、そこで読むのも止まる。事前フィルタなので、当たった行は呼び手が確かめる。
  *
  * **読めない行は飛ばす。** 追記の最中に落ちれば書きかけの行が残る。そこで例外を投げると、
  * 1 行のために全員の一覧と読み返しが止まる。読めた対戦を読めるままにするほうが要る。
