@@ -20,7 +20,19 @@
       <h2>対戦に入る</h2>
       <label>名前 <input id="name" value="ななし" /></label>
       <label>合言葉 <input id="room" placeholder="空なら待ち行列へ" /></label>
-      <button id="join-button">対戦をさがす</button>
+
+      <label for="decklist">デッキ</label>
+      <p class="note">
+        1 行に 1 種類、「カード名 枚数」で書きます。同じ名前のカードが複数あるときは
+        候補を出すので、行のうしろに 1
+        つ選んで書き足してください。空のままなら見本のデッキを使います。
+      </p>
+      <textarea id="decklist" rows="8" placeholder="カード名 4"></textarea>
+      <div class="deck-actions">
+        <button id="check-button" class="secondary">デッキを確かめる</button>
+        <button id="join-button">対戦をさがす</button>
+      </div>
+      <div id="deck-status" class="deck-status"></div>
       <p id="join-status" role="status"></p>
     </section>
 

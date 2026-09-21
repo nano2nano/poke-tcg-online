@@ -22,14 +22,27 @@ $("join-button").addEventListener("click", () => {
   join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
 });
 
+$("check-button").addEventListener("click", () => {
+  checkDeck()
+    .then((deck) => {
+      if (deck !== null)
+        showDeckStatus([`デッキは ${deck.cards.length} 枚で、規則を通ります。`], "ok");
+    })
+    .catch((error) => showDeckStatus([`確かめられませんでした: ${error.message}`], "ng"));
+});
+
 $("concede-button").addEventListener("click", () => {
   if (socket !== null && confirm("投了しますか。")) send({ t: "concede" });
 });
 
 async function join() {
   setStatus("デッキを送っています");
-  const [deck, index] = await Promise.all([getJson("/api/sample-deck"), getJson("/api/cards")]);
-  cards = index;
+  cards = await getJson("/api/cards");
+  const deck = await deckToSubmit();
+  if (deck === null) {
+    setStatus("デッキを直してから、もう一度おしてください。");
+    return;
+  }
 
   const room = $("room").value.trim();
   const request = {
@@ -50,6 +63,82 @@ async function join() {
   }
   setStatus("相手を待っています");
   await waitForOpponent(outcome.ticket);
+}
+
+/** 書かれていれば解決した結果、空なら見本のデッキ。通らなければ null。 */
+async function deckToSubmit() {
+  if ($("decklist").value.trim() === "") {
+    showDeckStatus(["見本のデッキで対戦します。"], "ok");
+    return getJson("/api/sample-deck");
+  }
+  return checkDeck();
+}
+
+/**
+ * 書いたデッキをサーバに解決させる。名前から defId は一意に決まらないので、
+ * 選べなかった行には候補をそのまま並べる。こちらでは推測しない。
+ */
+async function checkDeck() {
+  if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
+  const text = $("decklist").value;
+  if (text.trim() === "") {
+    showDeckStatus(["デッキが書かれていません。"], "ng");
+    return null;
+  }
+  const outcome = await postJson("/api/deck/resolve", { text });
+  if (outcome.ok) return outcome.deck;
+  showDeckStatus(outcome.errors ?? ["デッキが通りませんでした。"], "ng", outcome.failures ?? []);
+  return null;
+}
+
+/** 破れの一覧。曖昧な行だけは、選べる候補を押せる形で出す。 */
+function showDeckStatus(messages, tone, failures = []) {
+  const box = $("deck-status");
+  box.innerHTML = "";
+  box.className = `deck-status ${tone}`;
+  for (const message of messages) {
+    const line = document.createElement("p");
+    line.textContent = message;
+    box.append(line);
+  }
+  for (const failure of failures) {
+    if (failure.kind !== "ambiguous") continue;
+    const list = document.createElement("div");
+    list.className = "choices";
+    for (const choice of failure.choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = describeChoice(failure.name, choice);
+      button.addEventListener("click", () => pickChoice(failure.line, failure.name, choice.defId));
+      list.append(button);
+    }
+    box.append(list);
+  }
+}
+
+const STAGES = { basic: "たね", stage1: "1 進化", stage2: "2 進化" };
+
+function describeChoice(name, choice) {
+  const parts = [];
+  if (choice.hp !== undefined) parts.push(`HP ${choice.hp}`);
+  if (choice.stage !== undefined) parts.push(STAGES[choice.stage] ?? choice.stage);
+  if (choice.set !== undefined) parts.push(`${choice.set} ${choice.number ?? ""}`.trim());
+  return parts.length === 0 ? `${name}（${choice.defId}）` : `${name}（${parts.join(" ")}）`;
+}
+
+/** 選んだ候補を、その行のうしろへ書き足す。 */
+function pickChoice(line, name, defId) {
+  const lines = $("decklist").value.split("\n");
+  const index = line - 1;
+  if (lines[index] === undefined) return;
+  lines[index] = `${lines[index].trim()} ${defId}`;
+  $("decklist").value = lines.join("\n");
+  checkDeck()
+    .then((deck) => {
+      if (deck !== null)
+        showDeckStatus([`デッキは ${deck.cards.length} 枚で、規則を通ります。`], "ok");
+    })
+    .catch((error) => showDeckStatus([`確かめられませんでした: ${error.message}`], "ng"));
 }
 
 async function waitForOpponent(ticket) {

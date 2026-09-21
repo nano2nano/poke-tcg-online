@@ -15,6 +15,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { DeckList } from "./engine.js";
 import { cardIndex } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
+import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
@@ -105,6 +106,32 @@ async function route(
   }
   if (request.method === "GET" && url.pathname === "/api/sample-deck") {
     respondJson(response, 200, sampleDeck());
+    return;
+  }
+  // 人が書いた文字列を `defId` の列へ直す（5.3 節）。同じ名前が複数あるときは候補を返す。
+  if (request.method === "POST" && url.pathname === "/api/deck/resolve") {
+    const body = (await readBody(request)) as { text?: unknown };
+    if (typeof body.text !== "string") {
+      respondJson(response, 400, { ok: false, errors: ["デッキの文字列が要る"] });
+      return;
+    }
+    const resolved = resolveDecklist(body.text);
+    if (!resolved.ok) {
+      respondJson(response, 200, {
+        ok: false,
+        errors: resolved.failures.map(describeDecklistFailure),
+        failures: resolved.failures,
+      });
+      return;
+    }
+    // 形として読めても、デッキとして成立しているとは限らない。続けて構築の検査も掛ける。
+    const errors = validateDeck(resolved.deck).map(describeViolation);
+    respondJson(response, 200, {
+      ok: errors.length === 0,
+      errors,
+      deck: resolved.deck,
+      entries: resolved.entries,
+    });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/deck/validate") {
