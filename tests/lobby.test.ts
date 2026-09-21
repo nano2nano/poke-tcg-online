@@ -220,9 +220,9 @@ describe("席の引き取り", () => {
   /**
    * 席が決まったあと、取りに行く前に対戦が終わることがある（相手がすぐ投了した、
    * 時間切れになった）。**これを「降りている」と同じ応答にすると嘘になる。**
-   * その人は指していないが打ち手としては数えられていて、持ち点も動き、記録も残っている。
+   * その人は指していないがプレイヤーとしては数えられていて、レーティングも動き、記録も残っている。
    */
-  it("取りに行く前に終わった対戦は、降りた札と区別して答える", () => {
+  it("引き換えに来る前に終わった対戦は、降りたチケットと区別して答える", () => {
     ensureCards();
     const arena = newArena();
     const { lobby, registry } = arena;
@@ -238,8 +238,8 @@ describe("席の引き取り", () => {
     expect(registry.bySeatToken(seat.seatToken)).toBeUndefined();
 
     expect(lobby.claim(first.ticket)).toEqual({ kind: "finished", matchId: seat.matchId });
-    // 知らない札は、これまでどおり「降りている」である。
-    expect(lobby.claim("そんな札は無い").kind).toBe("dropped");
+    // 知らないチケットは、これまでどおり「降りている」である。
+    expect(lobby.claim("そんなチケットは無い").kind).toBe("dropped");
   });
 });
 

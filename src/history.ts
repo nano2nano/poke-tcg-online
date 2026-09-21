@@ -207,8 +207,8 @@ export function frameAt(
     if (logged === undefined) break;
     /**
      * **指す前に、いまのエンジンの合法手と突き合わせる。** 版が違えば、記録された手が
-     * 合法でなくなりうる。そのまま `applyMove` へ渡すとエンジンが投げ、口はその文句を
-     * そのまま 400 で外へ出す。読む人に意味が無く、その対戦はここから先へ進めなくなる。
+     * 合法でなくなりうる。そのまま `applyMove` へ渡すとエンジンが投げ、
+     * エンドポイントはその例外メッセージをそのまま 400 で外へ出す。読む人に意味が無く、その対戦はここから先へ進めなくなる。
      * §6.3 は版の違いを警告にとどめると決めているので、止めるのはこの 1 局のこの地点だけにする。
      */
     if (!legalMoves(result.state).some((candidate) => movesEqual(candidate, logged.move))) {
@@ -219,7 +219,7 @@ export function frameAt(
     try {
       result = applyMove(result.state, logged.move);
     } catch (error) {
-      // 合法手に在ったのに通らないのはエンジン側の話である。外へ文句は出さず、ここで止める。
+      // 合法手に在ったのに通らないのはエンジン側の話である。外へ例外メッセージは出さず、ここで止める。
       console.warn(`${record.matchId} の ${index} 手目を指せなかった:`, error);
       divergedAt = index;
       break;

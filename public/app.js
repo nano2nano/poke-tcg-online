@@ -198,7 +198,7 @@ async function waitForOpponent(ticket) {
       return;
     }
     if (claimed?.kind === "finished") {
-      // 席に着く前に終わっている。指していなくても記録には残り、持ち点も動いている。
+      // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
       setStatus("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
       refreshAccount().catch(() => {});
       return;
