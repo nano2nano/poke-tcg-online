@@ -1,4 +1,4 @@
-# 型検査と書式と試験を回す。ブランチ保護の required check はこの job の名前（verify）。
+# 型検査と書式とテストを回す。ブランチ保護の required check はこの job の名前（verify）。
 #
 # エンジンは private な submodule なので、取得だけ deploy key（読み取り専用）で行う。
 # リポジトリ自身の checkout には既定のトークンを使い、鍵を渡さない。鍵が要るのは
