@@ -593,11 +593,19 @@ async function goToPly(ply) {
   const mine = ++opened.asked;
   const wanted = Math.max(0, Math.min(ply, opened.moveCount));
   opened.wanted = wanted;
-  const { frame } = await postJson("/api/replay", {
-    secret: storedSecret(),
-    matchId: opened.matchId,
-    ply: wanted,
-  });
+  let frame;
+  try {
+    ({ frame } = await postJson("/api/replay", {
+      secret: storedSecret(),
+      matchId: opened.matchId,
+      ply: wanted,
+    }));
+  } catch (error) {
+    // **行き先を戻す。** 戻さないと、1 度失敗しただけで次に押したぶんが 1 手飛ぶ。
+    // あとから出したぶんが走っていれば、その行き先のほうが新しいので触らない。
+    if (replaying === opened && mine === opened.asked) opened.wanted = opened.ply;
+    throw error;
+  }
   // 別の対戦へ移ったか、あとから出した問い合わせが先に返っていれば、これは捨てる。
   if (replaying !== opened || mine !== opened.asked) return;
   replaying.ply = frame.ply;

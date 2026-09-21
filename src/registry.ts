@@ -49,7 +49,16 @@ export class MatchRegistry {
     this.matches.delete(match.matchId);
     for (const token of match.seatTokens) this.seats.delete(token);
     const record = toRecord(match);
-    appendRecord(record, this.logDir);
+    try {
+      appendRecord(record, this.logDir);
+    } catch (error) {
+      /**
+       * **落ちても投げ返さない。** ここは持ち時間の見回りと WebSocket の処理から呼ばれる。
+       * 投げると走っているもの全体が止まり、同じ見回りで終わらせるはずだった別の対戦も残る。
+       * 記録は失われるが、それは投げても同じで、投げるとさらに失う。大きく残す。
+       */
+      console.error(`対局ログを書けなかった（${match.matchId}）:`, error);
+    }
     return record;
   }
 

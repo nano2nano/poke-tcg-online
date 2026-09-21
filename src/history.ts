@@ -83,7 +83,7 @@ export function replayability(
 /** その人が指した対戦を、新しい順に返す。 */
 export function listMatches(dir: string, playerId: string): MatchSummary[] {
   const summaries: MatchSummary[] = [];
-  for (const record of readRecords(dir)) {
+  for (const record of readRecords(dir, playerId)) {
     const seat = seatOf(record, playerId);
     if (seat === null) continue;
     summaries.push({
@@ -100,13 +100,53 @@ export function listMatches(dir: string, playerId: string): MatchSummary[] {
   return summaries.sort((a, b) => (a.endedAt < b.endedAt ? 1 : -1));
 }
 
-/** その人が指した 1 局を引く。指していない対戦は見つからないものとして扱う。 */
+/**
+ * いま読み返されている対戦を数局だけ覚えておく。
+ *
+ * 読み返しは 1 手進めるたびにここを通る。そのたびに全部の日を走査し直すと、
+ * 175 手の対戦を辿るのに走査が 175 回起きて、**その間ずっと進行中の対戦の手も
+ * 持ち時間の見回りも止まる。**
+ *
+ * これを置けるのは、**追記しかしないログだから**である。終わった対戦の 1 行は
+ * 二度と書き変わらないので、覚えた値が古くなることがない。索引ではないので、
+ * 貯めるのは開いている数局だけにする（6.5 節、6.6 節）。
+ */
+const OPENED = new Map<string, MatchRecord>();
+const OPENED_LIMIT = 4;
+
+/**
+ * その人が指した 1 局を引く。指していない対戦は見つからないものとして扱う。
+ *
+ * 走査するときは、**当たりうる行だけを解析する。** 走査の範囲は変えないが、
+ * `JSON.parse` は目当ての識別子を含む行にしか掛からない。新しい日から見るのは、
+ * 読み返すのがたいてい最近の対戦だからである。
+ */
 export function findMatch(dir: string, playerId: string, matchId: string): MatchRecord | null {
-  for (const record of readRecords(dir)) {
+  const key = `${dir}\u0000${matchId}`;
+  const opened = OPENED.get(key);
+  // 覚えていても座席は毎回確かめる。読めるのは自分が指した対戦だけである（6.6 節）。
+  if (opened !== undefined) return seatOf(opened, playerId) === null ? null : opened;
+
+  for (const record of readRecords(dir, matchId, "newest-first")) {
     if (record.matchId !== matchId) continue;
+    remember(key, record);
     return seatOf(record, playerId) === null ? null : record;
   }
   return null;
+}
+
+function remember(key: string, record: MatchRecord): void {
+  OPENED.set(key, record);
+  // 入った順に捨てる。開いているものだけを持つので、深く数える値打ちがない。
+  for (const old of OPENED.keys()) {
+    if (OPENED.size <= OPENED_LIMIT) break;
+    OPENED.delete(old);
+  }
+}
+
+/** 覚えているものを捨てる。試験が同じ置き場を作り直すときに使う。 */
+export function forgetOpened(): void {
+  OPENED.clear();
 }
 
 /**
@@ -122,7 +162,10 @@ export function frameAt(
   ply: number,
   fingerprint: EngineFingerprint = engineFingerprint(),
 ): ReplayFrame {
-  const target = Math.max(0, Math.min(ply, record.moves.length));
+  // 手数は整数に丸める。丸めないと `ply: 1.5` を受け取り、盤面は 2 手目の後なのに
+  // 応答には 1.5 と返る。数でないものだけ 0 にし、大きすぎるものは下の丸めに任せる。
+  const asked = Number.isNaN(ply) ? 0 : Math.floor(ply);
+  const target = Math.max(0, Math.min(asked, record.moves.length));
   let result = createGame({ seed: record.seed, decks: record.decks });
   let events = result.events;
   let playedMove: Move | null = null;
@@ -164,17 +207,29 @@ function outcomeFor(result: MatchResult, seat: Player): "win" | "loss" | "draw" 
 /**
  * 日付で切った JSONL を順に読む。索引が要る問い合わせが無いので、走査で足りる（6.5 節）。
  *
+ * `needle` を渡すと、**その文字列を含まない行は解析しない。** 走査そのものは減らないが、
+ * 1 行あたりの費用が `JSON.parse` から部分文字列の検索に落ちる。見つけたところで
+ * 呼び手が抜ければ、そこで読むのも止まる。ふるいなので、当たった行は呼び手が確かめる。
+ *
  * **読めない行は飛ばす。** 追記の最中に落ちれば書きかけの行が残る。そこで例外を投げると、
  * 1 行のために全員の一覧と読み返しが止まる。読めた対戦を読めるままにするほうが要る。
  * 飛ばしたことは残しておく。黙って減ると、消えたのか壊れたのか分からない。
  */
-function* readRecords(dir: string): Generator<MatchRecord> {
+function* readRecords(
+  dir: string,
+  needle?: string,
+  order: "oldest-first" | "newest-first" = "oldest-first",
+): Generator<MatchRecord> {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return;
-  for (const entry of readdirSync(dir).sort()) {
-    if (!entry.endsWith(".jsonl")) continue;
+  const days = readdirSync(dir)
+    .filter((entry) => entry.endsWith(".jsonl"))
+    .sort();
+  if (order === "newest-first") days.reverse();
+  for (const entry of days) {
     let broken = 0;
     for (const line of readFileSync(join(dir, entry), "utf8").split("\n")) {
       if (line.trim() === "") continue;
+      if (needle !== undefined && !line.includes(needle)) continue;
       let record: MatchRecord;
       try {
         record = JSON.parse(line) as MatchRecord;

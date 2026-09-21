@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
 import { appendRecord, toRecord, type MatchRecord } from "../src/log.js";
-import { findMatch, frameAt, listMatches, replayability } from "../src/history.js";
+import { findMatch, forgetOpened, frameAt, listMatches, replayability } from "../src/history.js";
 import { engineFingerprint } from "../src/fingerprint.js";
 import { concede } from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
@@ -117,6 +117,22 @@ describe("1 局の読み返し", () => {
     expect(frameAt(record, record.moves.length + 100).ply).toBe(record.moves.length);
   });
 
+  /**
+   * 手数は整数でしか意味を持たない。丸めずに返すと、盤面は 2 手目の後なのに
+   * 応答には 1.5 と書いてあることになり、画面の数えかたがそこからずれる。
+   */
+  it("整数でない手数は丸めて返す", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-12", ["あ", "い"]);
+
+    const half = frameAt(record, 1.5);
+    expect(half.ply).toBe(1);
+    expect(half.views).toEqual(frameAt(record, 1).views);
+    expect(frameAt(record, Number.NaN).ply).toBe(0);
+    expect(frameAt(record, Number.POSITIVE_INFINITY).ply).toBe(record.moves.length);
+  });
+
   it("指す直前の盤面も一緒に返す", () => {
     ensureCards();
     const dir = newDir();
@@ -156,6 +172,37 @@ describe("1 局の読み返し", () => {
  * エンジンの同一性（§6.3）。この規律は再生器がすでに持っていて、読み返しにも同じものを通す。
  * カードの定義が変われば同じ `defId` が別のカードを指しうるので、黙って違う盤面を見せない。
  */
+/**
+ * 読み返しは 1 手進めるたびに 1 局を引き直す。そのたびに全部の日を走査すると、
+ * その間ずっと進行中の対戦の手も持ち時間の見回りも止まる。
+ */
+describe("開いている対戦を覚えておく", () => {
+  it("覚えていても、指していない人には渡さない", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    const record = writeMatch(dir, "hist-13", ["あ", "い"]);
+
+    // まず当人が引いて、覚えさせる。
+    expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
+    // 覚えたものを、指していない人が引けてはいけない。
+    expect(findMatch(dir, "そとのひと", record.matchId)).toBeNull();
+    expect(findMatch(dir, "い", record.matchId)?.matchId).toBe(record.matchId);
+  });
+
+  it("見つからなかったことは覚えない。あとから書かれた対戦も引ける", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    const first = writeMatch(dir, "hist-14", ["あ", "い"]);
+    expect(findMatch(dir, "あ", "まだ無い対戦")).toBeNull();
+
+    const later = writeMatch(dir, "hist-15", ["あ", "う"]);
+    expect(findMatch(dir, "あ", later.matchId)?.matchId).toBe(later.matchId);
+    expect(findMatch(dir, "あ", first.matchId)?.matchId).toBe(first.matchId);
+  });
+});
+
 describe("読み返しとエンジンの版", () => {
   it("カードデータが違えば読み返さない", () => {
     ensureCards();

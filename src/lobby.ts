@@ -84,7 +84,7 @@ export class Lobby {
 
     const ticket: Ticket = {
       ticket: newToken(),
-      // 持ち点はこの時点の値で固める。対戦中に別の対戦が終わっても、この記録は動かない。
+      // ここの持ち点は仮である。記録に残すのは**対戦が始まった時点**の値で、`start` が読み直す。
       seat: {
         playerId: account.playerId,
         displayName: account.displayName,
@@ -163,6 +163,17 @@ export class Lobby {
     return this.queue.shift() ?? null;
   }
 
+  /** 札の座席を、今の持ち点と名乗りで取り直す。打ち手が消えていれば札のままを使う。 */
+  private seatNow(ticket: Ticket): SeatInfo {
+    const account = this.accounts.byPlayerId(ticket.seat.playerId);
+    if (account === null) return ticket.seat;
+    return {
+      playerId: account.playerId,
+      displayName: account.displayName,
+      rating: account.rating,
+    };
+  }
+
   private putWaiting(ticket: Ticket): void {
     if (ticket.roomCode !== null) this.waitingByRoom.set(ticket.roomCode, ticket);
     else this.queue.push(ticket);
@@ -171,7 +182,11 @@ export class Lobby {
   private start(first: Ticket, second: Ticket): [Seated, Seated] {
     const nowMs = this.now();
     const seatTokens: [string, string] = [newToken(), newToken()];
-    const seats: [SeatInfo, SeatInfo] = [first.seat, second.seat];
+    /**
+     * **持ち点は今この場で読み直す**（7.2 節）。待っている間に別の窓の対戦が終われば
+     * 持ち点は動いている。札を取ったときの値を残すと、記録が「対戦を始めた時点」でなくなる。
+     */
+    const seats: [SeatInfo, SeatInfo] = [this.seatNow(first), this.seatNow(second)];
     const match = createMatch({
       matchId: randomUUID(),
       decks: [first.deck, second.deck],

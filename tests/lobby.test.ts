@@ -132,6 +132,31 @@ describe("相手を見つける", () => {
     expect(lobby.waitingCount()).toBe(1);
   });
 
+  /**
+   * 記録に残すのは**対戦が始まった時点**の持ち点である（7.2 節）。待っている間に
+   * 別の窓の対戦が終われば持ち点は動く。札を取ったときの値を残すと、記録がずれる。
+   */
+  it("記録に残る持ち点は、待ち始めた時点ではなく対戦が始まった時点のもの", () => {
+    ensureCards();
+    const arena = newArena();
+    const { lobby, accounts } = arena;
+    const waiting = accounts.create("さきに待つ人", 0);
+    const other = accounts.create("あとから来る人", 0);
+    const deck = legalDecks()[0]!;
+
+    lobby.join({ secret: waiting.secret, deck, roomCode: "へや" });
+    // 待っている間に、別のところで 1 局終わって持ち点が動く。
+    const third = accounts.create("よその人", 0);
+    accounts.applyResult([waiting.account.playerId, third.account.playerId], 1, 0);
+    const moved = accounts.byPlayerId(waiting.account.playerId)?.rating ?? 0;
+    expect(moved).not.toBe(waiting.account.rating);
+
+    const second = lobby.join({ secret: other.secret, deck, roomCode: "へや" });
+    const seated = second.ok && "seat" in second ? second.seat : null;
+    const match = arena.registry.live().find((live) => live.matchId === seated?.matchId);
+    expect(match?.seats[0]?.rating).toBe(moved);
+  });
+
   it("検査を通らないデッキでは待ち行列に入れない", () => {
     ensureCards();
     const arena = newArena();
@@ -142,6 +167,66 @@ describe("相手を見つける", () => {
     });
     expect(outcome.ok).toBe(false);
     expect(lobby.waitingCount()).toBe(0);
+  });
+});
+
+/**
+ * 決着の後始末は、持ち時間の見回りと WebSocket の処理から呼ばれる。そこから例外が漏れると
+ * 走っているもの全体が止まり、**同じ見回りで終わらせるはずだった別の対戦まで残る。**
+ * 置き場へ書けないことは本番で普通に起こる（読めない場所を渡した、いっぱいになった）。
+ */
+describe("決着の後始末で落ちない", () => {
+  it("持ち点を保存できなくても、対戦は終わって決着は届く", () => {
+    ensureCards();
+    const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
+    const registry = new MatchRegistry(dir);
+    const accounts = new AccountStore(dir);
+    const hub = new MatchHub({
+      registry,
+      now: () => 0,
+      onFinish: () => {
+        throw new Error("置き場へ書けない");
+      },
+    });
+    const lobby = new Lobby(registry, accounts, () => 0);
+    const first = lobby.join(player({ lobby, registry, hub, accounts }, "a", "へや"));
+    lobby.join(player({ lobby, registry, hub, accounts }, "b", "へや"));
+    const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
+
+    const socket = recorder();
+    hub.attach(socket, seatA?.seatToken ?? "");
+    expect(() => hub.handle(socket, seatA?.seatToken ?? "", { t: "concede" })).not.toThrow();
+    expect(socket.sent.at(-1)?.t).toBe("ended");
+    expect(registry.live()).toHaveLength(0);
+  });
+
+  it("1 局の後始末で落ちても、同じ見回りの別の対戦は終わる", () => {
+    ensureCards();
+    const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
+    const registry = new MatchRegistry(dir);
+    const accounts = new AccountStore(dir);
+    let seen = 0;
+    const hub = new MatchHub({
+      registry,
+      // 持ち時間（60 秒 + 15 分）を越えるところまで進めて、2 局とも時間切れにする。
+      now: () => 60 * 60 * 1000,
+      onFinish: () => {
+        seen++;
+        if (seen === 1) throw new Error("置き場へ書けない");
+      },
+    });
+    const lobby = new Lobby(registry, accounts, () => 0);
+    const arena = { lobby, registry, hub, accounts };
+    for (const room of ["ひとつめ", "ふたつめ"]) {
+      lobby.join(player(arena, `${room}-a`, room));
+      lobby.join(player(arena, `${room}-b`, room));
+    }
+    expect(registry.live()).toHaveLength(2);
+
+    expect(() => hub.sweepTimeouts()).not.toThrow();
+    // 1 局目で落ちても 2 局目まで進んでいる。
+    expect(seen).toBe(2);
+    expect(registry.live()).toHaveLength(0);
   });
 });
 

@@ -136,12 +136,30 @@ export class MatchHub {
     this.sockets.delete(match.matchId);
     // `retire` は同じ対戦を二度落とさないので、`onFinish` も 1 局につき 1 度である。
     const record = this.options.registry.retire(match);
-    if (record !== null) this.options.onFinish?.(record);
+    if (record === null) return;
+    try {
+      this.options.onFinish?.(record);
+    } catch (error) {
+      // 持ち点は置き場へ書きに行く。書けなくても、決着そのものはもう済んでいる。
+      console.error(`決着の後始末に失敗した（${match.matchId}）:`, error);
+    }
   }
 
   /** 持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。 */
+  /**
+   * 持ち時間の尽きた対戦を終わらせる。
+   *
+   * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じ見回りで終わらせるはずだった
+   * ほかの対戦が、時計を過ぎたまま残り続ける。
+   */
   sweepTimeouts(): void {
-    for (const match of this.options.registry.sweepTimeouts(this.now())) this.endMatch(match);
+    for (const match of this.options.registry.sweepTimeouts(this.now())) {
+      try {
+        this.endMatch(match);
+      } catch (error) {
+        console.error(`対戦を終われなかった（${match.matchId}）:`, error);
+      }
+    }
   }
 
   private broadcastDelta(match: Match, events: DomainEvent[]): void {
