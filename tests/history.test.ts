@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdtempSync } from "node:fs";
+import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
@@ -330,6 +330,37 @@ describe("名指しになっていない識別子では走査しない", () => {
    * 読めない行を 1 つ植えておくと、走査すれば必ず `console.warn` が出る。
    * それが出ないことが、行を 1 つも読んでいないことの証拠になる。
    */
+  /**
+   * **形の合う識別子は誰でもいくらでも作れる。** 外れを 1 つずつ覚える手は効かないが、
+   * 一覧のキャッシュは在る対戦の識別子を持っているので、そこに無ければ読む必要がない。
+   */
+  it("無い対戦を名指しされても、2 度目からはログを読み直さない", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    forgetListed();
+    const record = writeMatch(dir, "hist-17", ["あ", "い"]);
+    // 読めない行を植える。読みに行けば必ず断りが出るので、出ないことが読んでいない証拠になる。
+    appendFileSync(join(dir, `${record.endedAt.slice(0, 10)}.jsonl`), `{"matchId":"こわれた"\n`);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // 1 度目はキャッシュを作るので読む。
+      expect(findMatch(dir, "あ", randomUUID())).toBeNull();
+      expect(warn).toHaveBeenCalled();
+
+      // 2 度目からは、識別子を変えられても読み直さない。
+      warn.mockClear();
+      for (let i = 0; i < 20; i++) expect(findMatch(dir, "あ", randomUUID())).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+
+      // 本物はこれまでどおり引ける。
+      expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("空の識別子では、ログを読みに行きもしない", () => {
     ensureCards();
     const dir = newDir();
@@ -357,6 +388,35 @@ describe("名指しになっていない識別子では走査しない", () => {
 
       // 本物はこれまでどおり引ける。
       expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+/**
+ * 一覧と読み返しは、**同じファイルの集合**を見なければならない。片方だけが拾うと、
+ * 一覧に出るのに開けない対戦ができる。アカウントの保存先を同じディレクトリに置くと、
+ * それを対戦記録として読んで断りを出すことにもなる。
+ */
+describe("一覧と読み返しが見るファイル", () => {
+  it("日付の名前でないファイルは、一覧も読み返しも読まない", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    forgetListed();
+    const listed = writeMatch(dir, "hist-18", ["あ", "い"]);
+
+    // 対戦記録として正しいが、日付の名前でないファイルに置いたもの。
+    const hidden = writeMatch(newDir(), "hist-19", ["あ", "い"]);
+    writeFileSync(join(dir, "accounts.jsonl"), `${JSON.stringify(hidden)}\n`, "utf8");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const ids = listMatches(dir, "あ").map((summary) => summary.matchId);
+      expect(ids).toEqual([listed.matchId]);
+      expect(findMatch(dir, "あ", hidden.matchId)).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }

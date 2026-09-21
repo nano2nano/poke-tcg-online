@@ -127,6 +127,8 @@ interface ListedMatch {
 interface ListedDay {
   consumed: number;
   matches: ListedMatch[];
+  /** この日のファイルにある対戦の識別子。無い対戦を名指しされたときに読まずに断るため。 */
+  ids: Set<string>;
 }
 
 const LISTED = new Map<string, ListedDay>();
@@ -179,23 +181,41 @@ export function listMatches(dir: string, playerId: string): MatchSummary[] {
  * イベントループが止まり、対戦中のプレイヤーの持ち時間が削られる（6.5 節）。
  */
 function* readListed(dir: string): Generator<ListedMatch> {
+  for (const day of listedDays(dir)) yield* day.matches;
+}
+
+/**
+ * 日ごとのファイルを、キャッシュを最新にしながら順に返す。
+ *
+ * 読むファイルを日付名に限るのは `readRecords` と同じ条件である。**2 つが食い違うと、
+ * 一覧には出るのに開けない対戦ができる。**
+ */
+function* listedDays(dir: string): Generator<ListedDay> {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return;
-  for (const entry of readdirSync(dir)
-    .filter((name) => name.endsWith(".jsonl"))
-    .sort()) {
+  for (const entry of readdirSync(dir).filter(isDayFile).sort()) {
     const path = join(dir, entry);
     const size = statSync(path).size;
     const cached = LISTED.get(path);
     // 縮んでいれば別物に差し替わっている。キャッシュを捨てて読み直す。
     const day =
-      cached !== undefined && cached.consumed <= size ? cached : { consumed: 0, matches: [] };
+      cached !== undefined && cached.consumed <= size
+        ? cached
+        : { consumed: 0, matches: [], ids: new Set<string>() };
     if (day.consumed < size) {
       appendListed(path, day, size);
       if (countListed() <= LISTED_LIMIT) LISTED.set(path, day);
       else LISTED.delete(path);
     }
-    yield* day.matches;
+    yield day;
   }
+}
+
+/** その識別子の対戦が、どこかの日のファイルにあるか。 */
+function isListed(dir: string, matchId: string): boolean {
+  for (const day of listedDays(dir)) {
+    if (day.ids.has(matchId)) return true;
+  }
+  return false;
 }
 
 function countListed(): number {
@@ -221,7 +241,9 @@ function appendListed(path: string, day: ListedDay, size: number): void {
   for (const line of text.slice(0, end).split("\n")) {
     if (line.trim() === "") continue;
     try {
-      day.matches.push(listedOf(JSON.parse(line) as MatchRecord));
+      const listed = listedOf(JSON.parse(line) as MatchRecord);
+      day.matches.push(listed);
+      day.ids.add(listed.matchId);
     } catch {
       broken++;
     }
@@ -266,14 +288,20 @@ const OPENED_LIMIT = 4;
  */
 export function findMatch(dir: string, playerId: string, matchId: string): MatchRecord | null {
   // **すべての行に当たる識別子では走査しない。** 空文字はどの行にも含まれるので
-  // ふるいが素通りになり、全部の日を解析することになる。しかも当たらないので
-  // 覚えることもなく、送られるたびに同じ走査が起きる。
+  // ふるいが素通りになり、全部の日を解析することになる。
   // 外から来る値の形は口が確かめる（`isMatchId`）。ここはその最後の歯止めである。
   if (matchId.trim() === "") return null;
   const key = `${dir}\u0000${matchId}`;
   const opened = OPENED.get(key);
   // 覚えていても座席は毎回確かめる。読めるのは自分が指した対戦だけである（6.6 節）。
   if (opened !== undefined) return seatOf(opened, playerId) === null ? null : opened;
+
+  /**
+   * **無い対戦は、ログを読む前に断る。** 形だけ合っている識別子は誰でもいくらでも作れる。
+   * 外れを 1 つずつ覚える手は効かない（識別子を変えれば何度でも外せる）が、
+   * 一覧のキャッシュは**在る対戦の識別子**を持っているので、そちらに無ければ読む必要がない。
+   */
+  if (!isListed(dir, matchId)) return null;
 
   for (const record of readRecords(dir, matchId, "newest-first")) {
     if (record.matchId !== matchId) continue;
@@ -348,15 +376,23 @@ export function frameAt(
       divergedAt = index;
       break;
     }
-    beforeState = result.state;
+    /**
+     * 指せてから `beforeState` を進める。先に進めると、**止まったときだけ 1 手ずれる。**
+     * `playedMove` は 1 つ前の手のままなので、クライアントはその手で使ったカードを
+     * 1 手あとの手札から探すことになり、名前が引けずにインスタンス ID がそのまま出る。
+     */
+    const before = result.state;
+    let next: ReturnType<typeof applyMove>;
     try {
-      result = applyMove(result.state, logged.move);
+      next = applyMove(before, logged.move);
     } catch (error) {
       // 合法手に在ったのに通らないのはエンジン側の話である。外へ文句は出さず、ここで止める。
       console.warn(`${record.matchId} の ${index} 手目を指せなかった:`, error);
       divergedAt = index;
       break;
     }
+    beforeState = before;
+    result = next;
     events = result.events;
     playedMove = logged.move;
     applied = index + 1;
