@@ -1,14 +1,14 @@
 /**
- * エンジンの刻印（`docs/spec/battle-server.md` 6.3 節）。
+ * エンジンの指紋（`docs/spec/battle-server.md` 6.3 節）。
  *
- * 刻印が「取れなかった」に落ちても、対戦は普通に動いてしまう。落ちたことに気づけるのは
+ * 指紋が「取れなかった」に落ちても、対戦は普通に動いてしまう。落ちたことに気づけるのは
  * ここだけなので、値が本当に埋まっていることをテストで押さえる。
  */
 
 import { describe, expect, it } from "vitest";
 import { commitSeed, engineFingerprint, verifySeedCommitment } from "../src/fingerprint.js";
 
-describe("エンジンの刻印", () => {
+describe("エンジンの指紋", () => {
   // 取り込み方を変えたときにパスが外れると "unknown" へ落ち、再生の拒否が黙って無効になる。
   it("カードデータのハッシュが埋まっている", () => {
     const fingerprint = engineFingerprint();

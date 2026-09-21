@@ -170,7 +170,8 @@ export class AccountStore {
 
   private load(): void {
     if (existsSync(this.path)) {
-      for (const line of readFileSync(this.path, "utf8").split("\n")) {
+      const text = readFileSync(this.path, "utf8");
+      for (const line of text.split("\n")) {
         if (line.trim() === "") continue;
         let row: StoredAccount;
         try {
@@ -184,6 +185,14 @@ export class AccountStore {
         this.lines++;
       }
       if (this.broken > 0) console.warn(`${this.path}: 読めない行を ${this.broken} 行とばした`);
+      /**
+       * **読み飛ばすだけでは足りない。書き直して、行の切れ目で終わらせる。**
+       * 途中で落ちた追記は、改行の無い半端な行をファイルの末尾に残す。そこへ次の 1 行を
+       * 足すと 2 つの行が 1 行に繋がり、**どちらも読めなくなる。** 飛ばした側だけでなく、
+       * そのとき作ったアカウントも次の起動で消える。サーバはシークレットを持たないので、
+       * その人はもう戻れない。
+       */
+      if (this.broken > 0 || (text !== "" && !text.endsWith("\n"))) this.compact();
       return;
     }
     if (!existsSync(this.legacyPath)) return;

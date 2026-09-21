@@ -35,7 +35,7 @@ $("name").addEventListener("input", () => {
   nameTouched = true;
 });
 
-ensureAccount().catch((error) => setStatus(`プレイヤーを読めませんでした: ${error.message}`));
+ensureAccount().catch((error) => setStatus(`アカウントを読めませんでした: ${error.message}`));
 
 /** レーティングと戦績を引き直す。対戦が終われば動くので、そのたびに読む。 */
 async function refreshAccount() {
@@ -85,7 +85,7 @@ async function join() {
 
   const outcome = await postJson("/api/join", request);
   if (!outcome.ok) {
-    // 断られる理由はデッキとは限らない。プレイヤーが見つからないこともここへ来る。
+    // 断られる理由はデッキとは限らない。アカウントが見つからないこともここへ来る。
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
     return;
   }
@@ -416,7 +416,7 @@ function inPlayName(inPlayId, view) {
 /**
  * 手札のインスタンス ID からカードの名前を引く。盤面に無ければ番号のまま出す。
  *
- * 両側を見るのは読み返しのためである。対戦中は相手の手札が `hand` を持たないので、
+ * 両側を見るのはリプレイのためである。対戦中は相手の手札が `hand` を持たないので、
  * 自分の手札しか当たらない。
  */
 function handCardName(instanceId, view) {
@@ -485,13 +485,15 @@ async function loadAccount() {
     });
     if (response.ok) return response.json();
     /**
-     * **消すのは 404 のときだけである。** サーバはシークレットの控えを持たないので、
-     * ここで消すと、そのプレイヤーのレーティングも戦績も読み返しも戻らない。
-     * 入れ替えの最中の 502 や、切れた回線を「プレイヤーが消えた」と読み違えない。
+     * **消すのは、サーバが「そのアカウントはいない」と言ったときだけである。**
+     * サーバはシークレットの控えを持たないので、ここで消すとレーティングも戦績もリプレイも戻らない。
+     * 404 という番号だけでは足りない。静的ファイルの取りこぼしも、前の版が動いている
+     * サーバも、間に挟まった中継も 404 を返す。合図が付いている応答だけを本物とする。
      */
-    if (response.status !== 404) {
+    const failure = await response.json().catch(() => null);
+    if (failure?.code !== "account-not-found") {
       throw new Error(
-        `プレイヤーを読めなかった（${response.status}）。シークレットはそのまま残してある。`,
+        `アカウントを読めなかった（${response.status}）。シークレットはそのまま残してある。`,
       );
     }
     localStorage.removeItem("poke-account-secret");
@@ -539,7 +541,7 @@ async function postJson(path, body) {
   throw new Error(answer?.error ?? `${path} が ${response.status} を返した`);
 }
 
-/** 読み返している対戦。開いていなければ null。 */
+/** リプレイ中の対戦。開いていなければ null。 */
 let replaying = null;
 
 $("history-button").addEventListener("click", () => {
@@ -569,7 +571,7 @@ for (const [id, step] of [
 
 async function showHistory() {
   // プレイヤーができるのを待つ。 初めて来た人はシークレットをまだ持たないので、
-  // 待たずに送ると `secret: null` になり、「プレイヤーが見つからない」と断られる。
+  // 待たずに送ると `secret: null` になり、「アカウントが見つからない」と断られる。
   await ensureAccount();
   if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
   const { matches } = await postJson("/api/matches", { secret: storedSecret() });

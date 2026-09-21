@@ -182,6 +182,51 @@ describe("プレイヤー", () => {
     }
   });
 
+  /**
+   * **読み飛ばすだけでは足りない。** 途中で落ちた追記は、改行の無い半端な行を末尾に残す。
+   * そこへ次の 1 行を足すと 2 つが 1 行に繋がり、どちらも読めなくなる。飛ばした側だけでなく
+   * **そのとき作ったアカウントも消える。** サーバはシークレットを持たないので、戻せない。
+   */
+  it("途中で切れた行が残っていても、次に作ったアカウントを失わない", () => {
+    const { store, dir } = newStore();
+    const path = join(dir, "accounts.jsonl");
+    const { secret } = store.create("あ", 0);
+    // 追記の途中で落ちた状態。最後の行に改行が無い。
+    appendFileSync(path, '{"playerId":"とちゅう","displayName":"い', "utf8");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const reopened = new AccountStore(dir);
+      const added = reopened.create("う", 0);
+
+      const again = new AccountStore(dir);
+      expect(again.bySecret(secret)?.displayName).toBe("あ");
+      expect(again.bySecret(added.secret)?.displayName).toBe("う");
+      expect(again.count()).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  /** 上と同じことが、JSON として読めない行が混じったときにも起きる。 */
+  it("読めない行のあとに足したアカウントも、次に開いたとき残っている", () => {
+    const { store, dir } = newStore();
+    const path = join(dir, "accounts.jsonl");
+    store.create("あ", 0);
+    appendFileSync(path, "{壊れている\n", "utf8");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const reopened = new AccountStore(dir);
+      const added = reopened.create("い", 0);
+      // 読み直したときに詰め直してあるので、読めない行はもう残っていない。
+      expect(readFileSync(path, "utf8")).not.toContain("壊れている");
+      expect(new AccountStore(dir).bySecret(added.secret)?.displayName).toBe("い");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("書いたものを読み直しても続く", () => {
     const { store, dir } = newStore();
     const { account, secret } = store.create("あ", 0);

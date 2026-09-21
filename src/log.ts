@@ -61,7 +61,7 @@ export function toRecord(match: Match): MatchRecord {
   };
 }
 
-/** 既定の保存先。`createApp` も読み返しのためにこれを引く。 */
+/** 既定の保存先。`createApp` もリプレイのためにこれを引く。 */
 export const DEFAULT_LOG_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",

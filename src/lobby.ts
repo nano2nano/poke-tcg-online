@@ -85,7 +85,7 @@ export class Lobby {
     // シークレットを先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
     // ここでは読むだけで、ストアは書き換えない。
     const known = this.accounts.bySecret(request.secret);
-    if (known === null) return { ok: false, errors: ["プレイヤーが見つからない"] };
+    if (known === null) return { ok: false, errors: ["アカウントが見つからない"] };
 
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {

@@ -1,5 +1,5 @@
 /**
- * 済んだ対戦の読み返し（`docs/spec/battle-server.md` 6.6 節）。
+ * 済んだ対戦のリプレイ（`docs/spec/battle-server.md` 6.6 節）。
  *
  * 読めるのは自分が指した対戦だけである。終わった対戦は当人どうしには全部見えてよいが、
  * 他人のデッキと引きが誰にでも見えるなら、それは対戦環境として成り立たない。
@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdtempSync } from "node:fs";
+import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
@@ -108,7 +108,7 @@ describe("済んだ対戦の一覧", () => {
 
   /**
    * 追記の最中に落ちれば、書きかけの行が 1 つ残る。そこで例外を投げると、
-   * その 1 行のために**全員の**一覧と読み返しが止まる。
+   * その 1 行のために**全員の**一覧とリプレイが止まる。
    */
   it("読めない行が混じっても、読める対戦は読める", () => {
     ensureCards();
@@ -129,7 +129,7 @@ describe("済んだ対戦の一覧", () => {
   });
 });
 
-describe("1 局の読み返し", () => {
+describe("1 局のリプレイ", () => {
   it("指していない対戦は引けない", () => {
     ensureCards();
     const dir = newDir();
@@ -242,7 +242,7 @@ describe("1 局の読み返し", () => {
    * ことは漏れではない。**それでも射影を通らない値は出さない**というのが 1 節の S-2 で、
    * ここが見るのはそちらである。山札の並びは、終わった対戦でも誰にも渡さない。
    */
-  it("射影の結果しか返さない。山札とサイドの中身は読み返しでも渡さない", () => {
+  it("射影の結果しか返さない。山札とサイドの中身はリプレイでも渡さない", () => {
     ensureCards();
     const dir = newDir();
     const record = writeMatch(dir, "hist-6", ["あ", "い"]);
@@ -261,11 +261,11 @@ describe("1 局の読み返し", () => {
 });
 
 /**
- * エンジンの同一性（§6.3）。この規律は再生器がすでに持っていて、読み返しにも同じものを通す。
+ * エンジンの同一性（§6.3）。この規律は再生器がすでに持っていて、リプレイにも同じものを通す。
  * カードの定義が変われば同じ `defId` が別のカードを指しうるので、黙って違う盤面を見せない。
  */
 /**
- * 読み返しは 1 手進めるたびに 1 局を引き直す。そのたびに全部の日を走査すると、
+ * リプレイは 1 手進めるたびに 1 局を引き直す。そのたびに全部の日を走査すると、
  * その間ずっと進行中の対戦の手も持ち時間のスイープも止まる。
  */
 describe("開いている対戦を覚えておく", () => {
@@ -296,7 +296,7 @@ describe("開いている対戦を覚えておく", () => {
 });
 
 /**
- * 読み返しは 1 局を名指しで引く。名指しになっていない値を通すと、事前フィルタが素通りして
+ * リプレイは 1 局を名指しで引く。名指しになっていない値を通すと、事前フィルタが素通りして
  * 全部の日を解析することになる。**プレイヤーは誰でも作れるので、これは繰り返し送れる。**
  * その間は進行中の対戦の手も持ち時間のスイープも止まる。
  */
@@ -330,6 +330,37 @@ describe("名指しになっていない識別子では走査しない", () => {
    * 読めない行を 1 つ植えておくと、走査すれば必ず `console.warn` が出る。
    * それが出ないことが、行を 1 つも読んでいないことの証拠になる。
    */
+  /**
+   * **形の合う識別子は誰でもいくらでも作れる。** 外れを 1 つずつ覚える手は効かないが、
+   * 一覧のキャッシュは在る対戦の識別子を持っているので、そこに無ければ読む必要がない。
+   */
+  it("無い対戦を名指しされても、2 度目からはログを読み直さない", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    forgetListed();
+    const record = writeMatch(dir, "hist-17", ["あ", "い"]);
+    // 読めない行を植える。読みに行けば必ず警告が出るので、出ないことが読んでいない証拠になる。
+    appendFileSync(join(dir, `${record.endedAt.slice(0, 10)}.jsonl`), `{"matchId":"こわれた"\n`);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // 1 度目はキャッシュを作るので読む。
+      expect(findMatch(dir, "あ", randomUUID())).toBeNull();
+      expect(warn).toHaveBeenCalled();
+
+      // 2 度目からは、識別子を変えられても読み直さない。
+      warn.mockClear();
+      for (let i = 0; i < 20; i++) expect(findMatch(dir, "あ", randomUUID())).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+
+      // 本物はこれまでどおり引ける。
+      expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("空の識別子では、ログを読みに行きもしない", () => {
     ensureCards();
     const dir = newDir();
@@ -363,7 +394,36 @@ describe("名指しになっていない識別子では走査しない", () => {
   });
 });
 
-describe("読み返しとエンジンの版", () => {
+/**
+ * 一覧とリプレイは、**同じファイルの集合**を見なければならない。片方だけが拾うと、
+ * 一覧に出るのに開けない対戦ができる。アカウントの保存先を同じディレクトリに置くと、
+ * それを対戦記録として読んで警告を出すことにもなる。
+ */
+describe("一覧とリプレイが見るファイル", () => {
+  it("日付の名前でないファイルは、一覧もリプレイも読まない", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    forgetListed();
+    const listed = writeMatch(dir, "hist-18", ["あ", "い"]);
+
+    // 対戦記録として正しいが、日付の名前でないファイルに置いたもの。
+    const hidden = writeMatch(newDir(), "hist-19", ["あ", "い"]);
+    writeFileSync(join(dir, "accounts.jsonl"), `${JSON.stringify(hidden)}\n`, "utf8");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const ids = listMatches(dir, "あ").map((summary) => summary.matchId);
+      expect(ids).toEqual([listed.matchId]);
+      expect(findMatch(dir, "あ", hidden.matchId)).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("リプレイとエンジンの版", () => {
   it("カードデータが違えば読み返さない", () => {
     ensureCards();
     const dir = newDir();

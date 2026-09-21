@@ -33,7 +33,7 @@ export interface ReplayResult {
 }
 
 export interface ReplayOptions {
-  /** 今のエンジンの刻印。渡さないと同一性の検査を省く。 */
+  /** 今のエンジンの指紋。渡さないと同一性の検査を省く。 */
   fingerprint?: { commit: string; cardDataSha256: string };
   /** 全局面へ掛ける追加の検査。自己対戦の不変条件を渡す使い方を想定する。 */
   inspect?: (state: GameState, index: number) => void;
