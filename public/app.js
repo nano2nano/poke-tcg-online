@@ -1,0 +1,314 @@
+/**
+ * 参照クライアント（`docs/spec/battle-server.md` 0 節「スコープ外」）。
+ *
+ * 見た目は仕様の対象外なので、この画面はプロトコルが運ぶ値をそのまま映すだけにする。
+ * **盤面の判断を一切持たない。** サーバが送ってきた合法手を並べ、押された 1 つを送り返す。
+ * 権威はサーバの局面にあり、こちらは描くだけである（1 節の S-1）。
+ */
+
+const $ = (id) => document.getElementById(id);
+
+/** defId から名前を引く表。対戦ごとに変わらないので一度だけ取る。 */
+let cards = {};
+let socket = null;
+let seat = null;
+let stateVersion = 0;
+/** 直近の盤面。手の見出しで個体番号からカードの名前を引くのに使う。 */
+let lastView = null;
+
+const nameOf = (defId) => cards[defId]?.name ?? defId;
+
+$("join-button").addEventListener("click", () => {
+  join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
+});
+
+$("concede-button").addEventListener("click", () => {
+  if (socket !== null && confirm("投了しますか。")) send({ t: "concede" });
+});
+
+async function join() {
+  setStatus("デッキを送っています");
+  const [deck, index] = await Promise.all([getJson("/api/sample-deck"), getJson("/api/cards")]);
+  cards = index;
+
+  const room = $("room").value.trim();
+  const request = {
+    playerId: playerId(),
+    displayName: $("name").value.trim() || "ななし",
+    deck: { cards: deck.cards },
+  };
+  if (room !== "") request.roomCode = room;
+
+  const outcome = await postJson("/api/join", request);
+  if (!outcome.ok) {
+    setStatus(`デッキが通りませんでした:\n${outcome.errors.join("\n")}`);
+    return;
+  }
+  if (outcome.seat !== undefined) {
+    openMatch(outcome.seat);
+    return;
+  }
+  setStatus("相手を待っています");
+  await waitForOpponent(outcome.ticket);
+}
+
+async function waitForOpponent(ticket) {
+  for (;;) {
+    const claimed = await getJson(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
+    if (claimed.seat !== null) {
+      openMatch(claimed.seat);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+function openMatch(seated) {
+  seat = seated.seat;
+  setStatus("");
+  $("join").hidden = true;
+  $("table").hidden = false;
+
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  socket = new WebSocket(
+    `${scheme}://${location.host}/ws?seatToken=${encodeURIComponent(seated.seatToken)}`,
+  );
+  socket.addEventListener("message", (event) => receive(JSON.parse(event.data)));
+  socket.addEventListener("close", () => addEvent("接続が切れました。読み込み直すと戻れます"));
+}
+
+function receive(message) {
+  switch (message.t) {
+    case "sync":
+    case "delta":
+      stateVersion = message.stateVersion;
+      if (message.events !== undefined) for (const event of message.events) addEvent(event.kind);
+      renderView(message.view);
+      renderClock(message.clock);
+      renderMoves(message.legalMoves);
+      return;
+    case "ended":
+      renderView(message.view);
+      renderMoves(null);
+      addEvent(describeEnd(message));
+      $("clock").textContent = "対戦は終わりました";
+      return;
+    case "reject":
+      // 古い画面から押したときは、サーバが正しい局面を送り直してくる。
+      addEvent(`手が通りませんでした（${message.reason}）`);
+      return;
+    case "error":
+      addEvent(message.message);
+      return;
+    default:
+      return;
+  }
+}
+
+function describeEnd(message) {
+  const result = message.matchResult;
+  const mine = result.winner === seat ? "勝ち" : "負け";
+  if (result.kind === "concede") return `投了により ${mine}`;
+  if (result.kind === "timeout") return `時間切れにより ${mine}`;
+  if (result.winner === null) return "引き分け";
+  return `${mine}（${message.outcome?.reason ?? ""}）`;
+}
+
+function renderView(view) {
+  lastView = view;
+  $("opponent").innerHTML = sideHtml(view.opponent, false);
+  $("self").innerHTML = sideHtml(view.self, true);
+}
+
+function sideHtml(side, own) {
+  const rows = [
+    row("サイド", side.prizeCount),
+    row("山札", side.deckCount),
+    row("手札", own ? side.hand.length : side.handCount),
+    row("バトル場", pokemonText(side.active)),
+    row(
+      "ベンチ",
+      side.bench
+        .map(pokemonText)
+        .filter((text) => text !== "なし")
+        .join(" / ") || "なし",
+    ),
+    row("トラッシュ", side.discard.length),
+  ];
+  const hand = own
+    ? `<div class="hand">${side.hand.map((card) => `<span>${escape(nameOf(card.defId))}</span>`).join("")}</div>`
+    : "";
+  return rows.join("") + hand;
+}
+
+function pokemonText(pokemon) {
+  if (pokemon === null) return "なし";
+  if (pokemon.concealed === true) return "ウラ";
+  const top = pokemon.stack[pokemon.stack.length - 1];
+  const damage = pokemon.damage > 0 ? `（${pokemon.damage} ダメージ）` : "";
+  return `${escape(nameOf(top.defId))}${damage}`;
+}
+
+function row(label, value) {
+  return `<div class="row"><span>${label}</span><span>${escape(String(value))}</span></div>`;
+}
+
+function renderClock(clock) {
+  const mine = Math.round(clock.bankMs[seat] / 1000);
+  const theirs = Math.round(clock.bankMs[1 - seat] / 1000);
+  const turn = clock.toMove === seat ? "あなたの番です" : "相手が考えています";
+  const remaining =
+    clock.moveRemainingMs === null
+      ? ""
+      : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
+  $("clock").textContent = `${turn}${remaining} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
+}
+
+function renderMoves(moves) {
+  const container = $("moves");
+  container.innerHTML = "";
+  if (moves === null) {
+    container.innerHTML = '<p class="waiting">相手の番です</p>';
+    return;
+  }
+  for (const move of moves) {
+    const button = document.createElement("button");
+    button.textContent = describeMove(move);
+    button.addEventListener("click", () => send({ t: "move", stateVersion, move }));
+    container.append(button);
+  }
+}
+
+/**
+ * 手の見出し。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
+ * ここが知らない型が来ても、型の名前だけは出す。
+ */
+function describeMove(move) {
+  switch (move.type) {
+    case "PlayBasic":
+      return `${handCardName(move.cardInstanceId)} をだす`;
+    case "Evolve":
+      return "進化させる";
+    case "AttachEnergy":
+      return "エネルギーをつける";
+    case "PlayTrainer":
+    case "PlayStadiumPair":
+      return "トレーナーズを使う";
+    case "AttachTool":
+      return "どうぐをつける";
+    case "UseAbility":
+    case "UseHandAbility":
+      return "特性を使う";
+    case "UseStadiumEffect":
+      return "スタジアムの効果を使う";
+    case "Retreat":
+      return "にげる";
+    case "DiscardOwnPokemon":
+      return "自分のポケモンをトラッシュする";
+    case "Attack":
+      return `ワザ ${move.attackIndex + 1} を使う`;
+    case "EndTurn":
+      return "番を終わる";
+    case "AnswerChoice":
+      return describeAnswer(move.answer);
+    default:
+      return move.type;
+  }
+}
+
+/**
+ * 選択の見出し。`ChoiceAnswer` も判別可能ユニオンで、運ぶ値は
+ * カード、場の個体、位置、番号のいずれかである。
+ * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
+ */
+function describeAnswer(answer) {
+  switch (answer.kind) {
+    case "accept":
+      return "はい";
+    case "decline":
+      return "いいえ";
+    case "card":
+      return handCardName(answer.card);
+    case "cardDef":
+      return nameOf(answer.defId);
+    case "inPlay":
+      return inPlayName(answer.target);
+    case "position":
+      return `${answer.index + 1} 番目`;
+    case "effectIndex":
+      return `${answer.index + 1} 番目の効果`;
+    case "attackIndex":
+      return `ワザ ${answer.index + 1}`;
+    case "placement":
+      return answer.placement === "before" ? "先に" : "あとに";
+    default:
+      return JSON.stringify(answer);
+  }
+}
+
+/** 場の個体番号から、いちばん上のカードの名前を引く。 */
+function inPlayName(inPlayId) {
+  if (lastView === null) return inPlayId;
+  for (const side of [lastView.self, lastView.opponent]) {
+    for (const pokemon of [side.active, ...side.bench]) {
+      if (pokemon === null || pokemon.concealed === true) continue;
+      if (pokemon.inPlayId !== inPlayId) continue;
+      const own = side === lastView.self ? "自分の" : "相手の";
+      return own + nameOf(pokemon.stack[pokemon.stack.length - 1].defId);
+    }
+  }
+  return inPlayId;
+}
+
+/** 手札の個体番号からカードの名前を引く。盤面に無ければ番号のまま出す。 */
+function handCardName(instanceId) {
+  const card = lastView?.self.hand.find((held) => held.instanceId === instanceId);
+  return card === undefined ? instanceId : nameOf(card.defId);
+}
+
+function addEvent(text) {
+  const item = document.createElement("li");
+  item.textContent = text;
+  $("events").prepend(item);
+}
+
+function send(message) {
+  if (socket !== null) socket.send(JSON.stringify(message));
+}
+
+function setStatus(text) {
+  $("join-status").textContent = text;
+}
+
+/** 座席に名乗る識別子。口座は持たないので、この端末が覚えているだけである（7 節）。 */
+function playerId() {
+  let id = localStorage.getItem("poke-player-id");
+  if (id === null) {
+    id = crypto.randomUUID();
+    localStorage.setItem("poke-player-id", id);
+  }
+  return id;
+}
+
+async function getJson(path) {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`${path} が ${response.status} を返した`);
+  return response.json();
+}
+
+async function postJson(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return response.json();
+}
+
+function escape(text) {
+  return text.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character],
+  );
+}

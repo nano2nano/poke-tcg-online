@@ -1,0 +1,94 @@
+:root {
+  color-scheme: light dark;
+  --line: color-mix(in srgb, currentColor 20%, transparent);
+}
+body {
+  margin: 0 auto;
+  padding: 16px;
+  max-width: 900px;
+  font-family: system-ui, "Hiragino Kaku Gothic ProN", sans-serif;
+  line-height: 1.6;
+}
+h1 {
+  font-size: 1.3rem;
+}
+h2 {
+  font-size: 1rem;
+  margin: 16px 0 6px;
+}
+.note {
+  opacity: 0.7;
+  font-size: 0.85rem;
+  margin-top: 0;
+}
+label {
+  display: block;
+  margin: 6px 0;
+}
+input {
+  padding: 4px 6px;
+  font: inherit;
+}
+button {
+  padding: 6px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+button.danger {
+  margin-top: 12px;
+}
+.sides {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 720px) {
+  .sides {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.side {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+.clock {
+  font-variant-numeric: tabular-nums;
+  padding: 6px 0;
+}
+.moves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.moves button {
+  text-align: left;
+}
+.events {
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  padding-left: 1.4em;
+}
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 2px 0;
+}
+.hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.hand span {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.85rem;
+}
+.waiting {
+  opacity: 0.6;
+}
