@@ -15,6 +15,8 @@ let seat = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しで個体番号からカードの名前を引くのに使う。 */
 let lastView = null;
+/** 走っている打ち手の読み込み。`ensureAccount` が待ち合わせに使う。 */
+let loadingAccount = null;
 
 const nameOf = (defId) => cards[defId]?.name ?? defId;
 
@@ -22,7 +24,7 @@ $("join-button").addEventListener("click", () => {
   join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
 });
 
-loadAccount()
+ensureAccount()
   .then(showAccount)
   .catch((error) => setStatus(`打ち手を読めませんでした: ${error.message}`));
 
@@ -42,7 +44,7 @@ $("concede-button").addEventListener("click", () => {
 async function join() {
   setStatus("デッキを送っています");
   cards = await getJson("/api/cards");
-  if (storedSecret() === null) showAccount(await loadAccount());
+  showAccount(await ensureAccount());
   const deck = await deckToSubmit();
   if (deck === null) {
     setStatus("デッキを直してから、もう一度おしてください。");
@@ -394,6 +396,22 @@ function storedSecret() {
   return localStorage.getItem("poke-account-secret");
 }
 
+/**
+ * 打ち手を 1 人だけ用意する。
+ *
+ * **走っている途中の呼び出しを待ち合わせる。** 画面を開いたときの読み込みと、
+ * それを待たずに押された「対戦をさがす」が重なると、打ち手が 2 人できる。
+ * 画面に出ている持ち点と、実際に指す打ち手が食い違い、片方が迷子になる。
+ */
+function ensureAccount() {
+  // 失敗したものを覚えると二度と作り直せないので、そのときだけ忘れる。
+  loadingAccount ??= loadAccount().catch((error) => {
+    loadingAccount = null;
+    throw error;
+  });
+  return loadingAccount;
+}
+
 /** 合言葉が無ければ打ち手を作る。あれば戦績を読み直す。 */
 async function loadAccount() {
   const secret = storedSecret();
@@ -404,7 +422,14 @@ async function loadAccount() {
       body: JSON.stringify({ secret }),
     });
     if (response.ok) return response.json();
-    // 置き場に残っていても、サーバ側が消えていることがある。作り直す。
+    /**
+     * **消すのは 404 のときだけである。** サーバは合言葉の控えを持たないので、
+     * ここで消すと、その打ち手の持ち点も戦績も読み返しも戻らない。
+     * 入れ替えの最中の 502 や、切れた回線を「打ち手が消えた」と読み違えない。
+     */
+    if (response.status !== 404) {
+      throw new Error(`打ち手を読めなかった（${response.status}）。合言葉はそのまま残してある。`);
+    }
     localStorage.removeItem("poke-account-secret");
   }
   const created = await postJson("/api/account", {
@@ -501,18 +526,28 @@ async function openReplay(summary) {
     moveCount: summary.moveCount,
   };
   $("replay").hidden = false;
-  await goToPly(0);
+  try {
+    await goToPly(0);
+  } catch (error) {
+    // 開けないものを空の欄で見せない。断りは一覧のところに出す。
+    $("replay").hidden = true;
+    replaying = null;
+    throw error;
+  }
 }
 
 /** その手数の局面を取りに行って描く。局面を持たないので、毎回サーバが作り直す。 */
 async function goToPly(ply) {
   if (replaying === null) return;
   const wanted = Math.max(0, Math.min(ply, replaying.moveCount));
-  const { frame } = await postJson("/api/replay", {
+  const answer = await postJson("/api/replay", {
     secret: storedSecret(),
     matchId: replaying.matchId,
     ply: wanted,
   });
+  // カードの定義が変わった対戦は、サーバが読み返しを断る（§6.3）。
+  if (answer.error !== undefined) throw new Error(answer.error);
+  const { frame } = answer;
   replaying.ply = frame.ply;
 
   const board = readerBoard(frame.views, replaying.seat);
@@ -521,7 +556,12 @@ async function goToPly(ply) {
 
   const before = readerBoard(frame.beforeViews, replaying.seat);
   const move = frame.playedMove === null ? "対戦の開始時" : describeMove(frame.playedMove, before);
-  $("replay-status").textContent = `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}`;
+  // エンジンの版が違っても止めない。止めるのはカードの定義が変わったときだけである（§6.3）。
+  const warning = frame.engineCommitDiffers
+    ? "　※ この対戦を指したときとエンジンの版が違います"
+    : "";
+  $("replay-status").textContent =
+    `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}`;
 }
 
 /**

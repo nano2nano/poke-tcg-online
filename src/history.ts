@@ -12,6 +12,7 @@ import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { applyMove, createGame, playerView, projectEvents } from "./engine.js";
 import type { GameState, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
+import { engineFingerprint, type EngineFingerprint } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
 import type { MatchResult } from "./match.js";
 
@@ -47,6 +48,36 @@ export interface ReplayFrame {
   beforeViews: [PlayerView, PlayerView] | null;
   /** その手で起きたこと。座席 0 から見た射影と座席 1 から見た射影。 */
   events: [PlayerEvent[], PlayerEvent[]];
+  /** エンジンの版が記録と違うまま再生している。盤面は合っていないかもしれない（§6.3）。 */
+  engineCommitDiffers: boolean;
+}
+
+/**
+ * その記録を、いまのエンジンで読み返してよいか（§6.3）。
+ *
+ * `cardDataSha256` の不一致は**拒否する**。カードの定義が変われば、同じ `defId` が
+ * 別のカードを指しうる。そのまま再生すると、誤りを出さずに違う盤面を見せる。
+ * `commit` の不一致は**警告にとどめる**。エンジンの修理が変えるのは踏んだ対戦だけで、
+ * 版を理由に一律で捨てると、直した誤りに触れていない大多数の対戦まで読めなくなる。
+ *
+ * この判断は再生器（`src/replay.ts`）と同じものである。読み返しにも同じ規律を通す。
+ */
+export type Replayability =
+  | { kind: "ok"; engineCommitDiffers: boolean }
+  | { kind: "card-data-mismatch"; expected: string; actual: string };
+
+export function replayability(
+  record: MatchRecord,
+  fingerprint: EngineFingerprint = engineFingerprint(),
+): Replayability {
+  if (record.engine.cardDataSha256 !== fingerprint.cardDataSha256) {
+    return {
+      kind: "card-data-mismatch",
+      expected: record.engine.cardDataSha256,
+      actual: fingerprint.cardDataSha256,
+    };
+  }
+  return { kind: "ok", engineCommitDiffers: record.engine.commit !== fingerprint.commit };
 }
 
 /** その人が指した対戦を、新しい順に返す。 */
@@ -83,8 +114,14 @@ export function findMatch(dir: string, playerId: string, matchId: string): Match
  *
  * **返すのは `playerView` と `projectEvents` の結果だけである**（1 節の S-2）。
  * 終わった対戦でも、生の `GameState` を外へ出す経路は作らない。
+ *
+ * 呼ぶ前に `replayability` を通すこと。カードの定義が変わった記録は、ここでは止まらない。
  */
-export function frameAt(record: MatchRecord, ply: number): ReplayFrame {
+export function frameAt(
+  record: MatchRecord,
+  ply: number,
+  fingerprint: EngineFingerprint = engineFingerprint(),
+): ReplayFrame {
   const target = Math.max(0, Math.min(ply, record.moves.length));
   let result = createGame({ seed: record.seed, decks: record.decks });
   let events = result.events;
@@ -109,6 +146,7 @@ export function frameAt(record: MatchRecord, ply: number): ReplayFrame {
     beforeViews:
       beforeState === null ? null : [playerView(beforeState, 0), playerView(beforeState, 1)],
     events: [projectEvents(events, 0), projectEvents(events, 1)],
+    engineCommitDiffers: record.engine.commit !== fingerprint.commit,
   };
 }
 

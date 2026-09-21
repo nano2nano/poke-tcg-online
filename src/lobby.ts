@@ -82,6 +82,13 @@ export class Lobby {
       roomCode: request.roomCode ?? null,
     };
 
+    /**
+     * **同じ打ち手は 1 つしか待たせない。** 別の窓を開いたり、待っている間に読み込み直すと、
+     * 同じ `playerId` が両側に座りうる。自分と自分の対戦が 1 局として記録に残り、
+     * その打ち手に 1 勝 1 敗が付く。古いほうを降ろせば、自分に当たること自体が起きない。
+     */
+    this.dropWaiting(account.playerId);
+
     const waiting = this.takeWaiting(ticket);
     if (waiting === null) {
       this.putWaiting(ticket);
@@ -100,6 +107,16 @@ export class Lobby {
     if (seat === undefined) return null;
     this.seated.delete(ticketId);
     return seat;
+  }
+
+  /** その打ち手が待っているものを、どこにいても降ろす。 */
+  private dropWaiting(playerId: string): void {
+    for (const [room, waiting] of this.waitingByRoom) {
+      if (waiting.seat.playerId === playerId) this.waitingByRoom.delete(room);
+    }
+    for (let index = this.queue.length - 1; index >= 0; index--) {
+      if (this.queue[index]?.seat.playerId === playerId) this.queue.splice(index, 1);
+    }
   }
 
   /** 待つのをやめる。 */

@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -235,5 +235,25 @@ describe("待ち合わせから決着まで", () => {
       body: JSON.stringify({ secret: stranger.secret, matchId: record.matchId }),
     });
     expect(denied.status).toBe(404);
+
+    /**
+     * カードの定義が変わった記録は読み返さない（§6.3）。そのまま再生すると、誤りを出さずに
+     * 違う盤面を見せる。別のカードデータで指したことにした 1 行を植えて、口が断るのを見る。
+     */
+    const planted: MatchRecord = {
+      ...record,
+      matchId: "べつのカードデータで指した対戦",
+      engine: { ...record.engine, cardDataSha256: "ちがうカードデータ" },
+    };
+    appendFileSync(
+      join(logDir, `${record.endedAt.slice(0, 10)}.jsonl`),
+      `${JSON.stringify(planted)}\n`,
+    );
+    const stale = await fetch(`http://${base}/api/replay`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: alpha.secret, matchId: planted.matchId }),
+    });
+    expect(stale.status).toBe(409);
   }, 60_000);
 });

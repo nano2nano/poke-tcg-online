@@ -75,6 +75,44 @@ describe("相手を見つける", () => {
     expect(lobby.waitingCount()).toBe(2);
   });
 
+  /**
+   * 別の窓を開いたり、待っている間に読み込み直すと、同じ打ち手が 2 回入ってくる。
+   * 自分と自分の対戦が 1 局として記録に残り、その打ち手に 1 勝 1 敗が付いてしまう。
+   */
+  it("同じ打ち手は自分と当たらない", () => {
+    ensureCards();
+    const arena = newArena();
+    const { lobby } = arena;
+    const deck = legalDecks()[0]!;
+    const { secret } = arena.accounts.create("ふたつの窓", 0);
+
+    const first = lobby.join({ secret, deck });
+    const second = lobby.join({ secret, deck });
+    // 2 回目で対戦が始まっていない。待っているのは 1 つだけである。
+    expect(second.ok && "seat" in second).toBe(false);
+    expect(lobby.waitingCount()).toBe(1);
+    // 古いほうは降りているので、取りに行っても座席は無い。
+    expect(first.ok ? lobby.claim(first.ticket) : null).toBeNull();
+
+    // 別の人が来れば、生きているほうの窓と繋がる。
+    const other = lobby.join(player(arena, "ほかのひと"));
+    expect(other.ok && "seat" in other).toBe(true);
+    expect(lobby.waitingCount()).toBe(0);
+  });
+
+  it("合言葉でも自分と当たらない", () => {
+    ensureCards();
+    const arena = newArena();
+    const { lobby } = arena;
+    const deck = legalDecks()[0]!;
+    const { secret } = arena.accounts.create("ふたつの窓", 0);
+
+    lobby.join({ secret, deck, roomCode: "へや" });
+    const second = lobby.join({ secret, deck, roomCode: "へや" });
+    expect(second.ok && "seat" in second).toBe(false);
+    expect(lobby.waitingCount()).toBe(1);
+  });
+
   it("待ち行列は先に待っていた人から繋ぐ", () => {
     ensureCards();
     const arena = newArena();

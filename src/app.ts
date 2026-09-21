@@ -20,7 +20,7 @@ import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
 import { AccountStore, type Account } from "./accounts.js";
-import { findMatch, frameAt, listMatches } from "./history.js";
+import { findMatch, frameAt, listMatches, replayability } from "./history.js";
 import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
 import type { ClientMessage } from "./protocol.js";
@@ -150,6 +150,16 @@ async function route(
     if (record === null) {
       // 指していない対戦と、存在しない対戦を、同じ応答にする。
       respondJson(response, 404, { error: "対戦が見つからない" });
+      return;
+    }
+    // カードの定義が変わっていれば、誤りを出さずに違う盤面を見せることになる（§6.3）。
+    const readable = replayability(record);
+    if (readable.kind === "card-data-mismatch") {
+      respondJson(response, 409, {
+        error: "この対戦は、いまとは違うカードデータで指されている。読み返せない。",
+        recorded: readable.expected,
+        current: readable.actual,
+      });
       return;
     }
     const ply = typeof body.ply === "number" ? body.ply : 0;

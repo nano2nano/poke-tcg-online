@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
 import { appendRecord, toRecord, type MatchRecord } from "../src/log.js";
-import { findMatch, frameAt, listMatches } from "../src/history.js";
+import { findMatch, frameAt, listMatches, replayability } from "../src/history.js";
+import { engineFingerprint } from "../src/fingerprint.js";
 import { concede } from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
 
@@ -130,6 +131,36 @@ describe("1 局の読み返し", () => {
     expect(keysOf(payload)).not.toContain("deck");
     expect(keysOf(payload)).not.toContain("prizes");
     expect(keysOf(payload)).toContain("deckCount");
+  });
+});
+
+/**
+ * エンジンの同一性（§6.3）。この規律は再生器がすでに持っていて、読み返しにも同じものを通す。
+ * カードの定義が変われば同じ `defId` が別のカードを指しうるので、黙って違う盤面を見せない。
+ */
+describe("読み返しとエンジンの版", () => {
+  it("カードデータが違えば読み返さない", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-8", ["あ", "い"]);
+    const now = engineFingerprint();
+
+    expect(replayability(record, now)).toEqual({ kind: "ok", engineCommitDiffers: false });
+    const other = replayability(record, { ...now, cardDataSha256: "ちがうカードデータ" });
+    expect(other.kind).toBe("card-data-mismatch");
+  });
+
+  it("エンジンの版が違うだけなら読み返せる。ただし断りを付ける", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-9", ["あ", "い"]);
+    const now = engineFingerprint();
+    const older = { ...now, commit: "ふるいコミット" };
+
+    // 版を理由に一律で捨てると、直した誤りに触れていない大多数の対戦まで読めなくなる。
+    expect(replayability(record, older)).toEqual({ kind: "ok", engineCommitDiffers: true });
+    expect(frameAt(record, 1, older).engineCommitDiffers).toBe(true);
+    expect(frameAt(record, 1, now).engineCommitDiffers).toBe(false);
   });
 });
 
