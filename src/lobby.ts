@@ -49,11 +49,23 @@ export interface Seated {
  * `dropped` が要るのは、**札が黙って消えることがある**からである。同じ打ち手が
  * 別の窓から入ると古い札は降りる。それを `waiting` と同じ応答にすると、
  * 古い窓は「相手を待っています」のまま永久に問い合わせ続ける。
+ *
+ * `finished` が別に要るのは、**席が決まったあとに終わった対戦がある**からである。
+ * 取りに行く前に相手が投了するか時間切れになると、席そのものはもう無い。
+ * これを `dropped` と同じにすると「別の窓から入り直した」と嘘を出すことになる。
+ * その人は指していないが打ち手としては数えられていて、持ち点も動き、記録も残っている。
  */
 export type ClaimOutcome =
   | { kind: "waiting" }
   | { kind: "seated"; seat: Seated }
+  | { kind: "finished"; matchId: string }
   | { kind: "dropped" };
+
+/**
+ * 引き取り口をいくつ覚えておくか。取りに来るのは 1 秒ごとなので、待っている人の数を
+ * 大きく超えていれば足りる。溢れたぶんは `dropped` に見えるが、それは元の作りと同じである。
+ */
+const SEATED_LIMIT = 256;
 
 export class Lobby {
   /** 待っている人。合言葉ごとに 1 人ずつと、合言葉なしの行列。 */
@@ -117,7 +129,7 @@ export class Lobby {
 
     // 先に待っていたほうを座席 0 に据える。先攻は seed が決めるので、この順は有利不利を生まない。
     const seats = this.start(waiting, ticket);
-    this.seated.set(waiting.ticket, seats[0]);
+    this.rememberSeated(waiting.ticket, seats[0]);
     return { ok: true, ticket: ticket.ticket, seat: seats[1] };
   }
 
@@ -130,19 +142,31 @@ export class Lobby {
    * 札そのものが引き取りの合鍵なので、同じ札で何度取りに来ても同じ座席を返す。
    */
   claim(ticketId: string): ClaimOutcome {
-    this.forgetFinished();
     const seat = this.seated.get(ticketId);
-    if (seat !== undefined) return { kind: "seated", seat };
+    if (seat !== undefined) {
+      /**
+       * **終わった対戦と、降りた札は別である。** 取りに行く前に相手が投了するか
+       * 時間切れになると席はもう無いが、それは「別の窓から入り直した」ではない。
+       * 対戦はあったことにして、そう答える。生きているかどうかは台帳が知っている。
+       */
+      if (this.registry.bySeatToken(seat.seatToken) === undefined) {
+        return { kind: "finished", matchId: seat.matchId };
+      }
+      return { kind: "seated", seat };
+    }
     return this.isWaiting(ticketId) ? { kind: "waiting" } : { kind: "dropped" };
   }
 
   /**
-   * 終わった対戦の引き取り口を落とす。消さなくなったぶん、ここで溜まりを止める。
-   * 生きているかどうかは台帳が知っている（`retire` が座席トークンを外す）。
+   * 引き取り口を覚える。消さなくなったぶん、入った順に古いものを捨てて溜まりを止める。
+   * 終わった対戦のぶんも、取りに来た人へ「もう終わっている」と答えるために残す。
    */
-  private forgetFinished(): void {
-    for (const [ticketId, seat] of this.seated) {
-      if (this.registry.bySeatToken(seat.seatToken) === undefined) this.seated.delete(ticketId);
+  private rememberSeated(ticketId: string, seat: Seated): void {
+    this.seated.set(ticketId, seat);
+    while (this.seated.size > SEATED_LIMIT) {
+      const oldest = this.seated.keys().next().value;
+      if (oldest === undefined) break;
+      this.seated.delete(oldest);
     }
   }
 

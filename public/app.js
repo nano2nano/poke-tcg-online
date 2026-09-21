@@ -197,6 +197,12 @@ async function waitForOpponent(ticket) {
       openMatch(claimed.seat);
       return;
     }
+    if (claimed?.kind === "finished") {
+      // 席に着く前に終わっている。指していなくても記録には残り、持ち点も動いている。
+      setStatus("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
+      refreshAccount().catch(() => {});
+      return;
+    }
     if (claimed?.kind === "dropped") {
       setStatus("別の窓から入り直したので、この窓は待つのをやめました。");
       return;
@@ -649,6 +655,14 @@ async function goToPly(ply) {
   // 別の対戦へ移ったか、あとから出した問い合わせが先に返っていれば、これは捨てる。
   if (replaying !== opened || mine !== opened.asked) return;
   replaying.ply = frame.ply;
+  /**
+   * **辿れる上限を、再現できる地点まで下げる。** 下げないと「さいごまで」がその先を
+   * 頼み続け、毎回同じ手数が返ってきて進まないように見える。
+   */
+  if (frame.divergedAt !== null) {
+    opened.moveCount = frame.divergedAt;
+    opened.wanted = frame.ply;
+  }
 
   const board = readerBoard(frame.views, replaying.seat);
   $("replay-self").innerHTML = sideHtml(board.self, true);
@@ -660,8 +674,13 @@ async function goToPly(ply) {
   const warning = frame.engineCommitDiffers
     ? "　※ この対戦を指したときとエンジンの版が違います"
     : "";
+  // 記録された手が、いまのエンジンでは合法でなくなった地点。ここから先は辿れない。
+  const diverged =
+    frame.divergedAt === null
+      ? ""
+      : `　※ ${frame.divergedAt} 手目から先は、いまのエンジンでは再現できません`;
   $("replay-status").textContent =
-    `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}`;
+    `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}${diverged}`;
 }
 
 /**
