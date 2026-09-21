@@ -13,19 +13,21 @@ import type { DeckList, Player } from "./engine.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { createMatch, type SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
+import type { AccountStore } from "./accounts.js";
 
 export interface JoinRequest {
-  playerId: string;
-  displayName: string;
+  /** 打ち手の合言葉（7.2 節）。これが無い対戦は始めない。 */
+  secret: string;
   deck: DeckList;
+  /** 名乗り直すとき。省けば登録済みの表示名を使う。 */
+  displayName?: string;
   /** 同じ文字列を入れた 2 人を繋ぐ。無ければ待ち行列へ入る。 */
   roomCode?: string;
 }
 
 export interface Ticket {
   ticket: string;
-  playerId: string;
-  displayName: string;
+  seat: SeatInfo;
   deck: DeckList;
   roomCode: string | null;
 }
@@ -50,10 +52,19 @@ export class Lobby {
 
   constructor(
     private readonly registry: MatchRegistry,
+    private readonly accounts: AccountStore,
     private readonly now: () => number = () => Date.now(),
   ) {}
 
   join(request: JoinRequest): JoinOutcome {
+    const nowMs = this.now();
+    // 合言葉を先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
+    const account =
+      request.displayName === undefined
+        ? this.accounts.touch(request.secret, nowMs)
+        : this.accounts.rename(request.secret, request.displayName, nowMs);
+    if (account === null) return { ok: false, errors: ["打ち手が見つからない"] };
+
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {
       return { ok: false, errors: violations.map(describeViolation) };
@@ -61,8 +72,12 @@ export class Lobby {
 
     const ticket: Ticket = {
       ticket: newToken(),
-      playerId: request.playerId,
-      displayName: request.displayName,
+      // 持ち点はこの時点の値で固める。対戦中に別の対戦が終わっても、この記録は動かない。
+      seat: {
+        playerId: account.playerId,
+        displayName: account.displayName,
+        rating: account.rating,
+      },
       deck: request.deck,
       roomCode: request.roomCode ?? null,
     };
@@ -118,10 +133,7 @@ export class Lobby {
   private start(first: Ticket, second: Ticket): [Seated, Seated] {
     const nowMs = this.now();
     const seatTokens: [string, string] = [newToken(), newToken()];
-    const seats: [SeatInfo, SeatInfo] = [
-      { playerId: first.playerId, displayName: first.displayName },
-      { playerId: second.playerId, displayName: second.displayName },
-    ];
+    const seats: [SeatInfo, SeatInfo] = [first.seat, second.seat];
     const match = createMatch({
       matchId: randomUUID(),
       decks: [first.deck, second.deck],

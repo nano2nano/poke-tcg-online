@@ -1,4 +1,5 @@
 node_modules/
 dist/
-# 対局ログ。実データは git の管理下に置かない。
+# 対局ログと打ち手。実データは git の管理下に置かない。
 data/matches/
+data/accounts.json

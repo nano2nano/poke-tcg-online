@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import { createApp, type App } from "../src/app.js";
+import { INITIAL_RATING } from "../src/accounts.js";
 import { engineFingerprint } from "../src/fingerprint.js";
 import type { MatchRecord } from "../src/log.js";
 import type { ClientMessage, ServerMessage } from "../src/protocol.js";
@@ -28,7 +29,7 @@ let logDir: string;
 beforeAll(async () => {
   ensureCards();
   logDir = mkdtempSync(join(tmpdir(), "poke-online-e2e-"));
-  app = createApp({ logDir });
+  app = createApp({ logDir, accountDir: logDir });
   await new Promise<void>((resolve) => app.http.listen(0, "127.0.0.1", () => resolve()));
   const { port } = app.http.address() as AddressInfo;
   base = `127.0.0.1:${port}`;
@@ -143,16 +144,18 @@ describe("人が書いたデッキ", () => {
 describe("待ち合わせから決着まで", () => {
   it("2 人が繋がり、1 局を最後まで指し、ログが再生できる", async () => {
     const deck = legalDecks()[0];
+    const alpha = await postJson("/api/account", { displayName: "あ" });
+    const beta = await postJson("/api/account", { displayName: "い" });
+    expect(alpha.account.rating).toBe(INITIAL_RATING);
+
     const first = await postJson("/api/join", {
-      playerId: "a",
-      displayName: "あ",
+      secret: alpha.secret,
       deck,
       roomCode: "とおし",
     });
     expect(first.ok).toBe(true);
     const second = await postJson("/api/join", {
-      playerId: "b",
-      displayName: "い",
+      secret: beta.secret,
       deck,
       roomCode: "とおし",
     });
@@ -195,5 +198,17 @@ describe("待ち合わせから決着まで", () => {
     expect(result.failures).toEqual([]);
     expect(result.applied).toBe(record.moves.length);
     expect(record.moves.length).toBeGreaterThan(10);
+
+    // 打ち手とその強さが対戦ごとに残る。あとから結び直すことはできない（7.2 節）。
+    expect(record.seats.map((seat) => seat.playerId)).toEqual([
+      alpha.account.playerId,
+      beta.account.playerId,
+    ]);
+    expect(record.seats.map((seat) => seat.rating)).toEqual([INITIAL_RATING, INITIAL_RATING]);
+
+    // 決着が持ち点へ入っている。記録に残るのは対戦を始めた時点の値なので、こちらだけが動く。
+    const after = await postJson("/api/account/me", { secret: alpha.secret });
+    expect(after.games).toBe(1);
+    expect(after.rating).not.toBe(INITIAL_RATING);
   }, 60_000);
 });

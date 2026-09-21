@@ -22,6 +22,10 @@ $("join-button").addEventListener("click", () => {
   join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
 });
 
+loadAccount()
+  .then(showAccount)
+  .catch((error) => setStatus(`打ち手を読めませんでした: ${error.message}`));
+
 $("check-button").addEventListener("click", () => {
   checkDeck()
     .then((deck) => {
@@ -38,6 +42,7 @@ $("concede-button").addEventListener("click", () => {
 async function join() {
   setStatus("デッキを送っています");
   cards = await getJson("/api/cards");
+  if (storedSecret() === null) showAccount(await loadAccount());
   const deck = await deckToSubmit();
   if (deck === null) {
     setStatus("デッキを直してから、もう一度おしてください。");
@@ -46,7 +51,7 @@ async function join() {
 
   const room = $("room").value.trim();
   const request = {
-    playerId: playerId(),
+    secret: storedSecret(),
     displayName: $("name").value.trim() || "ななし",
     deck: { cards: deck.cards },
   };
@@ -370,13 +375,41 @@ function setStatus(text) {
 }
 
 /** 座席に名乗る識別子。口座は持たないので、この端末が覚えているだけである（7 節）。 */
-function playerId() {
-  let id = localStorage.getItem("poke-player-id");
-  if (id === null) {
-    id = crypto.randomUUID();
-    localStorage.setItem("poke-player-id", id);
+/**
+ * 打ち手の合言葉。**サーバは控えを持たない**ので、失うとその戦績には戻れない。
+ * この画面は確認用なので、localStorage に置くだけにしておく。
+ */
+function storedSecret() {
+  return localStorage.getItem("poke-account-secret");
+}
+
+/** 合言葉が無ければ打ち手を作る。あれば戦績を読み直す。 */
+async function loadAccount() {
+  const secret = storedSecret();
+  if (secret !== null) {
+    const response = await fetch("/api/account/me", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret }),
+    });
+    if (response.ok) return response.json();
+    // 置き場に残っていても、サーバ側が消えていることがある。作り直す。
+    localStorage.removeItem("poke-account-secret");
   }
-  return id;
+  const created = await postJson("/api/account", {
+    displayName: $("name").value.trim() || "ななし",
+  });
+  localStorage.setItem("poke-account-secret", created.secret);
+  return created.account;
+}
+
+function showAccount(account) {
+  $("name").value = account.displayName;
+  const record =
+    account.games === 0
+      ? "まだ対戦していません"
+      : `${account.games} 戦 ${account.wins} 勝 ${account.losses} 敗 ${account.draws} 分`;
+  $("account").textContent = `持ち点 ${account.rating}（${record}）`;
 }
 
 async function getJson(path) {

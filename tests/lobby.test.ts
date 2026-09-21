@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { Lobby } from "../src/lobby.js";
+import { AccountStore } from "../src/accounts.js";
 import { MatchRegistry } from "../src/registry.js";
 import type { ServerMessage } from "../src/protocol.js";
 import { ensureCards, legalDecks } from "./helpers.js";
@@ -24,30 +25,41 @@ function recorder(): SeatSocket & { sent: ServerMessage[]; closed: boolean } {
   };
 }
 
-function newArena(): { lobby: Lobby; registry: MatchRegistry; hub: MatchHub } {
-  const registry = new MatchRegistry(mkdtempSync(join(tmpdir(), "poke-online-")));
+interface Arena {
+  lobby: Lobby;
+  registry: MatchRegistry;
+  hub: MatchHub;
+  accounts: AccountStore;
+}
+
+function newArena(): Arena {
+  const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
+  const registry = new MatchRegistry(dir);
+  const accounts = new AccountStore(dir);
   return {
     registry,
-    lobby: new Lobby(registry, () => 0),
+    accounts,
+    lobby: new Lobby(registry, accounts, () => 0),
     hub: new MatchHub({ registry, now: () => 0 }),
   };
 }
 
-function player(name: string, roomCode?: string) {
+/** 打ち手を 1 人作り、その合言葉で入る要求を組む。 */
+function player(arena: Arena, name: string, roomCode?: string) {
   const deck = legalDecks()[0];
-  return roomCode === undefined
-    ? { playerId: name, displayName: name, deck }
-    : { playerId: name, displayName: name, deck, roomCode };
+  const { secret } = arena.accounts.create(name, 0);
+  return roomCode === undefined ? { secret, deck } : { secret, deck, roomCode };
 }
 
 describe("相手を見つける", () => {
   it("同じ合言葉の 2 人を繋ぐ", () => {
     ensureCards();
-    const { lobby } = newArena();
-    const first = lobby.join(player("a", "あいことば"));
+    const arena = newArena();
+    const { lobby } = arena;
+    const first = lobby.join(player(arena, "a", "あいことば"));
     expect(first).toEqual({ ok: true, ticket: expect.any(String) });
 
-    const second = lobby.join(player("b", "あいことば"));
+    const second = lobby.join(player(arena, "b", "あいことば"));
     expect(second.ok && "seat" in second && second.seat.seat).toBe(1);
     const claimed = first.ok ? lobby.claim(first.ticket) : null;
     expect(claimed?.seat).toBe(0);
@@ -55,19 +67,21 @@ describe("相手を見つける", () => {
 
   it("合言葉が違えば繋がない", () => {
     ensureCards();
-    const { lobby } = newArena();
-    lobby.join(player("a", "ひとつめ"));
-    const second = lobby.join(player("b", "ふたつめ"));
+    const arena = newArena();
+    const { lobby } = arena;
+    lobby.join(player(arena, "a", "ひとつめ"));
+    const second = lobby.join(player(arena, "b", "ふたつめ"));
     expect(second.ok && "seat" in second).toBe(false);
     expect(lobby.waitingCount()).toBe(2);
   });
 
   it("待ち行列は先に待っていた人から繋ぐ", () => {
     ensureCards();
-    const { lobby } = newArena();
-    const first = lobby.join(player("a"));
-    lobby.join(player("b"));
-    const third = lobby.join(player("c"));
+    const arena = newArena();
+    const { lobby } = arena;
+    const first = lobby.join(player(arena, "a"));
+    lobby.join(player(arena, "b"));
+    const third = lobby.join(player(arena, "c"));
     // a と b が繋がり、c だけが残る。
     expect(first.ok ? lobby.claim(first.ticket) : null).not.toBeNull();
     expect(third.ok && "seat" in third).toBe(false);
@@ -76,8 +90,12 @@ describe("相手を見つける", () => {
 
   it("検査を通らないデッキでは待ち行列に入れない", () => {
     ensureCards();
-    const { lobby } = newArena();
-    const outcome = lobby.join({ playerId: "a", displayName: "a", deck: { cards: [] } });
+    const arena = newArena();
+    const { lobby } = arena;
+    const outcome = lobby.join({
+      secret: arena.accounts.create("a", 0).secret,
+      deck: { cards: [] },
+    });
     expect(outcome.ok).toBe(false);
     expect(lobby.waitingCount()).toBe(0);
   });
@@ -86,9 +104,10 @@ describe("相手を見つける", () => {
 describe("座席の接続", () => {
   it("座席トークンで局面一式を受け取る", () => {
     ensureCards();
-    const { lobby, hub } = newArena();
-    const first = lobby.join(player("a", "へや"));
-    const second = lobby.join(player("b", "へや"));
+    const arena = newArena();
+    const { lobby, hub } = arena;
+    const first = lobby.join(player(arena, "a", "へや"));
+    const second = lobby.join(player(arena, "b", "へや"));
     const seatA = first.ok ? lobby.claim(first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 
@@ -106,9 +125,10 @@ describe("座席の接続", () => {
 
   it("同じ座席に 2 本目が繋がったら古いほうを閉じる", () => {
     ensureCards();
-    const { lobby, hub } = newArena();
-    const first = lobby.join(player("a", "へや"));
-    lobby.join(player("b", "へや"));
+    const arena = newArena();
+    const { lobby, hub } = arena;
+    const first = lobby.join(player(arena, "a", "へや"));
+    lobby.join(player(arena, "b", "へや"));
     const seatA = first.ok ? lobby.claim(first.ticket) : null;
 
     const old = recorder();
@@ -121,7 +141,8 @@ describe("座席の接続", () => {
 
   it("知らない座席トークンでは繋がない", () => {
     ensureCards();
-    const { hub } = newArena();
+    const arena = newArena();
+    const { hub } = arena;
     const socket = recorder();
     expect(hub.attach(socket, "でたらめ")).toBe(false);
     expect(socket.sent[0]?.t).toBe("error");
@@ -129,9 +150,10 @@ describe("座席の接続", () => {
 
   it("投了すると両座席へ決着が届き、そこで初めて seed が出る", () => {
     ensureCards();
-    const { lobby, hub, registry } = newArena();
-    const first = lobby.join(player("a", "へや"));
-    const second = lobby.join(player("b", "へや"));
+    const arena = newArena();
+    const { lobby, hub, registry } = arena;
+    const first = lobby.join(player(arena, "a", "へや"));
+    const second = lobby.join(player(arena, "b", "へや"));
     const seatA = first.ok ? lobby.claim(first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 

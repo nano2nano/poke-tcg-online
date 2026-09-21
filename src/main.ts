@@ -6,9 +6,19 @@ import { engineFingerprint } from "./fingerprint.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
+/**
+ * 置き場は環境変数で動かせるようにする。既定はリポジトリの `data/` だが、
+ * 本番では書き込める別の場所を指すことになる。
+ */
+const LOG_DIR = process.env.POKE_LOG_DIR;
+const ACCOUNT_DIR = process.env.POKE_ACCOUNT_DIR;
+
 registerPoolCards();
 
-const app = createApp();
+const app = createApp({
+  ...(LOG_DIR === undefined ? {} : { logDir: LOG_DIR }),
+  ...(ACCOUNT_DIR === undefined ? {} : { accountDir: ACCOUNT_DIR }),
+});
 app.http.listen(PORT, () => {
   const engine = engineFingerprint();
   process.stdout.write(

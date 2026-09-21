@@ -19,6 +19,8 @@ import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
+import { AccountStore } from "./accounts.js";
+import { scoreForSeatZero } from "./match.js";
 import type { ClientMessage } from "./protocol.js";
 import { MatchRegistry } from "./registry.js";
 
@@ -33,6 +35,8 @@ const MAX_BODY_BYTES = 64 * 1024;
 export interface AppOptions {
   /** 対局ログの置き場。既定は `data/matches/`。 */
   logDir?: string;
+  /** 打ち手の置き場。既定は `data/`。 */
+  accountDir?: string;
   now?: () => number;
 }
 
@@ -41,18 +45,30 @@ export interface App {
   lobby: Lobby;
   registry: MatchRegistry;
   hub: MatchHub;
+  accounts: AccountStore;
   close(): Promise<void>;
 }
 
 export function createApp(options: AppOptions = {}): App {
+  const now = options.now ?? (() => Date.now());
   const registry = new MatchRegistry(options.logDir);
-  const lobby = new Lobby(registry, options.now);
-  const hub = new MatchHub(
-    options.now === undefined ? { registry } : { registry, now: options.now },
-  );
+  const accounts = new AccountStore(options.accountDir);
+  const lobby = new Lobby(registry, accounts, now);
+  // 持ち点はログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
+  const hub = new MatchHub({
+    registry,
+    now,
+    onFinish: (record) => {
+      accounts.applyResult(
+        [record.seats[0].playerId, record.seats[1].playerId],
+        scoreForSeatZero(record.matchResult),
+        now(),
+      );
+    },
+  });
 
   const http = createServer((request, response) => {
-    route(request, response, lobby).catch((error: unknown) => {
+    route(request, response, lobby, accounts, now).catch((error: unknown) => {
       respondJson(response, 400, { error: (error as Error).message });
     });
   });
@@ -81,6 +97,7 @@ export function createApp(options: AppOptions = {}): App {
   sweep.unref();
 
   return {
+    accounts,
     http,
     lobby,
     registry,
@@ -98,8 +115,29 @@ async function route(
   request: IncomingMessage,
   response: ServerResponse,
   lobby: Lobby,
+  accounts: AccountStore,
+  now: () => number,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
+
+  // 打ち手を作る。合言葉を返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
+  if (request.method === "POST" && url.pathname === "/api/account") {
+    const body = (await readBody(request)) as { displayName?: unknown };
+    const displayName = typeof body.displayName === "string" ? body.displayName : "";
+    respondJson(response, 200, accounts.create(displayName, now()));
+    return;
+  }
+  // 自分の戦績を見る。合言葉は本文で受け取る。URL に載せるとログや履歴に残る。
+  if (request.method === "POST" && url.pathname === "/api/account/me") {
+    const body = (await readBody(request)) as { secret?: unknown };
+    const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
+    if (account === null) {
+      respondJson(response, 404, { error: "打ち手が見つからない" });
+      return;
+    }
+    respondJson(response, 200, account);
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/api/cards") {
     respondJson(response, 200, cardIndex());
     return;
