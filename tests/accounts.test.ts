@@ -283,3 +283,29 @@ describe("レーティング", () => {
     expect(store.byPlayerId(a)?.games).toBe(0);
   });
 });
+
+/**
+ * シークレットを返すのはアカウントを作るこの 1 度だけで、サーバは控えを持たない。
+ * 書けずに 500 を返したのにメモリだけ残ると、**誰にも名乗れないアカウント**ができる。
+ * 消すエンドポイントは無く、次の詰め直しでそれがファイルにも載る。
+ */
+describe("作れなかったときの後始末", () => {
+  it("書けなければ、覚えたぶんも残さない", () => {
+    const dir = mkdtempSync(join(tmpdir(), "poke-acc-"));
+    const store = new AccountStore(dir);
+    const { secret } = store.create("さきに", 0);
+    const before = store.count();
+
+    // 保存先をファイルにしてしまえば、次の追記は必ず落ちる。
+    rmSync(join(dir, "accounts.jsonl"));
+    writeFileSync(dir + ".jsonl", "", "utf8");
+    const blocked = new AccountStore(dir + ".jsonl");
+    expect(() => blocked.create("書けない", 0)).toThrow();
+    expect(blocked.count()).toBe(0);
+    expect(blocked.bySecret("なんであれ")).toBeNull();
+
+    // 先に作れていたものは触っていない。
+    expect(store.count()).toBe(before);
+    expect(store.bySecret(secret)).not.toBeNull();
+  });
+});

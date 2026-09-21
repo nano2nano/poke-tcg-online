@@ -143,11 +143,53 @@ function isDayFile(name: string): boolean {
  * キャッシュに載せる対戦数の上限。超えたぶんは載せずに毎回読む。
  * ログは消えないので、上限を置かないと古い対戦のぶんが際限なく残る。
  */
-const LISTED_LIMIT = 50_000;
+const DEFAULT_LISTED_LIMIT = 50_000;
+let listedLimit = DEFAULT_LISTED_LIMIT;
 
-/** テストと計測のためにキャッシュを捨てる。 */
-export function forgetListed(): void {
+/**
+ * 読んだ日を覚える。上限を超えたら**自分より古い日から**捨て、それでも収まらなければ
+ * 自分を覚えない。
+ *
+ * **新しい日ほど残す。** いちばん伸びるのは今日のファイルで、伸びるたびに丸ごと
+ * 読み直すことになれば、キャッシュを置いた意味が無くなる。
+ *
+ * 新しい日を捨てて古い日を残すと、**両方が毎回お互いを追い出す。** 古い日を読むたびに
+ * 新しい日が落ち、次の呼び出しで新しい日を読み直し、それがまた古い日を落とす。
+ * 全部の日が上限に収まらないときに、いちばん重い読み直しが毎回起きることになる。
+ * 落ち着き先を「古い日だけが毎回読み直される」形にするために、捨てる向きを古い側に固定する。
+ */
+function rememberListed(path: string, day: ListedDay): void {
+  LISTED.delete(path);
+  const countOf = (key: string): number => LISTED.get(key)?.matches.length ?? 0;
+  const newerTotal = [...LISTED.keys()]
+    .filter((other) => other > path)
+    .reduce((sum, key) => sum + countOf(key), 0);
+
+  /**
+   * **入らないなら、何も捨てずに自分だけ諦める。** 古い日を捨ててから自分も入らないと
+   * 分かると、捨てた日と自分の両方を次から読み直すことになって、かえって重くなる。
+   *
+   * ただし、**いちばん新しい日だけは、1 日で上限を超えていても覚える。** そこがいちばん
+   * 読まれて、いちばん伸びる。覚えないと毎回そのファイルを頭から読むことになり、上限を
+   * 置いた目的（イベントループを止めない）と逆のことが起きる。上限が守るのはメモリで、
+   * それは 1 日ぶんを上限にする形になる。
+   */
+  if (day.matches.length + newerTotal > listedLimit && newerTotal > 0) return;
+
+  let total = countListed() + day.matches.length;
+  for (const older of [...LISTED.keys()].sort()) {
+    if (total <= listedLimit) break;
+    if (older > path) break;
+    total -= countOf(older);
+    LISTED.delete(older);
+  }
+  LISTED.set(path, day);
+}
+
+/** テストと計測のためにキャッシュを捨てる。`limit` を渡すと、そのあとの上限も差し替える。 */
+export function forgetListed(limit: number = DEFAULT_LISTED_LIMIT): void {
   LISTED.clear();
+  listedLimit = limit;
 }
 
 /** そのプレイヤーが対戦したものを、新しい順に返す。 */
@@ -197,11 +239,12 @@ function* listedDays(dir: string): Generator<ListedDay> {
       cached !== undefined && cached.consumed <= size
         ? cached
         : { consumed: 0, matches: [], ids: new Set<string>() };
-    if (day.consumed < size) {
-      appendListed(path, day, size);
-      if (countListed() <= LISTED_LIMIT) LISTED.set(path, day);
-      else LISTED.delete(path);
-    }
+    if (day.consumed < size) appendListed(path, day, size);
+    /**
+     * 読んだかどうかではなく、**差し替えたかどうか**で覚え直す。縮んだファイルが
+     * 0 バイトだと読むものが無く、覚え直しもしないと、古いほうが上限を食ったまま残る。
+     */
+    if (day.consumed < size || day !== cached) rememberListed(path, day);
     yield day;
   }
 }

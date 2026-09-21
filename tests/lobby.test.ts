@@ -32,14 +32,14 @@ interface Arena {
   accounts: AccountStore;
 }
 
-function newArena(): Arena {
+function newArena(seatedLimit?: number): Arena {
   const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
   const registry = new MatchRegistry(dir);
   const accounts = new AccountStore(dir);
   return {
     registry,
     accounts,
-    lobby: new Lobby(registry, accounts, () => 0),
+    lobby: new Lobby(registry, accounts, () => 0, seatedLimit),
     hub: new MatchHub({ registry, now: () => 0 }),
   };
 }
@@ -238,8 +238,126 @@ describe("席の引き換え", () => {
     expect(registry.bySeatToken(seat.seatToken)).toBeUndefined();
 
     expect(lobby.claim(first.ticket)).toEqual({ kind: "finished", matchId: seat.matchId });
-    // 知らないチケットは、これまでどおり「降りている」である。
-    expect(lobby.claim("そんなチケットは無い").kind).toBe("dropped");
+  });
+
+  /**
+   * **知らないチケットと、降ろしたチケットは別である。** ロビーはメモリにしか無いので、サーバを
+   * 入れ替えればチケットは全部知らないものになる。これを「降りている」と答えると、タブを 1 つしか
+   * 開いていない人にまで「別のタブから入り直した」と言うことになる。
+   */
+  it("知らないチケットは「降りている」ではなく「知らない」と答える", () => {
+    const arena = newArena();
+    const { lobby } = arena;
+    expect(lobby.claim("そんなチケットは無い").kind).toBe("unknown");
+
+    // こちらから降ろしたチケットだけが「降りている」になる。同じプレイヤーが別のタブから入り直す形。
+    const deck = legalDecks()[0]!;
+    const { secret } = arena.accounts.create("ふたつのタブ", 0);
+    const first = lobby.join({ secret, deck, roomCode: "へや" });
+    if (!first.ok) throw new Error("入れていない");
+    expect(lobby.claim(first.ticket).kind).toBe("waiting");
+    const again = lobby.join({ secret, deck, roomCode: "べつのへや" });
+    if (!again.ok) throw new Error("入れていない");
+    expect(lobby.claim(first.ticket).kind).toBe("dropped");
+
+    // 入れ替えのあと（＝何も覚えていないロビー）は、同じチケットでも「知らない」になる。
+    const fresh = newArena();
+    expect(fresh.lobby.claim(first.ticket).kind).toBe("unknown");
+  });
+
+  /**
+   * 席を覚えきれなくなったとき、**まだ対戦中の席を捨てない。** 捨てると、その人は
+   * 取りに来ても席をもらえず、画面は入り直せと言う。入り直せば 2 局目が始まり、
+   * 1 局目は時間切れの負けとして記録に残る。1 手も指していないのにである。
+   */
+  it("席が溢れても、まだ対戦中の席は返し続ける", () => {
+    const arena = newArena();
+    const { lobby } = arena;
+    const deck = legalDecks()[0]!;
+    const seat = (name: string): string => {
+      const a = arena.accounts.create(`${name}-a`, 0).secret;
+      const b = arena.accounts.create(`${name}-b`, 0).secret;
+      const first = lobby.join({ secret: a, deck, roomCode: name });
+      lobby.join({ secret: b, deck, roomCode: name });
+      if (!first.ok) throw new Error("入れていない");
+      return first.ticket;
+    };
+
+    const early = seat("さいしょ");
+    expect(lobby.claim(early).kind).toBe("seated");
+
+    // 覚えていられる数を超えるまで、終わらない対戦を積む。
+    for (let i = 0; i < 300; i++) seat(`へや-${i}`);
+
+    expect(lobby.claim(early).kind).toBe("seated");
+  }, 60_000);
+
+  /**
+   * 溢れたときに捨てるのは**溢れたぶんだけ**である。終わっているというだけでまとめて
+   * 捨てると、いま終わったばかりの対戦の席まで消える。その人は「もう終わっている」ではなく
+   * 「知らない」と言われ、リプレイへの入り口を失う。
+   */
+  it("溢れても、終わったばかりの席までまとめて捨てない", () => {
+    const arena = newArena(4);
+    const { lobby, registry } = arena;
+    const deck = legalDecks()[0]!;
+    const seat = (name: string): string => {
+      const a = arena.accounts.create(`${name}-a`, 0).secret;
+      const b = arena.accounts.create(`${name}-b`, 0).secret;
+      const first = lobby.join({ secret: a, deck, roomCode: name });
+      lobby.join({ secret: b, deck, roomCode: name });
+      if (!first.ok) throw new Error("入れていない");
+      return first.ticket;
+    };
+
+    // 終わった席を 2 つ作る。古いほう（さき）から捨てられる。
+    const older = seat("さき");
+    const newer = seat("あと");
+    for (const ended of registry.sweepTimeouts(60 * 60_000)) registry.retire(ended);
+    const started = lobby.claim(older);
+    if (started.kind !== "finished") throw new Error("終わっていない");
+    const olderMatchId = started.matchId;
+    expect(lobby.claim(newer).kind).toBe("finished");
+
+    // 上限（4）を 1 つだけ超えさせる。捨てるのは 1 つで足りる。
+    seat("いま-1");
+    seat("いま-2");
+    seat("いま-3");
+
+    /**
+     * **席は捨てても、終わった対戦があったことは答え続ける。** ここで「知らない」と
+     * 答えると、画面はもう一度さがせと言う。その人は 2 局目を始めてしまうが、
+     * 1 局目はレーティングを動かしログにも残っていて、本人はそこへ辿り着けない。
+     */
+    const gone = lobby.claim(older);
+    expect(gone.kind).toBe("finished");
+    if (gone.kind !== "finished") throw new Error("終わっていない");
+    expect(gone.matchId).toBe(olderMatchId);
+    // まだ溢れていないぶんは残っている。
+    expect(lobby.claim(newer).kind).toBe("finished");
+  });
+
+  /**
+   * `leave` は知らないチケットでも呼べる。それを「降ろした」と覚えると、知らないものに
+   * 「降りている」と答えるようになり、**呼ばれた回数だけ本物の記録が押し出される。**
+   */
+  it("知らないチケットに `leave` を呼んでも、「降りている」にはならない", () => {
+    const arena = newArena();
+    const { lobby } = arena;
+    const deck = legalDecks()[0]!;
+    const { secret } = arena.accounts.create("ひとり", 0);
+
+    const mine = lobby.join({ secret, deck, roomCode: "へや" });
+    if (!mine.ok) throw new Error("入れていない");
+    const again = lobby.join({ secret, deck, roomCode: "べつのへや" });
+    if (!again.ok) throw new Error("入れていない");
+    expect(lobby.claim(mine.ticket).kind).toBe("dropped");
+
+    for (let i = 0; i < 300; i++) lobby.leave(`知らないチケット-${i}`);
+
+    expect(lobby.claim("知らないチケット-0").kind).toBe("unknown");
+    // 本物の記録が押し出されていない。
+    expect(lobby.claim(mine.ticket).kind).toBe("dropped");
   });
 });
 
