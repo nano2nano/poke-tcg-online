@@ -5,7 +5,61 @@
  * 仕様の対象外であり、書き換わっても壊れないテストにしておく必要がある。
  */
 
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import {
+  expect,
+  test as base,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from "@playwright/test";
+
+/**
+ * 画面が投げっぱなしにした例外を集め、テストの終わりに 1 つも無いことを確かめる。
+ *
+ * **これが無いと、画面が毎回例外を投げていても 1 本も落ちない。** 例外は assert を
+ * 通らないので、盤面さえ描けていれば緑のままになる（仕込んで確認した）。
+ *
+ * **`console` の error は見ない。** わざと 503 や 502 を返すテストが、そのたびに
+ * ブラウザに「読み込めなかった」と書かせる。それを落ちる条件にすると、仕掛けた側の
+ * テストが自分の仕掛けで落ちる。ここで見たいのは、握られずに飛んだ例外だけである。
+ */
+const test = base.extend<{ pageErrors: string[] }>({
+  pageErrors: async ({}, use) => {
+    const errors: string[] = [];
+    await use(errors);
+    expect(errors).toEqual([]);
+  },
+  page: async ({ page, pageErrors }, use) => {
+    watch(page, pageErrors);
+    await use(page);
+  },
+});
+
+function watch(page: Page, errors: string[]): Page {
+  page.on("pageerror", (error) => errors.push(error.message));
+  return page;
+}
+
+/**
+ * 別々のアカウントで見る 2 枚のページと、その後片付け。
+ *
+ * ページを作るのはここだけにしてある。`browser.newPage()` を直に呼ぶと、そのページで
+ * 飛んだ例外を誰も見ないまま増える。
+ */
+async function openPair(
+  browser: Browser,
+  errors: string[],
+): Promise<[Page, Page, () => Promise<void>]> {
+  const contexts: [BrowserContext, BrowserContext] = [
+    await browser.newContext(),
+    await browser.newContext(),
+  ];
+  const [a, b] = await Promise.all(contexts.map((context) => context.newPage()));
+  const close = async (): Promise<void> => {
+    await Promise.all(contexts.map((context) => context.close()));
+  };
+  return [watch(a as Page, errors), watch(b as Page, errors), close];
+}
 
 /** アカウントは localStorage ごとに別なので、テストごとに新しい文脈を使えば混ざらない。 */
 test.describe.configure({ mode: "parallel" });
@@ -83,10 +137,9 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
   await expect(page.locator("#name")).toHaveValue("ぼくのなまえ");
 });
 
-test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser }) => {
+test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {
   const room = `あいことば-${Date.now()}`;
-  const [first, second] = await Promise.all([browser.newContext(), browser.newContext()]);
-  const [a, b] = await Promise.all([first.newPage(), second.newPage()]);
+  const [a, b, close] = await openPair(browser, pageErrors);
 
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
@@ -107,7 +160,7 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
   ]);
   expect(counts.filter((count) => count > 0)).toHaveLength(1);
 
-  await Promise.all([first.close(), second.close()]);
+  await close();
 });
 
 /**
@@ -116,10 +169,10 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
  */
 async function replayOfFinishedMatch(
   browser: Browser,
+  errors: string[],
   room: string,
 ): Promise<[Page, () => Promise<void>]> {
-  const [first, second] = await Promise.all([browser.newContext(), browser.newContext()]);
-  const [a, b] = await Promise.all([first.newPage(), second.newPage()]);
+  const [a, b, close] = await openPair(browser, errors);
 
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
@@ -160,12 +213,12 @@ async function replayOfFinishedMatch(
   await expect(a.locator("#replay")).toBeVisible();
   await expect(a.locator("#replay-status")).toContainText(/(^|[^0-9])0 \//);
 
-  return [a, async () => void (await Promise.all([first.close(), second.close()]))];
+  return [a, close];
 }
 
-test("読み返しで「1 手 ▶」を続けて押したぶんだけ進む", async ({ browser }) => {
+test("読み返しで「1 手 ▶」を続けて押したぶんだけ進む", async ({ browser, pageErrors }) => {
   test.slow(); // 1 局ぶん指してから読み返すので、ほかより時間が要る。
-  const [a, close] = await replayOfFinishedMatch(browser, `よみかえし-${Date.now()}`);
+  const [a, close] = await replayOfFinishedMatch(browser, pageErrors, `よみかえし-${Date.now()}`);
 
   /**
    * **押したぶんだけ進む。**
@@ -187,9 +240,9 @@ test("読み返しで「1 手 ▶」を続けて押したぶんだけ進む", as
   await close();
 });
 
-test("1 度取りに行けなかっただけで、次に押したぶんが飛ばない", async ({ browser }) => {
+test("1 度取りに行けなかっただけで、次に押したぶんが飛ばない", async ({ browser, pageErrors }) => {
   test.slow();
-  const [a, close] = await replayOfFinishedMatch(browser, `しくじり-${Date.now()}`);
+  const [a, close] = await replayOfFinishedMatch(browser, pageErrors, `しくじり-${Date.now()}`);
 
   // 1 手目だけ落とす。行き先を戻していないと、次に押したぶんが 2 手目へ飛ぶ。
   let failed = false;
@@ -209,9 +262,9 @@ test("1 度取りに行けなかっただけで、次に押したぶんが飛ば
   await close();
 });
 
-test("追い越して届いた古い局面では描き直さない", async ({ browser }) => {
+test("追い越して届いた古い局面では描き直さない", async ({ browser, pageErrors }) => {
   test.slow();
-  const [a, close] = await replayOfFinishedMatch(browser, `おいこし-${Date.now()}`);
+  const [a, close] = await replayOfFinishedMatch(browser, pageErrors, `おいこし-${Date.now()}`);
 
   /**
    * **先に出したものほど遅く返す。** 続けて押したり別の対戦へ移ったりすると、
