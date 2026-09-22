@@ -8,7 +8,7 @@
  * 人間の対局は、一様ランダムの自己対戦が踏まない筋を踏む。毎晩これを回せば、
  * 実際に指された盤面が未知の誤りを探す標本になる。
  *
- * 終了コード: 0 = 全件通過 / 1 = 再生できないログがある / 2 = 読むものが無い
+ * 終了コード: 0 = 全件通過 / 1 = 再生できないログか壊れた行がある / 2 = 読むものが無い
  *
  * **断った記録は「通らなかった」に数えない。** 種の読み方が変わる前のログは、これから先
  * ずっと再生できない（6.4 節）。それを失敗に数えると、この道具は恒久的に赤のままになり、
@@ -35,27 +35,42 @@ const fingerprint = engineFingerprint();
 let records = 0;
 let failed = 0;
 let refused = 0;
-let broken = 0;
+let unfinished = 0;
+let corrupt = 0;
 let commitDiffers = 0;
 
 for (const path of expand(targets)) {
-  for (const [lineNumber, line] of readFileSync(path, "utf8").split("\n").entries()) {
+  const lines = readFileSync(path, "utf8").split("\n");
+  // そのファイルで中身のある最後の行。書きかけかどうかの判定に使う。
+  const lastWithContent = lines.reduce(
+    (last, line, index) => (line.trim() === "" ? last : index),
+    -1,
+  );
+  for (const [lineNumber, line] of lines.entries()) {
     if (line.trim() === "") continue;
     /**
      * **切れた行があっても走査ごと止めない。** ここだけ `JSON.parse` が裸だったので、
      * 1 行のために全部の日が読めなくなっていた。サーバ側の読み手
      * （`src/history.ts`、`src/accounts.ts`）は前から数えて飛ばしている。
      *
-     * **失敗にも数えない。** 1 局は 12 KB あり（6.1 節）、`PIPE_BUF` を越える追記は
-     * 分割されうる。動いているサーバの脇でこれを回せば、書いている最中の対戦の行が
-     * 途中まで見えるのは**正常な姿**である。ここで 1 を返すと、対戦が終わるたびに
-     * 夜のジョブが赤くなり、本来見たい「再生できないログ」が埋もれる。
+     * **最後の行かどうかで扱いを分ける。** 大きい 1 行の追記はひと息で届くとは限らず、
+     * 動いているサーバの脇でこれを回せば、書いている最中の行が途中までしか見えないことが
+     * ある。それは正常な姿なので、失敗に数えると対戦が終わるたびに夜のジョブが赤くなる。
+     *
+     * **後ろに行が続いていれば、書きかけではありえない。** その行のあとの追記が
+     * 完了しているからである。そちらは壊れた記録なので 1 を返す。数えて要約に出すだけでは、
+     * 緑の要約を人が読むことに頼ることになり、赤に埋もれるのと同じだけ見落とす。
      */
     let record: MatchRecord;
     try {
       record = JSON.parse(line) as MatchRecord;
     } catch {
-      broken += 1;
+      if (lineNumber === lastWithContent) {
+        unfinished += 1;
+      } else {
+        corrupt += 1;
+        process.stdout.write(`${path}:${lineNumber + 1} 解析できない（後ろに行が続いている）\n`);
+      }
       continue;
     }
     records += 1;
@@ -92,13 +107,13 @@ if (records === 0) {
   process.exit(2);
 }
 
-if (broken > 0) process.stdout.write(`読めない行を ${broken} 行とばした\n`);
+if (unfinished > 0) process.stdout.write(`書きかけの最終行を ${unfinished} 行とばした\n`);
 process.stdout.write(
   `${records} 件のうち ${refused} 件は版が古く再生しなかった。` +
     `残りを再生して ${failed} 件が通らなかった` +
-    `（エンジンの commit が違うログ ${commitDiffers} 件）\n`,
+    `（壊れた行 ${corrupt} 行、エンジンの commit が違うログ ${commitDiffers} 件）\n`,
 );
-process.exit(failed === 0 ? 0 : 1);
+process.exit(failed === 0 && corrupt === 0 ? 0 : 1);
 
 function expand(paths: readonly string[]): string[] {
   const files: string[] = [];
