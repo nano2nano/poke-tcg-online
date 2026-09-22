@@ -23,7 +23,7 @@ export interface MatchRecord {
   schemaVersion: number;
   matchId: string;
   engine: EngineFingerprint;
-  /** 16 進 32 桁（9 節）。版 2 までは数値だった。 */
+  /** 16 進 32 桁（9 節）。 */
   seed: string;
   /** 公開された `nonce`。これと `seed` の対応が、シャッフルの公正さの検証になる（6.4 節）。 */
   seedNonce: string;

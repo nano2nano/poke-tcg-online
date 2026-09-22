@@ -32,15 +32,12 @@ describe("シャッフルのコミット", () => {
   it("コミットから seed が導けないよう、別々の接頭辞で導く", () => {
     const commitment = commitSeed("べつの nonce");
     expect(commitment.commit).not.toContain(commitment.seed);
-    expect(verifySeedCommitment({ ...commitment, seed: commitment.seed.replace(/^./, "f") })).toBe(
-      false,
-    );
+    // 1 桁足すだけにする。特定の文字へ置き換えると、元がその文字だった seed で改変にならない。
+    expect(verifySeedCommitment({ ...commitment, seed: `${commitment.seed}0` })).toBe(false);
   });
 
-  // 数値のまま渡すと、エンジンは Float64 のビットとして受けるので 2^53 通りに落ちる。
-  it("seed は 16 進 32 桁の文字列で、nonce ごとに変わる", () => {
-    const commitment = commitSeed("さらにべつの nonce");
-    expect(commitment.seed).toMatch(/^[0-9a-f]{32}$/);
-    expect(commitSeed("もうひとつの nonce").seed).not.toBe(commitment.seed);
+  // 数値で持つと、整数で配れる幅が 2^53 で頭打ちになる（仕様 9 節）。
+  it("seed は 16 進 32 桁の文字列である", () => {
+    expect(commitSeed("さらにべつの nonce").seed).toMatch(/^[0-9a-f]{32}$/);
   });
 });

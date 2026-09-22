@@ -211,7 +211,13 @@ async function route(
       respondJson(response, 409, {
         error: "この対戦は、いまとは違う乱数で指されている。読み返せない。",
         recorded: readable.recorded,
-        current: readable.oldest,
+        oldestReplayable: readable.oldest,
+      });
+      return;
+    }
+    if (readable.kind === "seed-commitment-mismatch") {
+      respondJson(response, 409, {
+        error: "この対戦は、記録された種が公開された値と合わない。読み返せない。",
       });
       return;
     }

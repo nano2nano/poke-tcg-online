@@ -55,17 +55,18 @@ export interface ReplayOptions {
  *
  * 1 だけでは、合法手の集合そのものが変わった再生を止められない。4 がそれを見る。
  *
- * `cardDataSha256` の不一致は再生を拒否し、`commit` の不一致は警告にとどめる。
+ * 再生を始める前に 2 つ断る。版が古すぎる記録（`OLDEST_REPLAYABLE_SCHEMA_VERSION`）と、
+ * `cardDataSha256` が食い違う記録である。`commit` の不一致は警告にとどめる。
  * 分ける理由は 6.3 節にある。
  */
 export function replay(record: MatchRecord, options: ReplayOptions = {}): ReplayResult {
   const failures: ReplayFailure[] = [];
   /**
    * **種の読み方が変わった版より前は、再生を始めない**（`OLDEST_REPLAYABLE_SCHEMA_VERSION`）。
-   * 走らせても 0 手目から非合法手として止まるが、出てくるのは「エンジンが変わった」という
-   * 誤った読みである。理由の分かる断り方をする。
+   * 走らせても 0 手目から止まるが、出てくるのは「エンジンが変わった」という誤った読みである。
+   * 欠けている版番号も断る側へ倒す。`undefined < 3` は false なので、大小では素通りする。
    */
-  if (record.schemaVersion < OLDEST_REPLAYABLE_SCHEMA_VERSION) {
+  if (!(record.schemaVersion >= OLDEST_REPLAYABLE_SCHEMA_VERSION)) {
     return {
       state: null,
       applied: 0,

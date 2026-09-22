@@ -9,6 +9,10 @@
  * 実際に指された盤面が未知の誤りを探す標本になる。
  *
  * 終了コード: 0 = 全件通過 / 1 = 再生できないログがある / 2 = 読むものが無い
+ *
+ * **断った記録は「通らなかった」に数えない。** 種の読み方が変わる前のログは、これから先
+ * ずっと再生できない（6.4 節）。それを失敗に数えると、この道具は恒久的に赤のままになり、
+ * 本来見たい「未知の誤り」が埋もれる。
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -30,6 +34,7 @@ const fingerprint = engineFingerprint();
 
 let records = 0;
 let failed = 0;
+let refused = 0;
 let commitDiffers = 0;
 
 for (const path of expand(targets)) {
@@ -49,6 +54,10 @@ for (const path of expand(targets)) {
 
     if (result.engineCommitDiffers) commitDiffers += 1;
     if (result.failures.length === 0) continue;
+    if (result.failures.some((failure) => failure.kind === "schema-too-old")) {
+      refused += 1;
+      continue;
+    }
     failed += 1;
     process.stdout.write(`${path}:${lineNumber + 1} ${record.matchId}\n`);
     for (const failure of result.failures) {
@@ -67,7 +76,8 @@ if (records === 0) {
 }
 
 process.stdout.write(
-  `${records} 件を再生し、${failed} 件が通らなかった` +
+  `${records} 件のうち ${refused} 件は版が古く再生しなかった。` +
+    `残りを再生して ${failed} 件が通らなかった` +
     `（エンジンの commit が違うログ ${commitDiffers} 件）\n`,
 );
 process.exit(failed === 0 ? 0 : 1);
