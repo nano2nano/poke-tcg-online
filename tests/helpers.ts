@@ -1,7 +1,7 @@
 /**
- * 試験の共通の足場。ランダムな合法手で 1 対戦を最後まで指す。
+ * テストの共通の足場。ランダムな合法手で 1 対戦を最後まで指す。
  *
- * エンジンへ触れるのは `src/engine.ts` 経由だけにする。試験の都合で
+ * エンジンへ触れるのは `src/engine.ts` 経由だけにする。テストの都合で
  * `engine/` の内部を直に読むと、エンジンの取り込み方を変えたときに直す場所が増える。
  */
 
@@ -26,7 +26,7 @@ export function legalDecks(): [DeckList, DeckList] {
   return [sampleDeck(), sampleDeck()];
 }
 
-/** 登録済みのカードから 1 つ拾う。試験が `defId` を書き写さないための口。 */
+/** 登録済みのカードから 1 つ拾う。テストが `defId` を書き写さないためのヘルパー。 */
 function findDefId(matches: (def: CardDef) => boolean): CardDefId {
   ensureCards();
   const found = [...loadGeneratedCards()]
@@ -58,9 +58,9 @@ export function newMatch(seedNonce: string, nowMs = 0): Match {
 export interface PlayOptions {
   /** 1 手ごとに呼ぶ。漏洩の検査はここに差し込む。 */
   inspect?: (match: Match, seat: Player) => void;
-  /** 手の数の上限。越えたら打ち切る（決着しない構成で試験が止まらないように）。 */
+  /** 手の数の上限。越えたら打ち切る（決着しない構成でテストが止まらないように）。 */
   maxMoves?: number;
-  /** 手番側が 1 手に掛ける時間。持ち時間の試験で使う。 */
+  /** 手番側が 1 手に掛ける時間。持ち時間のテストで使う。 */
   thinkMs?: number;
 }
 
@@ -95,12 +95,12 @@ export function playToEnd(match: Match, rngSeed: number, options: PlayOptions = 
   }
 }
 
-/** ある座席から見て中身が隠れているカードの個体番号（4.2 節の「隠れているカード」）。 */
+/** ある座席から見て中身が隠れているカードのインスタンス ID （4.2 節の「隠れているカード」）。 */
 export function hiddenInstanceIds(state: GameState, viewer: Player): Set<string> {
   const hidden = new Set<string>();
   for (const player of [0, 1] as Player[]) {
     const side = state.players[player];
-    // 山札とサイドは両者から隠れている。オモテのサイドも個体番号は出さない
+    // 山札とサイドは両者から隠れている。オモテのサイドもインスタンス ID は出さない
     // （`playerView` の `faceUpPrizes` は位置と `defId` だけを運ぶ）。
     for (const card of side.deck) hidden.add(card.instanceId);
     for (const card of side.prizes) hidden.add(card.instanceId);

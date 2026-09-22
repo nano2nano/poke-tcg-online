@@ -4,8 +4,8 @@
  * **読めるのは自分が指した対戦だけである。** 終わった対戦は当人どうしには全部見えてよいが、
  * 他人のデッキと引きが誰にでも見えると、それは対戦環境として成り立たない。
  *
- * 局面を持たないので、読み返すたびに `createGame` からやり直す。1 局まるごとでも
- * 50〜65 ミリ秒、1 手あたり 0.3 ミリ秒である（6.1 節）。索引もキャッシュも置かない。
+ * 局面を持たないので、読み返すたびに `createGame` からやり直す。それで足りる速さの
+ * 根拠は 6.6 節にある。索引は置かない。
  */
 
 import {
@@ -76,14 +76,10 @@ export interface ReplayFrame {
 }
 
 /**
- * その記録を、いまのエンジンで読み返してよいか（§6.3）。
+ * その記録を、いまのエンジンでリプレイしてよいか（§6.3）。
  *
- * `cardDataSha256` の不一致は**拒否する**。カードの定義が変われば、同じ `defId` が
- * 別のカードを指しうる。そのまま再生すると、誤りを出さずに違う盤面を見せる。
- * `commit` の不一致は**警告にとどめる**。エンジンの修理が変えるのは踏んだ対戦だけで、
- * 版を理由に一律で捨てると、直した誤りに触れていない大多数の対戦まで読めなくなる。
- *
- * この判断は再生器（`src/replay.ts`）と同じものである。読み返しにも同じ規律を通す。
+ * `cardDataSha256` の不一致は拒否し、`commit` の不一致は警告にとどめる。
+ * 分ける理由は §6.3 にある。再生器（`src/replay.ts`）と同じ判断を返す。
  */
 export type Replayability =
   | { kind: "ok"; engineCommitDiffers: boolean }
@@ -267,21 +263,29 @@ function countListed(): number {
   return total;
 }
 
-/** 前に読んだ続きから、改行で終わっているところまでを読み足す。 */
+/**
+ * 前に読んだ続きから、改行で終わっているところまでを読み足す。
+ *
+ * **次に読む位置は、復号した文字列ではなくバイト列の側で数える。** 追記が多バイト文字の
+ * 途中で落ちると、その端数は復号の時点で U+FFFD 1 文字（3 バイト）に化ける。文字列を
+ * 測り直すとそのぶん位置が進みすぎ、境目をまたぐ 1 行が読めなくなって、その対戦が
+ * 一覧から消える（`isListed` が `findMatch` を塞ぐので、リプレイも引けなくなる）。
+ */
 function appendListed(path: string, day: ListedDay, size: number): void {
   const length = size - day.consumed;
   const buffer = Buffer.alloc(length);
   const file = openSync(path, "r");
+  let read = 0;
   try {
-    readSync(file, buffer, 0, length, day.consumed);
+    read = readSync(file, buffer, 0, length, day.consumed);
   } finally {
     closeSync(file);
   }
-  const text = buffer.toString("utf8");
-  const end = text.lastIndexOf("\n");
+  const chunk = buffer.subarray(0, read);
+  const end = chunk.lastIndexOf(0x0a);
   if (end < 0) return;
   let broken = 0;
-  for (const line of text.slice(0, end).split("\n")) {
+  for (const line of chunk.subarray(0, end).toString("utf8").split("\n")) {
     if (line.trim() === "") continue;
     try {
       const listed = listedOf(JSON.parse(line) as MatchRecord);
@@ -293,7 +297,7 @@ function appendListed(path: string, day: ListedDay, size: number): void {
   }
   // 追記の途中で落ちれば書きかけの行が残る。1 行のために全員の一覧を止めない。
   if (broken > 0) console.warn(`${path}: 読めない行を ${broken} 行とばした`);
-  day.consumed += Buffer.byteLength(text.slice(0, end + 1), "utf8");
+  day.consumed += end + 1;
 }
 
 function listedOf(record: MatchRecord): ListedMatch {
@@ -311,12 +315,11 @@ function listedOf(record: MatchRecord): ListedMatch {
 /**
  * いま読み返されている対戦を数局だけ覚えておく。
  *
- * 読み返しは 1 手進めるたびにここを通る。そのたびに全部の日を走査し直すと、
- * 175 手の対戦を辿るのに走査が 175 回起きて、**その間ずっと進行中の対戦の手も
- * 持ち時間の見回りも止まる。**
+ * リプレイは 1 手進めるたびにここを通る。そのたびに全部の日を走査し直すと、
+ * **その間ずっと進行中の対戦の手も持ち時間のスイープも止まる。**
  *
- * これを置けるのは、**追記しかしないログだから**である。終わった対戦の 1 行は
- * 二度と書き変わらないので、覚えた値が古くなることがない。索引ではないので、
+ * これを置けるのは、追記しかしないログだからである。終わった対戦の 1 行は
+ * 二度と書き変わらないので、覚えた値が古くならない。索引ではないので、
  * 貯めるのは開いている数局だけにする（6.5 節、6.6 節）。
  */
 const OPENED = new Map<string, MatchRecord>();
@@ -325,14 +328,14 @@ const OPENED_LIMIT = 4;
 /**
  * その人が指した 1 局を引く。指していない対戦は見つからないものとして扱う。
  *
- * 走査するときは、**当たりうる行だけを解析する。** 走査の範囲は変えないが、
+ * 走査するときは、当たりうる行だけを解析する。 走査の範囲は変えないが、
  * `JSON.parse` は目当ての識別子を含む行にしか掛からない。新しい日から見るのは、
  * 読み返すのがたいてい最近の対戦だからである。
  */
 export function findMatch(dir: string, playerId: string, matchId: string): MatchRecord | null {
   // **すべての行に当たる識別子では走査しない。** 空文字はどの行にも含まれるので
-  // ふるいが素通りになり、全部の日を解析することになる。
-  // 外から来る値の形は口が確かめる（`isMatchId`）。ここはその最後の歯止めである。
+  // 事前フィルタが素通りになり、全部の日を解析することになる。
+  // 外から来る値の形はエンドポイントが確かめる（`isMatchId`）。ここはその最後のガードである。
   if (matchId.trim() === "") return null;
   const key = `${dir}\u0000${matchId}`;
   const opened = OPENED.get(key);
@@ -358,7 +361,7 @@ export function findMatch(dir: string, playerId: string, matchId: string): Match
  * 外から来た値が、対戦の識別子の形をしているか。`randomUUID()` が出すものだけを受ける。
  *
  * **走査の入口を守るためのものなので、緩めない。** 形の確かめを通ったものだけが
- * ログを読みに行く。読み返しは 1 局を名指しで引くので、名指しになっていない値で
+ * ログを読みに行く。リプレイは 1 局を名指しで引くので、名指しになっていない値で
  * 走査を始めさせない。
  */
 const MATCH_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -369,14 +372,14 @@ export function isMatchId(value: string): boolean {
 
 function remember(key: string, record: MatchRecord): void {
   OPENED.set(key, record);
-  // 入った順に捨てる。開いているものだけを持つので、深く数える値打ちがない。
+  // 入った順に捨てる。開いているものだけを持つので、厳密に数える価値はない。
   for (const old of OPENED.keys()) {
     if (OPENED.size <= OPENED_LIMIT) break;
     OPENED.delete(old);
   }
 }
 
-/** 覚えているものを捨てる。試験が同じ置き場を作り直すときに使う。 */
+/** 覚えているものを捨てる。テストが同じディレクトリを作り直すときに使う。 */
 export function forgetOpened(): void {
   OPENED.clear();
 }
@@ -384,7 +387,7 @@ export function forgetOpened(): void {
 /**
  * `ply` 手まで進めた局面を返す。
  *
- * **返すのは `playerView` と `projectEvents` の結果だけである**（1 節の S-2）。
+ * 返すのは `playerView` と `projectEvents` の結果だけである（1 節の S-2）。
  * 終わった対戦でも、生の `GameState` を外へ出す経路は作らない。
  *
  * 呼ぶ前に `replayability` を通すこと。カードの定義が変わった記録は、ここでは止まらない。
@@ -411,8 +414,8 @@ export function frameAt(
     if (logged === undefined) break;
     /**
      * **指す前に、いまのエンジンの合法手と突き合わせる。** 版が違えば、記録された手が
-     * 合法でなくなりうる。そのまま `applyMove` へ渡すとエンジンが投げ、口はその文句を
-     * そのまま 400 で外へ出す。読む人に意味が無く、その対戦はここから先へ進めなくなる。
+     * 合法でなくなりうる。そのまま `applyMove` へ渡すとエンジンが投げ、
+     * エンドポイントはその例外メッセージをそのまま 400 で外へ出す。読む人に意味が無く、その対戦はここから先へ進めなくなる。
      * §6.3 は版の違いを警告にとどめると決めているので、止めるのはこの 1 局のこの地点だけにする。
      */
     if (!legalMoves(result.state).some((candidate) => movesEqual(candidate, logged.move))) {
@@ -429,7 +432,7 @@ export function frameAt(
     try {
       next = applyMove(before, logged.move);
     } catch (error) {
-      // 合法手に在ったのに通らないのはエンジン側の話である。外へ文句は出さず、ここで止める。
+      // 合法手に在ったのに通らないのはエンジン側の話である。外へ例外メッセージは出さず、ここで止める。
       console.warn(`${record.matchId} の ${index} 手目を指せなかった:`, error);
       divergedAt = index;
       break;
@@ -469,12 +472,12 @@ function outcomeFor(result: MatchResult, seat: Player): "win" | "loss" | "draw" 
 /**
  * 日付で切った JSONL を順に読む。索引が要る問い合わせが無いので、走査で足りる（6.5 節）。
  *
- * `needle` を渡すと、**その文字列を含まない行は解析しない。** 走査そのものは減らないが、
+ * `needle` を渡すと、その文字列を含まない行は解析しない。 走査そのものは減らないが、
  * 1 行あたりの費用が `JSON.parse` から部分文字列の検索に落ちる。見つけたところで
- * 呼び手が抜ければ、そこで読むのも止まる。ふるいなので、当たった行は呼び手が確かめる。
+ * 呼び手が抜ければ、そこで読むのも止まる。事前フィルタなので、当たった行は呼び手が確かめる。
  *
- * **読めない行は飛ばす。** 追記の最中に落ちれば書きかけの行が残る。そこで例外を投げると、
- * 1 行のために全員の一覧と読み返しが止まる。読めた対戦を読めるままにするほうが要る。
+ * 読めない行は飛ばす。 追記の最中に落ちれば書きかけの行が残る。そこで例外を投げると、
+ * 1 行のために全員の一覧とリプレイが止まる。読めた対戦を読めるままにするほうが要る。
  * 飛ばしたことは残しておく。黙って減ると、消えたのか壊れたのか分からない。
  */
 function* readRecords(

@@ -1,13 +1,11 @@
 /**
- * 打ち手と持ち点（`docs/spec/battle-server.md` 7.2 節）。
+ * プレイヤーとレーティング（`docs/spec/battle-server.md` 7.2 節）。
  *
- * **持つ理由は対戦の体験ではなく、記録である。** 人の手を真似て学ぶとき、打った人の強さは
- * 最も効く共変量になる。そして座席と人をあとから結び直すことはできないので、
+ * 持つ理由は対戦の体験ではなく記録である。座席と人をあとから結び直すことはできないので、
  * 対戦の時点で持っていなければ、その対戦には二度と付けられない。
  *
- * **人を特定できる値を持たない。** 置くのはサーバが発行した識別子と、本人が名乗った
- * 表示名と、持ち点だけである。合言葉は控えを取らず、照合はハッシュで行う。
- * 学習に要るのは「同じ人か」と「どのくらい強いか」の 2 つだけで、それ以上は要らない。
+ * 置くのは識別子・表示名・レーティングだけで、人を特定できる値は持たない。
+ * シークレットは控えを取らず、照合はハッシュで行う。理由は 7.2 節にある。
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -20,9 +18,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+
+/** アカウントが見つからないことを、画面の文言に頼らずに伝える合図。 */
+export const ACCOUNT_NOT_FOUND = "account-not-found";
 import { fileURLToPath } from "node:url";
 
-/** 最初の持ち点。 */
+/** 最初のレーティング。 */
 export const INITIAL_RATING = 1500;
 
 /** 1 局で動く幅を決める係数。局数が少ないうちに動きすぎない程度に取る。 */
@@ -41,7 +42,7 @@ export interface Account {
   lastSeenAt: string;
 }
 
-/** 表示名の上限。名乗りであって本人確認ではないので、長さだけ見る。 */
+/** 表示名の上限。表示名であって本人確認ではないので、長さだけ見る。 */
 const MAX_DISPLAY_NAME = 40;
 
 const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
@@ -52,13 +53,13 @@ const COMPACT_FLOOR = 64;
 const COMPACT_RATIO = 2;
 
 interface StoredAccount extends Account {
-  /** 合言葉そのものは持たない。漏れても入れないようにする。 */
+  /** シークレットそのものは持たない。漏れても入れないようにする。 */
   secretHash: string;
 }
 
 export class AccountStore {
   private readonly accounts = new Map<string, StoredAccount>();
-  /** 合言葉のハッシュ → 識別子。 */
+  /** シークレットのハッシュ → 識別子。 */
   private readonly bySecretHash = new Map<string, string>();
   /** ファイルにある行数。実体より多ければ古い版が溜まっている。 */
   private lines = 0;
@@ -68,7 +69,7 @@ export class AccountStore {
     this.load();
   }
 
-  /** 新しい打ち手を作る。合言葉を返すのはこのときだけで、控えは持たない。 */
+  /** 新しいプレイヤーを作る。シークレットを返すのはこのときだけで、控えは持たない。 */
   create(displayName: string, nowMs: number): { account: Account; secret: string } {
     const secret = randomBytes(24).toString("base64url");
     const at = new Date(nowMs).toISOString();
@@ -116,7 +117,7 @@ export class AccountStore {
     return stored === undefined ? null : publicOf(stored);
   }
 
-  /** 名乗り直す。持ち点と戦績は動かない。 */
+  /** 表示名を変える。レーティングと戦績は動かない。 */
   rename(secret: string, displayName: string, nowMs: number): Account | null {
     const stored = this.storedBySecret(secret);
     if (stored === null) return null;
@@ -135,10 +136,10 @@ export class AccountStore {
   }
 
   /**
-   * 1 局の結果を持ち点へ入れる。`score` は座席 0 から見た値で、勝ち 1・引き分け 0.5・負け 0。
+   * 1 局の結果をレーティングへ入れる。`score` は座席 0 から見た値で、勝ち 1・引き分け 0.5・負け 0。
    *
    * 投了と時間切れも普通の負けとして数える。規則上の敗北条件ではない（§2.3）が、
-   * それは対局ログの `matchResult` が区別して持っている。持ち点は勝敗の履歴であって、
+   * それは対局ログの `matchResult` が区別して持っている。レーティングは勝敗の履歴であって、
    * 学習の終端報酬ではない。
    */
   applyResult(playerIds: [string, string], score: number, nowMs: number): [number, number] | null {
@@ -270,7 +271,7 @@ function hash(secret: string): string {
  * 一覧に並んだ相手の名前がうしろから読める形で出る。
  *
  * 相方を失った片割れ（Cs）も同じ扱いにする。それだけでは字にならず、書き出すときに
- * 別の値へ化けるので、置き場にも対局ログにも入れない。
+ * 別の値へ化けるので、ストアにも対局ログにも入れない。
  */
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}]/u;
 
@@ -285,7 +286,7 @@ const JOINERS = new Set(["\u200c", "\u200d"]);
 function cleanName(displayName: string): string {
   // 見えない字を落とすのは、表示名が画面と対局ログの両方へ出るためである。
   // **切るのは文字の単位である。** UTF-16 の長さで切ると、絵文字が半分になったものが
-  // そのまま置き場にも対局ログにも入る。
+  // そのままストアにも対局ログにも入る。
   const cleaned = [...displayName.trim()]
     .filter((char) => JOINERS.has(char) || !INVISIBLE.test(char))
     .slice(0, MAX_DISPLAY_NAME)
