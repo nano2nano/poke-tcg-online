@@ -27,7 +27,11 @@ import {
   projectEvents,
 } from "./engine.js";
 import type { GameState, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
-import { engineFingerprint, type EngineFingerprint } from "./fingerprint.js";
+import {
+  engineFingerprint,
+  OLDEST_REPLAYABLE_SCHEMA_VERSION,
+  type EngineFingerprint,
+} from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
 import type { MatchResult } from "./match.js";
 
@@ -83,12 +87,21 @@ export interface ReplayFrame {
  */
 export type Replayability =
   | { kind: "ok"; engineCommitDiffers: boolean }
+  | { kind: "schema-too-old"; recorded: number; oldest: number }
   | { kind: "card-data-mismatch"; expected: string; actual: string };
 
 export function replayability(
   record: MatchRecord,
   fingerprint: EngineFingerprint = engineFingerprint(),
 ): Replayability {
+  // 種の読み方そのものが変わっている版は、盤面を 1 枚も描く前に断る（§6.4）。
+  if (record.schemaVersion < OLDEST_REPLAYABLE_SCHEMA_VERSION) {
+    return {
+      kind: "schema-too-old",
+      recorded: record.schemaVersion,
+      oldest: OLDEST_REPLAYABLE_SCHEMA_VERSION,
+    };
+  }
   if (record.engine.cardDataSha256 !== fingerprint.cardDataSha256) {
     return {
       kind: "card-data-mismatch",

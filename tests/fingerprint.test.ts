@@ -28,10 +28,19 @@ describe("シャッフルのコミット", () => {
     expect(verifySeedCommitment(first)).toBe(true);
   });
 
-  // 接頭辞を分けないと、コミットを総当たりして seed が出る（seed は 32 ビットしかない）。
+  // 接頭辞を分けないと、コミットが seed そのものの導出になる。
   it("コミットから seed が導けないよう、別々の接頭辞で導く", () => {
     const commitment = commitSeed("べつの nonce");
-    expect(commitment.commit).not.toContain(commitment.seed.toString(16));
-    expect(verifySeedCommitment({ ...commitment, seed: commitment.seed + 1 })).toBe(false);
+    expect(commitment.commit).not.toContain(commitment.seed);
+    expect(verifySeedCommitment({ ...commitment, seed: commitment.seed.replace(/^./, "f") })).toBe(
+      false,
+    );
+  });
+
+  // 数値のまま渡すと、エンジンは Float64 のビットとして受けるので 2^53 通りに落ちる。
+  it("seed は 16 進 32 桁の文字列で、nonce ごとに変わる", () => {
+    const commitment = commitSeed("さらにべつの nonce");
+    expect(commitment.seed).toMatch(/^[0-9a-f]{32}$/);
+    expect(commitSeed("もうひとつの nonce").seed).not.toBe(commitment.seed);
   });
 });

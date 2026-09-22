@@ -520,7 +520,7 @@ describe("座席の接続", () => {
       expect(ended?.t).toBe("ended");
       if (ended?.t === "ended") {
         expect(ended.matchResult).toEqual({ kind: "concede", winner: 1, conceded: 0 });
-        expect(typeof ended.seed).toBe("number");
+        expect(ended.seed).toMatch(/^[0-9a-f]{32}$/);
       }
     }
     // 終わった対戦はレジストリを離れる。

@@ -10,6 +10,21 @@ function firstLegal(match: ReturnType<typeof newMatch>): Move {
   return legalMoves(match.state)[0] as Move;
 }
 
+/**
+ * 合法手が 2 つ以上ある開始局面。
+ *
+ * **1 つしか無い局面では、絞り込んだ申告が「全部見せた」と同じ意味になる**ので、
+ * 畳み込みと区別が付かない。どの手札が配られるかはシャッフル次第で、nonce を
+ * 固定しても乱数を変えれば変わるので、条件を満たすものを探して使う。
+ */
+function matchWithChoices(prefix: string): ReturnType<typeof newMatch> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const match = newMatch(`${prefix}-${attempt}`);
+    if (legalMoves(match.state).length >= 2) return match;
+  }
+  throw new Error(`合法手が 2 つ以上ある開始局面が見つからない: ${prefix}`);
+}
+
 describe("手の受理", () => {
   it("手番でない座席の手を弾き、局面を動かさない", () => {
     ensureCards();
@@ -129,7 +144,7 @@ describe("決着", () => {
     // 全部見せたなら「絞り込んでいない」と同じなので null へ畳む。
     expect(all.moves[0]?.offered).toBeNull();
 
-    const broken = newMatch("submit-11");
+    const broken = matchWithChoices("submit-11");
     const moverBroken = toMove(broken) as Player;
     const count = legalMoves(broken.state).length;
     const outcome = submitMove(broken, moverBroken, broken.version, firstLegal(broken), 0, [

@@ -22,7 +22,7 @@ import {
   listMatches,
   replayability,
 } from "../src/history.js";
-import { engineFingerprint } from "../src/fingerprint.js";
+import { engineFingerprint, OLDEST_REPLAYABLE_SCHEMA_VERSION } from "../src/fingerprint.js";
 import { concede } from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
 
@@ -513,6 +513,22 @@ describe("リプレイとエンジンの版", () => {
     expect(replayability(record, now)).toEqual({ kind: "ok", engineCommitDiffers: false });
     const other = replayability(record, { ...now, cardDataSha256: "ちがうカードデータ" });
     expect(other.kind).toBe("card-data-mismatch");
+  });
+
+  // 版 2 までの seed は 32 ビットの数値で、いまの乱数は同じ値から別の列を出す。
+  it("種の読み方が変わる前の版は、盤面を 1 枚も描く前に断る", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-10", ["あ", "い"]);
+    const now = engineFingerprint();
+
+    expect(replayability({ ...record, schemaVersion: 2 }, now)).toEqual({
+      kind: "schema-too-old",
+      recorded: 2,
+      oldest: OLDEST_REPLAYABLE_SCHEMA_VERSION,
+    });
+    // いまの版はここを通り抜ける。上の断りが版だけを見ていることの裏。
+    expect(replayability(record, now).kind).toBe("ok");
   });
 
   it("エンジンの版が違うだけなら読み返せる。ただし警告を付ける", () => {

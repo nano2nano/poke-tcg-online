@@ -16,8 +16,19 @@ import { fileURLToPath } from "node:url";
  * ログのレコードの形の版。読み手はこれを見て解釈を選ぶ。
  *
  * 2: 1 手ごとに `candidates` / `chosen` / `offered` を持つ（6.2 節）。
+ * 3: `seed` が数値から 16 進 32 桁の文字列になった（6.4 節、9 節）。
  */
-export const REPLAY_SCHEMA_VERSION = 2;
+export const REPLAY_SCHEMA_VERSION = 3;
+
+/**
+ * 再生できる最も古い版。
+ *
+ * **欄が増えただけでは上げない。** 上げるのは、これより前の記録が、いまのエンジンで
+ * **別の対戦を再生してしまう**ときだけである。版 2 までの `seed` は 32 ビットの数値で、
+ * 128 ビットになった乱数は同じ値から別の列を出す。再生すれば 0 手目から別のシャッフルに
+ * なるが、初期盤面は誤りを出さずに描けてしまう。読む人にそれと分からないので断る。
+ */
+export const OLDEST_REPLAYABLE_SCHEMA_VERSION = 3;
 
 export interface EngineFingerprint {
   /** エンジンの submodule が指す commit。取れなければ "unknown"。 */
@@ -67,21 +78,30 @@ function cardDataSha256(): string {
 /**
  * シャッフルの公正さを事後に示すための組（6.4 節）。
  *
- * `seed` は 32 ビットしかないので、`seed` を直接コミットしても総当たりで開く。
  * 256 ビットの `nonce` を引き、そこから**別々の接頭辞で** `seed` とコミットを導く。
- * 接頭辞を分けないとコミットから `seed` が出てしまう。
+ * コミットが満たすべきなのは、対戦の前にサーバを `seed` へ縛ること（拘束）と、
+ * 対戦中は `seed` を何も明かさないこと（秘匿）の 2 つである。接頭辞を分けておけば、
+ * この 2 つが `seed` の幅に依存しない。幅が足りずに総当たりで開いたのが 9 節の穴だった。
  */
 export interface SeedCommitment {
   nonce: string;
-  seed: number;
+  /**
+   * 16 進 32 桁。エンジンの `RngSeed` はこの形で 128 ビットをそのまま受ける。
+   * **数値では渡さない。** 数値の種は Float64 を通るので 2^53 通りしか無く、
+   * 自分の初手から総当たりで割り出せる（9 節）。
+   */
+  seed: string;
   commit: string;
 }
+
+/** `seed` の桁数。エンジンの `RngState` の幅（128 ビット）に合わせる。 */
+const SEED_HEX_DIGITS = 32;
 
 export function commitSeed(nonce: string = randomBytes(32).toString("hex")): SeedCommitment {
   const digest = createHash("sha256").update(`seed:${nonce}`).digest();
   return {
     nonce,
-    seed: digest.readUInt32BE(0),
+    seed: digest.toString("hex").slice(0, SEED_HEX_DIGITS),
     commit: createHash("sha256").update(`commit:${nonce}`).digest("hex"),
   };
 }

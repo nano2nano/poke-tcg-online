@@ -398,6 +398,27 @@ describe("マッチングから決着まで", () => {
     expect(stale.status).toBe(409);
 
     /**
+     * 種の読み方が変わる前の版も読み返さない（§6.4）。こちらは弾かないと、初期盤面だけが
+     * 誤りを出さずに描けてしまい、別のシャッフルを見ていることが読む人に分からない。
+     */
+    const old: MatchRecord = {
+      ...record,
+      matchId: randomUUID(),
+      schemaVersion: 2,
+      seed: 1234 as unknown as string,
+    };
+    appendFileSync(
+      join(logDir, `${record.endedAt.slice(0, 10)}.jsonl`),
+      `${JSON.stringify(old)}\n`,
+    );
+    const outdated = await fetch(`http://${base}/api/replay`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: alpha.secret, matchId: old.matchId }),
+    });
+    expect(outdated.status).toBe(409);
+
+    /**
      * **名指しになっていない識別子で走査を始めさせない。** 空文字はどの行にも含まれるので、
      * 通すと 1 回の問い合わせで全部の日を解析することになる。プレイヤーは誰でも作れるので、
      * これを繰り返されると進行中の対戦の手も持ち時間のスイープも止まる。
