@@ -42,9 +42,14 @@ for (const path of expand(targets)) {
   for (const [lineNumber, line] of readFileSync(path, "utf8").split("\n").entries()) {
     if (line.trim() === "") continue;
     /**
-     * 追記の途中で落ちれば書きかけの行が残る。**1 行のために走査ごと止めない。**
-     * ここだけ `JSON.parse` が裸だったので、切れた 1 行で全部の日が読めなくなっていた。
-     * サーバ側の読み手（`src/history.ts`、`src/accounts.ts`）は前から数えて飛ばしている。
+     * **切れた行があっても走査ごと止めない。** ここだけ `JSON.parse` が裸だったので、
+     * 1 行のために全部の日が読めなくなっていた。サーバ側の読み手
+     * （`src/history.ts`、`src/accounts.ts`）は前から数えて飛ばしている。
+     *
+     * **失敗にも数えない。** 1 局は 12 KB あり（6.1 節）、`PIPE_BUF` を越える追記は
+     * 分割されうる。動いているサーバの脇でこれを回せば、書いている最中の対戦の行が
+     * 途中まで見えるのは**正常な姿**である。ここで 1 を返すと、対戦が終わるたびに
+     * 夜のジョブが赤くなり、本来見たい「再生できないログ」が埋もれる。
      */
     let record: MatchRecord;
     try {
