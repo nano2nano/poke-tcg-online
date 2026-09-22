@@ -16,6 +16,8 @@
 
 ## 動かす
 
+Node.js 22.13 以上。対局ログの索引に `node:sqlite` を使う。
+
 ```sh
 git clone --recurse-submodules https://github.com/nano2nano/poke-tcg-online
 cd poke-tcg-online
