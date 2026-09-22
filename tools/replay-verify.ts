@@ -31,10 +31,15 @@ const fingerprint = engineFingerprint();
 /**
  * エンジンを直せば起きうる食い違い。ログの側に落ち度は無い。
  *
- * ここに挙がっていないもの（`seed-commitment` と `card-data-mismatch`）は、
- * **エンジンを直しても起きない。** 前者はシャッフルが仕組まれていたという意味で、
- * 後者は違うカードデータで指されたという意味である。版の違いを口実にこの 2 つを
- * 見逃すと、エンジンを上げた日から先、対局ログ全体で公正さの検査が止まる。
+ * ここに挙がっていないものは、**エンジンを直しても起きない。**
+ * `seed-commitment` はシャッフルが仕組まれていたという意味、`card-data-mismatch` は
+ * 違うカードデータで指されたという意味である。版の違いを口実にこの 2 つを見逃すと、
+ * エンジンを上げた日から先、対局ログ全体で公正さの検査が止まる。
+ *
+ * `threw` も入れない。`applyMove` が投げたぶんと、呼び出し側が渡した検査
+ * （`inspectState` の不変条件）が投げたぶんを、同じ種類で持っているためである。
+ * 後者はいまのエンジンが壊れているという意味で、この道具が探しているものそのものである。
+ * 記録された手がいまのエンジンで指せないだけなら `illegal-move` で出る。
  */
 const ENGINE_DRIFT: ReadonlySet<string> = new Set([
   "first-player-mismatch",
@@ -42,8 +47,23 @@ const ENGINE_DRIFT: ReadonlySet<string> = new Set([
   "illegal-move",
   "no-move-available",
   "outcome-mismatch",
-  "threw",
 ]);
+
+/**
+ * 「別のエンジンで書かれた」と言い切れるか。
+ *
+ * **片方でも `unknown` なら言い切れない。** 指紋の commit は `.git` が無ければ
+ * `unknown` に落ちる（`src/fingerprint.ts`）。本番は submodule ごと固めた成果物を置くので、
+ * そこが常の姿である。`engineCommitDiffers` をそのまま使うと、その形では全行が
+ * 除外に入り、いくつ落ちても 0 を返す検査になる。
+ */
+function writtenByAnotherEngine(record: MatchRecord): boolean {
+  return (
+    record.engine.commit !== "unknown" &&
+    fingerprint.commit !== "unknown" &&
+    record.engine.commit !== fingerprint.commit
+  );
+}
 
 let records = 0;
 let failed = 0;
@@ -84,7 +104,7 @@ for (const path of expand(targets)) {
     if (result.engineCommitDiffers) commitDiffers += 1;
     if (result.failures.length === 0) continue;
     const onlyDrift = result.failures.every((failure) => ENGINE_DRIFT.has(failure.kind));
-    if (result.engineCommitDiffers && onlyDrift) failedOnOlderEngine += 1;
+    if (writtenByAnotherEngine(record) && onlyDrift) failedOnOlderEngine += 1;
     else failed += 1;
     process.stdout.write(`${path}:${lineNumber + 1} ${record.matchId}\n`);
     for (const failure of result.failures) {
