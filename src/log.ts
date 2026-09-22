@@ -23,7 +23,8 @@ export interface MatchRecord {
   schemaVersion: number;
   matchId: string;
   engine: EngineFingerprint;
-  seed: number;
+  /** 32 桁の 16 進。`schemaVersion` 2 までは 32 ビットの数値だった。 */
+  seed: string;
   /** 公開された `nonce`。これと `seed` の対応が、シャッフルの公正さの検証になる（6.4 節）。 */
   seedNonce: string;
   seedCommit: string;

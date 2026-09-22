@@ -130,8 +130,15 @@ describe("決着", () => {
     expect(all.moves[0]?.offered).toBeNull();
 
     const broken = newMatch("submit-11");
+    // 均した結果が全部を覆うと、それ自体が null へ畳まれる。落ちた値と畳んだ値を
+    // 区別できるよう、合法手が 2 つ以上ある局面まで進めてから申告する。
+    while (legalMoves(broken.state).length < 2 && toMove(broken) !== null) {
+      const seat = toMove(broken) as Player;
+      expect(submitMove(broken, seat, broken.version, firstLegal(broken), 0).ok).toBe(true);
+    }
     const moverBroken = toMove(broken) as Player;
     const count = legalMoves(broken.state).length;
+    const before = broken.moves.length;
     const outcome = submitMove(broken, moverBroken, broken.version, firstLegal(broken), 0, [
       0,
       0,
@@ -140,7 +147,7 @@ describe("決着", () => {
     ]);
     // 規則の判定には使わない値なので、壊れていても手は通す。
     expect(outcome.ok).toBe(true);
-    expect(broken.moves[0]?.offered).toEqual([0]);
+    expect(broken.moves[before]?.offered).toEqual([0]);
   });
 
   it("決着したあとは手を受け付けない", () => {

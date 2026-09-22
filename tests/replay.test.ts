@@ -49,7 +49,7 @@ describe("対局ログの再生", () => {
     const record = toRecord(played.match);
     expect(seedCommitmentHolds(record)).toBe(true);
     // コミットから seed が出ないこと。接頭辞を分けている理由がこれである。
-    expect(record.seedCommit).not.toContain(record.seed.toString(16));
+    expect(record.seedCommit).not.toContain(record.seed);
   });
 
   it("投了で終わった対戦は、指された手までを再生できる", () => {

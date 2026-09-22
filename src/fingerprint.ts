@@ -16,8 +16,9 @@ import { fileURLToPath } from "node:url";
  * ログのレコードの形の版。読み手はこれを見て解釈を選ぶ。
  *
  * 2: 1 手ごとに `candidates` / `chosen` / `offered` を持つ（6.2 節）。
+ * 3: `seed` が 32 桁の 16 進文字列。2 までは 32 ビットの数値だった。
  */
-export const REPLAY_SCHEMA_VERSION = 2;
+export const REPLAY_SCHEMA_VERSION = 3;
 
 export interface EngineFingerprint {
   /** エンジンの submodule が指す commit。取れなければ "unknown"。 */
@@ -67,21 +68,29 @@ function cardDataSha256(): string {
 /**
  * シャッフルの公正さを事後に示すための組（6.4 節）。
  *
- * `seed` は 32 ビットしかないので、`seed` を直接コミットしても総当たりで開く。
  * 256 ビットの `nonce` を引き、そこから**別々の接頭辞で** `seed` とコミットを導く。
  * 接頭辞を分けないとコミットから `seed` が出てしまう。
  */
 export interface SeedCommitment {
   nonce: string;
-  seed: number;
+  /**
+   * 32 桁の 16 進。エンジンの `RngState` の幅と同じ 128 ビットを渡す。
+   *
+   * **幅を削らない。** ここが 32 ビットだった頃は、自分の初手 7 枚だけから
+   * 総当たりで seed が一意に決まり、自分の山札とサイド、相手のデッキリストを
+   * 知っていれば相手の山札とサイドまで読めた（エンジンの `RngState` の docblock）。
+   */
+  seed: string;
   commit: string;
 }
+
+const SEED_BYTES = 16;
 
 export function commitSeed(nonce: string = randomBytes(32).toString("hex")): SeedCommitment {
   const digest = createHash("sha256").update(`seed:${nonce}`).digest();
   return {
     nonce,
-    seed: digest.readUInt32BE(0),
+    seed: digest.subarray(0, SEED_BYTES).toString("hex"),
     commit: createHash("sha256").update(`commit:${nonce}`).digest("hex"),
   };
 }

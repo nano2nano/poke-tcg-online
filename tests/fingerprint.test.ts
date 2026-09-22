@@ -28,10 +28,14 @@ describe("シャッフルのコミット", () => {
     expect(verifySeedCommitment(first)).toBe(true);
   });
 
-  // 接頭辞を分けないと、コミットを総当たりして seed が出る（seed は 32 ビットしかない）。
+  // 接頭辞を分けないと、コミットの前半がそのまま seed になる。
   it("コミットから seed が導けないよう、別々の接頭辞で導く", () => {
     const commitment = commitSeed("べつの nonce");
-    expect(commitment.commit).not.toContain(commitment.seed.toString(16));
-    expect(verifySeedCommitment({ ...commitment, seed: commitment.seed + 1 })).toBe(false);
+    expect(commitment.commit).not.toContain(commitment.seed);
+    expect(verifySeedCommitment({ ...commitment, seed: "0".repeat(32) })).toBe(false);
+  });
+
+  it("seed はエンジンの RngState と同じ 128 ビットぶんある", () => {
+    expect(commitSeed("はばの nonce").seed).toMatch(/^[0-9a-f]{32}$/);
   });
 });

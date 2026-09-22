@@ -66,7 +66,7 @@ export interface EndedMessage {
   matchResult: MatchResult;
   /** エンジンが付けた勝敗。投了と時間切れでは null。 */
   outcome: GameOutcome | null;
-  seed: number;
+  seed: string;
   seedNonce: string;
   view: PlayerView;
 }

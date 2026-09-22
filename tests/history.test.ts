@@ -230,6 +230,36 @@ describe("1 局のリプレイ", () => {
     expect(frameAt(broken, 2).ply).toBe(2);
   });
 
+  /**
+   * `seed` の幅を変えた日（§9.1）。古いレコードは数値の seed を持っていて、いまのエンジンは
+   * それを受け取れるが、別の対戦になる。**断らずに、読めるところまで返し続けること**が
+   * §6.3 の決めなので、一覧からも再生からも消えないことを見る。
+   */
+  it("seed が数値だった頃の記録は、一覧に出たまま途中で止まる", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-old-seed", ["あ", "い"]);
+    const old: MatchRecord = {
+      ...record,
+      matchId: randomUUID(),
+      schemaVersion: 2,
+      // 幅を変える前に書かれた形。型の上では文字列だが、実データは数値である。
+      seed: 1234 as unknown as string,
+    };
+    appendRecord(old, dir);
+    forgetListed();
+    forgetOpened();
+
+    // 正規データは変わっていないので、拒否ではなく警告どまりである。
+    expect(replayability(old)).toEqual({ kind: "ok", engineCommitDiffers: false });
+    expect(listMatches(dir, "あ").map((listed) => listed.matchId)).toContain(old.matchId);
+
+    const frame = frameAt(old, old.moves.length);
+    expect(frame.divergedAt).not.toBeNull();
+    // 手の列そのものは読める。消えるのは盤面だけである。
+    expect(frame.moveCount).toBe(record.moves.length);
+  });
+
   it("食い違いが無ければ `divergedAt` は null のまま", () => {
     ensureCards();
     const dir = newDir();
