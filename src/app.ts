@@ -1,10 +1,10 @@
 /**
- * 待ち合わせ（HTTP）と対戦（WebSocket）を 1 つの口に組み立てる
+ * マッチング（HTTP）と対戦（WebSocket）を 1 つのサーバへ組み立てる
  * （`docs/spec/battle-server.md` 3 節、7 節）。
  *
- * 押し出しが要るのは対戦が始まってからで、待ち合わせは要求と応答で足りる。
+ * サーバからのプッシュが要るのは対戦が始まってからで、マッチングは要求と応答で足りる。
  * 起動そのものは `src/main.ts` が行う。ここを関数に切ってあるのは、
- * 通しの試験が同じ組み立てを任意の口で立ち上げられるようにするためである。
+ * 通しのテストが同じ組み立てを任意のポートで立ち上げられるようにするためである。
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -19,7 +19,9 @@ import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
-import { AccountStore, type Account } from "./accounts.js";
+import { ACCOUNT_NOT_FOUND, AccountStore, type Account } from "./accounts.js";
+
+export { ACCOUNT_NOT_FOUND };
 import { findMatch, frameAt, isMatchId, listMatches, replayability } from "./history.js";
 import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
@@ -29,7 +31,7 @@ import { RateLimit, type RateLimitOptions } from "./ratelimit.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** 持ち時間の掃き。手番側が考えている限り時計は進むので、定期に見る必要がある。 */
+/** 持ち時間のスイープ。手番側が考えている限り時計は進むので、定期に見る必要がある。 */
 export const TIMEOUT_SWEEP_MS = 5_000;
 
 /** 要求の本文の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
@@ -60,9 +62,9 @@ function accountLimitFromEnv(burst: string | undefined): RateLimitOptions | null
 }
 
 export interface AppOptions {
-  /** 対局ログの置き場。既定は `data/matches/`。 */
+  /** 対局ログの保存先。既定は `data/matches/`。 */
   logDir?: string;
-  /** 打ち手の置き場。既定は `data/`。 */
+  /** アカウントストアの保存先。既定は `data/`。 */
   accountDir?: string;
   now?: () => number;
   /** アカウントを作れる速さ。`null` なら掛けない。既定は `ACCOUNT_BURST` を見る。 */
@@ -92,7 +94,7 @@ export function createApp(options: AppOptions = {}): App {
       : options.accountLimit;
   const accountLimit = limitOptions === null ? null : new RateLimit(limitOptions);
   const trustedProxies = options.trustedProxies ?? trustedProxiesFromEnv(process.env.TRUST_PROXY);
-  // 持ち点はログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
+  // レーティングはログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
   const hub = new MatchHub({
     registry,
     now,
@@ -174,11 +176,11 @@ async function route(
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
 
-  // 済んだ対戦の一覧と読み返し。どちらも自分が指した対戦しか返さない（6.6 節）。
+  // 済んだ対戦の一覧とリプレイ。どちらも自分が指した対戦しか返さない（6.6 節）。
   if (request.method === "POST" && url.pathname === "/api/matches") {
     const account = await accountFromBody(request, accounts);
     if (account === null) {
-      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "打ち手が見つからない" });
+      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
       return;
     }
     respondJson(response, 200, { matches: listMatches(logDir, account.playerId) });
@@ -192,7 +194,7 @@ async function route(
     };
     const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
     if (account === null) {
-      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "打ち手が見つからない" });
+      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
       return;
     }
     // 形を確かめてから走査に入る。名指しになっていない値で全部の日を読まない（6.6 節）。
@@ -218,7 +220,7 @@ async function route(
     return;
   }
 
-  // 打ち手を作る。合言葉を返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
+  // プレイヤーを作る。シークレットを返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
   if (request.method === "POST" && url.pathname === "/api/account") {
     const body = (await readBody(request)) as { displayName?: unknown };
     /**
@@ -237,12 +239,12 @@ async function route(
     respondJson(response, 200, accounts.create(displayName, now()));
     return;
   }
-  // 自分の戦績を見る。合言葉は本文で受け取る。URL に載せるとログや履歴に残る。
+  // 自分の戦績を見る。シークレットは本文で受け取る。URL に載せるとログや履歴に残る。
   if (request.method === "POST" && url.pathname === "/api/account/me") {
     const body = (await readBody(request)) as { secret?: unknown };
     const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
     if (account === null) {
-      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "打ち手が見つからない" });
+      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
       return;
     }
     respondJson(response, 200, account);
@@ -302,9 +304,6 @@ async function route(
 
 const MALFORMED = "送られた中身の形が違う";
 
-/** 打ち手が見つからないことを、画面の文言に頼らずに伝える合図。 */
-export const ACCOUNT_NOT_FOUND = "account-not-found";
-
 /** 作る間隔が短すぎることの合図。 */
 export const TOO_MANY_ACCOUNTS = "too-many-accounts";
 
@@ -326,16 +325,14 @@ function trustedProxiesFromEnv(value: string | undefined): number {
 }
 
 /**
- * どこから来たかの見分け。
+ * どこから来たかの見分け（7.2 節）。
  *
- * **`x-forwarded-for` は既定では見ない。** あれは送り手が好きに書ける値なので、
- * 見てしまうと、書き換えながら送るだけで上限を素通りできる。
+ * **`x-forwarded-for` は既定では見ない。** 送り手が好きに書ける値なので、見てしまうと
+ * 書き換えながら送るだけで上限を素通りできる。
  *
- * **見るときは、間にいくつプロキシがあるかを数えて指す。** `TRUST_PROXY` はその数である。
- * 右から数えて、信用できるプロキシが書いたぶんを飛ばした先が接続元になる。
- * 右端を決め打ちにすると、プロキシが 2 つ（CDN とその内側など）あるときにプロキシ自身のアドレスを拾い、
- * **全員が同じ 1 つとして数えられて、全体が作れなくなる。**
- * 指した先が無ければ、信用できるプロキシより外は分からないということなので、接続元を使う。
+ * `TRUST_PROXY` が真偽値ではなくプロキシの数なのは、右端を決め打ちにすると、プロキシが 2 つ
+ * （CDN とその内側など）あるときにプロキシ自身のアドレスを拾うからである。そうなると
+ * **全員が同じ 1 つとして数えられて、誰もアカウントを作れなくなる。**
  */
 function originOf(request: IncomingMessage, trustedProxies: number): string {
   const direct = request.socket.remoteAddress ?? "unknown";
@@ -346,7 +343,7 @@ function originOf(request: IncomingMessage, trustedProxies: number): string {
   return hops[hops.length - trustedProxies]?.trim() ?? direct;
 }
 
-/** 外へ出してよい断り。これ以外の例外は、文言を外へ出さない。 */
+/** 外へ出してよいエラー応答。これ以外の例外は、文言を外へ出さない。 */
 class BadRequest extends Error {}
 
 /**
@@ -367,7 +364,7 @@ function toDeckList(body: unknown): DeckList {
   return { cards: cards as DeckList["cards"] };
 }
 
-/** 外から来た本文を待ち合わせの求めへ直す。省ける欄は、あれば形を確かめる。 */
+/** 外から来た本文を `JoinRequest` へ直す。省ける欄は、あれば形を確かめる。 */
 function toJoinRequest(body: Record<string, unknown>): JoinRequest {
   const { secret, deck, displayName, roomCode } = body;
   if (typeof secret !== "string") throw new BadRequest(MALFORMED);
@@ -412,7 +409,7 @@ function respondJson(response: ServerResponse, status: number, body: unknown): v
   response.end(JSON.stringify(body));
 }
 
-/** 本文の `secret` から打ち手を引く。合言葉を URL に載せないのはログと履歴に残るためである。 */
+/** 本文の `secret` からプレイヤーを引く。シークレットを URL に載せないのはログと履歴に残るためである。 */
 async function accountFromBody(
   request: IncomingMessage,
   accounts: AccountStore,
@@ -426,7 +423,7 @@ async function accountFromBody(
  *
  * `null` は JSON として正しいので `JSON.parse` は通る。そのまま返していたときは、
  * 各エンドポイントの `body.secret` が落ちて、その例外の文言が外へ出ていた。
- * 形の検査を口ごとに足すと足し忘れた口が残るので、ここで一度だけ通す。
+ * 形の検査をエンドポイントごとに足すと足し忘れが残るので、ここで一度だけ通す。
  */
 async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];

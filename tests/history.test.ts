@@ -1,5 +1,5 @@
 /**
- * 済んだ対戦の読み返し（`docs/spec/battle-server.md` 6.6 節）。
+ * 済んだ対戦のリプレイ（`docs/spec/battle-server.md` 6.6 節）。
  *
  * 読めるのは自分が指した対戦だけである。終わった対戦は当人どうしには全部見えてよいが、
  * 他人のデッキと引きが誰にでも見えるなら、それは対戦環境として成り立たない。
@@ -108,7 +108,7 @@ describe("済んだ対戦の一覧", () => {
 
   /**
    * 追記の最中に落ちれば、書きかけの行が 1 つ残る。そこで例外を投げると、
-   * その 1 行のために**全員の**一覧と読み返しが止まる。
+   * その 1 行のために**全員の**一覧とリプレイが止まる。
    */
   it("読めない行が混じっても、読める対戦は読める", () => {
     ensureCards();
@@ -129,7 +129,7 @@ describe("済んだ対戦の一覧", () => {
   });
 });
 
-describe("1 局の読み返し", () => {
+describe("1 局のリプレイ", () => {
   it("指していない対戦は引けない", () => {
     ensureCards();
     const dir = newDir();
@@ -191,7 +191,7 @@ describe("1 局の読み返し", () => {
   /**
    * エンジンを直すと、記録された手が合法でなくなることがある。6.3 節は版の違いを警告に
    * とどめると決めているので、**そのまま `applyMove` へ渡してエンジンに投げさせない。**
-   * 投げると口はその文句をそのまま外へ出し、その対戦は食い違う地点より先へ進めなくなる。
+   * 投げるとエンドポイントはその例外メッセージをそのまま外へ出し、その対戦は食い違う地点より先へ進めなくなる。
    * 再生器（`src/replay.ts`）は同じ地点を `illegal-move` として記録して止まる。
    */
   it("記録された手が合法でなくなっていたら、その手前までを返す", () => {
@@ -242,7 +242,7 @@ describe("1 局の読み返し", () => {
    * ことは漏れではない。**それでも射影を通らない値は出さない**というのが 1 節の S-2 で、
    * ここが見るのはそちらである。山札の並びは、終わった対戦でも誰にも渡さない。
    */
-  it("射影の結果しか返さない。山札とサイドの中身は読み返しでも渡さない", () => {
+  it("射影の結果しか返さない。山札とサイドの中身はリプレイでも渡さない", () => {
     ensureCards();
     const dir = newDir();
     const record = writeMatch(dir, "hist-6", ["あ", "い"]);
@@ -261,12 +261,12 @@ describe("1 局の読み返し", () => {
 });
 
 /**
- * エンジンの同一性（§6.3）。この規律は再生器がすでに持っていて、読み返しにも同じものを通す。
+ * エンジンの同一性（§6.3）。この規律は再生器がすでに持っていて、リプレイにも同じものを通す。
  * カードの定義が変われば同じ `defId` が別のカードを指しうるので、黙って違う盤面を見せない。
  */
 /**
- * 読み返しは 1 手進めるたびに 1 局を引き直す。そのたびに全部の日を走査すると、
- * その間ずっと進行中の対戦の手も持ち時間の見回りも止まる。
+ * リプレイは 1 手進めるたびに 1 局を引き直す。そのたびに全部の日を走査すると、
+ * その間ずっと進行中の対戦の手も持ち時間のスイープも止まる。
  */
 describe("開いている対戦を覚えておく", () => {
   it("覚えていても、指していない人には渡さない", () => {
@@ -296,9 +296,9 @@ describe("開いている対戦を覚えておく", () => {
 });
 
 /**
- * 読み返しは 1 局を名指しで引く。名指しになっていない値を通すと、ふるいが素通りして
- * 全部の日を解析することになる。**打ち手は誰でも作れるので、これは繰り返し送れる。**
- * その間は進行中の対戦の手も持ち時間の見回りも止まる。
+ * リプレイは 1 局を名指しで引く。名指しになっていない値を通すと、事前フィルタが素通りして
+ * 全部の日を解析することになる。**プレイヤーは誰でも作れるので、これは繰り返し送れる。**
+ * その間は進行中の対戦の手も持ち時間のスイープも止まる。
  */
 describe("名指しになっていない識別子では走査しない", () => {
   it("対戦の識別子の形だけを通す", () => {
@@ -340,7 +340,7 @@ describe("名指しになっていない識別子では走査しない", () => {
     forgetOpened();
     forgetListed();
     const record = writeMatch(dir, "hist-17", ["あ", "い"]);
-    // 読めない行を植える。読みに行けば必ず断りが出るので、出ないことが読んでいない証拠になる。
+    // 読めない行を植える。読みに行けば必ず警告が出るので、出ないことが読んでいない証拠になる。
     appendFileSync(join(dir, `${record.endedAt.slice(0, 10)}.jsonl`), `{"matchId":"こわれた"\n`);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -367,7 +367,7 @@ describe("名指しになっていない識別子では走査しない", () => {
     forgetOpened();
     const record = writeMatch(dir, "hist-16", ["あ", "い"]);
     // 形は通るが無い対戦の識別子を持つ、書きかけの行を植える。
-    // ふるいはこの行に当たるので、走査すれば必ず解析に失敗して断りが出る。
+    // 事前フィルタはこの行に当たるので、走査すれば必ず解析に失敗して警告が出る。
     const absent = randomUUID();
     appendFileSync(
       join(dir, `${record.endedAt.slice(0, 10)}.jsonl`),
@@ -376,7 +376,7 @@ describe("名指しになっていない識別子では走査しない", () => {
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      // 走査は起きるので、読めない行の断りが出る。
+      // 走査は起きるので、読めない行の警告が出る。
       expect(findMatch(dir, "あ", absent)).toBeNull();
       expect(warn).toHaveBeenCalled();
 
@@ -411,7 +411,7 @@ describe("キャッシュが溢れたとき", () => {
     const oldDay = join(dir, `${old.endedAt.slice(0, 10)}.jsonl`);
     appendFileSync(oldDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`);
 
-    // 今日のぶん。読めない行を植えておく。頭から読み直せば必ず断りが出る。
+    // 今日のぶん。読めない行を植えておく。頭から読み直せば必ず警告が出る。
     const todayDay = join(dir, "2099-01-01.jsonl");
     writeFileSync(todayDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`, "utf8");
     appendFileSync(todayDay, `{"matchId":"こわれた"\n`);
@@ -424,7 +424,7 @@ describe("キャッシュが溢れたとき", () => {
       // 今日のファイルが伸びる。ここで今日のぶんを捨てると、次から毎回読み直しになる。
       appendFileSync(todayDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`);
       warn.mockClear();
-      // 何度呼んでも、今日のファイルを頭から読み直さない（読み直せば植えた行で断りが出る）。
+      // 何度呼んでも、今日のファイルを頭から読み直さない（読み直せば植えた行で警告が出る）。
       for (let i = 0; i < 5; i++) expect(listMatches(dir, "あ").length).toBe(4);
       expect(warn).not.toHaveBeenCalled();
     } finally {
@@ -463,7 +463,7 @@ describe("キャッシュが溢れたとき", () => {
       expect(listMatches(dir, "あ").length).toBe(4);
       expect(warn).toHaveBeenCalled();
 
-      // 2 度目からは、その日を頭から読み直さない。読み直せば植えた行の断りが出る。
+      // 2 度目からは、その日を頭から読み直さない。読み直せば植えた行の警告が出る。
       warn.mockClear();
       for (let i = 0; i < 3; i++) expect(listMatches(dir, "あ").length).toBe(4);
       expect(warn).not.toHaveBeenCalled();
@@ -475,12 +475,12 @@ describe("キャッシュが溢れたとき", () => {
 });
 
 /**
- * 一覧と読み返しは、**同じファイルの集合**を見なければならない。片方だけが拾うと、
+ * 一覧とリプレイは、**同じファイルの集合**を見なければならない。片方だけが拾うと、
  * 一覧に出るのに開けない対戦ができる。アカウントの保存先を同じディレクトリに置くと、
- * それを対戦記録として読んで断りを出すことにもなる。
+ * それを対戦記録として読んで警告を出すことにもなる。
  */
-describe("一覧と読み返しが見るファイル", () => {
-  it("日付の名前でないファイルは、一覧も読み返しも読まない", () => {
+describe("一覧とリプレイが見るファイル", () => {
+  it("日付の名前でないファイルは、一覧もリプレイも読まない", () => {
     ensureCards();
     const dir = newDir();
     forgetOpened();
@@ -503,7 +503,7 @@ describe("一覧と読み返しが見るファイル", () => {
   });
 });
 
-describe("読み返しとエンジンの版", () => {
+describe("リプレイとエンジンの版", () => {
   it("カードデータが違えば読み返さない", () => {
     ensureCards();
     const dir = newDir();
@@ -515,12 +515,12 @@ describe("読み返しとエンジンの版", () => {
     expect(other.kind).toBe("card-data-mismatch");
   });
 
-  it("エンジンの版が違うだけなら読み返せる。ただし断りを付ける", () => {
+  it("エンジンの版が違うだけなら読み返せる。ただし警告を付ける", () => {
     ensureCards();
     const dir = newDir();
     const record = writeMatch(dir, "hist-9", ["あ", "い"]);
     const now = engineFingerprint();
-    const older = { ...now, commit: "ふるいコミット" };
+    const older = { ...now, commit: "べつのコミット" };
 
     // 版を理由に一律で捨てると、直した誤りに触れていない大多数の対戦まで読めなくなる。
     expect(replayability(record, older)).toEqual({ kind: "ok", engineCommitDiffers: true });
@@ -557,7 +557,7 @@ describe("縮んだ日のキャッシュ", () => {
       appendFileSync(day, `${JSON.stringify({ ...first, matchId: randomUUID() })}\n`);
       expect(listMatches(dir, "あ").length).toBe(3);
 
-      // 上限ちょうどなので、覚えられている。読み直せば植えた行で断りが出る。
+      // 上限ちょうどなので、覚えられている。読み直せば植えた行で警告が出る。
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         appendFileSync(day, `{"matchId":"こわれた"\n`);
@@ -580,3 +580,44 @@ function keysOf(value: unknown): string[] {
   if (value === null || typeof value !== "object") return [];
   return Object.entries(value).flatMap(([key, nested]) => [key, ...keysOf(nested)]);
 }
+
+/**
+ * 追記は、多バイト文字の**途中で**落ちうる。表示名が日本語である以上、端数が残る形は普通に起きる。
+ * 読み足した位置をバイト列でなく復号した文字列で数えると、その端数が U+FFFD 1 文字（3 バイト）に
+ * 化けたぶんだけ位置が進みすぎる。ずれは次に読むときへ持ち越されるので、**その後に足した対戦**の
+ * 行が頭から欠けて読めなくなる。読めなくなった対戦は一覧から消え、`isListed` が `findMatch` を
+ * 塞ぐのでリプレイも引けない。
+ */
+describe("文字の途中で切れた追記", () => {
+  it("そのあとに足した対戦も、キャッシュ経由で見える", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    forgetListed();
+
+    const first = writeMatch(dir, "hist-torn-1", ["ふやふ", "あいて"]);
+    const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // ここまでを読んでキャッシュに載せる。
+      expect(listMatches(dir, "ふやふ").map((m) => m.matchId)).toEqual([first.matchId]);
+
+      // 「ふ」= E3 81 B5 の 2 バイトめで落ちた追記。行として閉じていない。
+      appendFileSync(day, Buffer.from([0x7b, 0xe3, 0x81]));
+      appendFileSync(day, "\n");
+
+      // ここを読んだ時点で、次に読む位置がずれる。
+      const second = writeMatch(dir, "hist-torn-2", ["ふやふ", "あいて"]);
+      expect(listMatches(dir, "ふやふ").map((m) => m.matchId)).toContain(second.matchId);
+
+      // ずれていれば、この行は頭が欠けて読めない。
+      const third = writeMatch(dir, "hist-torn-3", ["ふやふ", "あいて"]);
+      expect(listMatches(dir, "ふやふ").map((m) => m.matchId)).toContain(third.matchId);
+      // 名指しで引くほうも、一覧と同じものを見る。
+      expect(findMatch(dir, "ふやふ", third.matchId)?.matchId).toBe(third.matchId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

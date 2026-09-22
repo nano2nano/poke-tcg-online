@@ -24,7 +24,7 @@ import type { ClientMessage, DeltaMessage, ServerMessage, SyncMessage } from "./
 import type { MatchRegistry } from "./registry.js";
 import type { MatchRecord } from "./log.js";
 
-/** 送り先。`ws` の `WebSocket` はこの形を満たす。試験では素のオブジェクトを渡す。 */
+/** 送り先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
 export interface SeatSocket {
   send(data: string): void;
   close(): void;
@@ -33,7 +33,7 @@ export interface SeatSocket {
 export interface HubOptions {
   registry: MatchRegistry;
   now?: () => number;
-  /** 対戦が終わってログへ落ちたあとに 1 度だけ呼ぶ。持ち点の更新がここに乗る。 */
+  /** 対戦が終わってログへ落ちたあとに 1 度だけ呼ぶ。レーティングの更新がここに乗る。 */
   onFinish?: (record: MatchRecord) => void;
 }
 
@@ -55,7 +55,7 @@ export class MatchHub {
     if (ref === undefined) {
       send(socket, {
         t: "error",
-        message: "座席が見つからない（対戦が終わっているか、合言葉が違う）",
+        message: "座席が見つからない（対戦が終わっているか、座席トークンが違う）",
       });
       return false;
     }
@@ -117,7 +117,7 @@ export class MatchHub {
     }
   }
 
-  /** 決着を両座席へ伝え、ログへ落として台帳から外す。 */
+  /** 決着を両座席へ伝え、ログへ落としてレジストリから外す。 */
   endMatch(match: Match): void {
     const perMatch = this.sockets.get(match.matchId);
     for (const seat of [0, 1] as Player[]) {
@@ -140,16 +140,15 @@ export class MatchHub {
     try {
       this.options.onFinish?.(record);
     } catch (error) {
-      // 持ち点は置き場へ書きに行く。書けなくても、決着そのものはもう済んでいる。
+      // レーティングはストアへ書きに行く。書けなくても、決着そのものはもう済んでいる。
       console.error(`決着の後始末に失敗した（${match.matchId}）:`, error);
     }
   }
 
-  /** 持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。 */
   /**
-   * 持ち時間の尽きた対戦を終わらせる。
+   * 持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
    *
-   * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じ見回りで終わらせるはずだった
+   * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じスイープで終わらせるはずだった
    * ほかの対戦が、時計を過ぎたまま残り続ける。
    */
   sweepTimeouts(): void {
@@ -196,7 +195,7 @@ export class MatchHub {
   }
 }
 
-/** 手番側かどうか。試験と配信層が同じ判定を使う。 */
+/** 手番側かどうか。テストと配信層が同じ判定を使う。 */
 export function isToMove(match: Match, seat: Player): boolean {
   return toMove(match) === seat;
 }

@@ -61,7 +61,7 @@ describe("呼ぶ速さの上限", () => {
  * `TRUST_PROXY=true` のような書き方は数に直すと `NaN` で、比較がすべて偽になる。
  */
 describe("プロキシの数の読み取り", () => {
-  it("数でない設定は 0 として扱い、断りを残す", async () => {
+  it("数でない設定は 0 として扱い、警告を残す", async () => {
     const { createApp } = await import("../src/app.js");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -127,8 +127,8 @@ describe("アカウントを作れる速さの設定", () => {
     }
   });
 
-  /** 読めない設定を「掛けた」と思い込むより、掛けずに断りを残すほうが気付ける。 */
-  it("読めない設定は掛けず、断りを残す", async () => {
+  /** 読めない設定を「掛けた」と思い込むより、掛けずに警告を残すほうが気付ける。 */
+  it("読めない設定は掛けず、警告を残す", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { create, close } = await app("たくさん");
     try {

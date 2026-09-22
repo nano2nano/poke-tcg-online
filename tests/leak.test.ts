@@ -26,7 +26,7 @@ function seatPayload(match: Match, seat: Player): string {
 }
 
 describe("座席へ配る値", () => {
-  it("隠れているカードの個体番号を 1 つも含まない", () => {
+  it("隠れているカードのインスタンス ID を 1 つも含まない", () => {
     ensureCards();
     for (const nonce of ["leak-1", "leak-2", "leak-3"]) {
       const match = newMatch(nonce);
@@ -35,7 +35,7 @@ describe("座席へ配る値", () => {
         inspect: (current, seat) => {
           const payload = seatPayload(current, seat);
           for (const instanceId of hiddenInstanceIds(current.state, seat)) {
-            // JSON の中では個体番号は必ず引用符で囲まれた値として現れる。
+            // JSON の中ではインスタンス ID は必ず引用符で囲まれた値として現れる。
             // 引用符ごと探さないと `p0-1` が `p0-12` に当たる。
             if (payload.includes(`"${instanceId}"`)) {
               leaks.push(`${nonce} 座席${seat} 手${current.version}: ${instanceId}`);

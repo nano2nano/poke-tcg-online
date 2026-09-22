@@ -12,7 +12,7 @@ import { resolveDecklist, type DecklistFailure } from "../src/decklist.js";
 import { DECK_SIZE } from "../src/deck.js";
 import { ensureCards } from "./helpers.js";
 
-/** 名前 → 定義。試験がカードの名前を書き写さないための口。 */
+/** 名前 → 定義。テストがカードの名前を書き写さないためのヘルパー。 */
 function byName(): Map<string, CardDef[]> {
   ensureCards();
   const built = new Map<string, CardDef[]>();
@@ -53,13 +53,13 @@ describe("デッキの文字列の解決", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // 個体番号はデッキ配列の添字なので、並びも正本である（5.3 節）。
+    // インスタンス ID はデッキ配列の添字なので、順序も情報源の一部である（5.3 節）。
     expect(result.deck.cards.length).toBe(5);
     expect(result.deck.cards.slice(0, 2).every((id) => id === result.entries[0]?.defId)).toBe(true);
     expect(result.deck.cards.slice(2).every((id) => id === result.entries[1]?.defId)).toBe(true);
   });
 
-  // ここが本題。455 種の名前が複数の defId を持つので、推測は必ず事故になる。
+  // ここが本題。複数の defId を持つ名前は珍しくないので、推測は必ず事故になる。
   it("同じ名前が複数あるときは、候補を返して拒否する", () => {
     const [name, defs] = ambiguousName();
     const result = resolveDecklist(`${name} 4`);
@@ -138,7 +138,7 @@ describe("デッキの文字列の解決", () => {
     expect(kinds(result.failures)).toEqual(["too-many-lines"]);
   });
 
-  it("破れを 1 件で打ち切らず、全部返す", () => {
+  it("違反を 1 件で打ち切らず、全部返す", () => {
     const result = resolveDecklist("ないカードA 1\nないカードB 2\nないカードC 3");
 
     expect(result.ok).toBe(false);

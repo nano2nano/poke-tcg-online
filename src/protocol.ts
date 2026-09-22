@@ -13,7 +13,7 @@ export type RejectReason = "not-your-turn" | "stale-version" | "illegal-move" | 
 
 /** 座席から見た持ち時間。残りはミリ秒。 */
 export interface ClockView {
-  /** 座席ごとの貯えの残り。 */
+  /** 座席ごとのバンクの残り。 */
   bankMs: [number, number];
   /** 手番側が今の手に使ってよい残り時間。手番が無ければ null。 */
   moveRemainingMs: number | null;
