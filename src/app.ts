@@ -35,8 +35,14 @@ export const TIMEOUT_SWEEP_MS = 5_000;
 /** 要求の本文の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
 const MAX_BODY_BYTES = 64 * 1024;
 
-/** 死活確認の間隔。この間 pong が返らない接続を切る。 */
-export const HEARTBEAT_MS = 30_000;
+/**
+ * 死活確認の間隔。この間 pong が返らない接続を切る。
+ *
+ * **短くしすぎない。** 詰まっているだけで、待てば戻る接続まで切ることになる。
+ * 切られた側が座席へ戻る道は、いまのところ参照クライアントには無い（10 節）ので、
+ * 切ればその人は時間切れで負ける。見つけたいのは戻ってこない接続だけである。
+ */
+export const HEARTBEAT_MS = 60_000;
 
 /**
  * アカウントを作れる速さ。**既定では掛けない。**
@@ -72,6 +78,8 @@ export interface AppOptions {
   accountLimit?: RateLimitOptions | null;
   /** 前にいくつプロキシを置いているか。0 なら `x-forwarded-for` を見ない。 */
   trustedProxies?: number;
+  /** 死活確認の間隔。既定は `HEARTBEAT_MS`。 */
+  heartbeatMs?: number;
 }
 
 export interface App {
@@ -167,7 +175,10 @@ export function createApp(options: AppOptions = {}): App {
 
   const sweep = setInterval(() => hub.sweepTimeouts(), TIMEOUT_SWEEP_MS);
   sweep.unref();
-  const heartbeat = setInterval(() => sweepDeadSockets(wss.clients, answered), HEARTBEAT_MS);
+  const heartbeat = setInterval(
+    () => sweepDeadSockets(wss.clients, answered),
+    options.heartbeatMs ?? HEARTBEAT_MS,
+  );
   heartbeat.unref();
 
   return {
