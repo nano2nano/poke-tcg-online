@@ -6,7 +6,13 @@
  */
 
 import type { CardDef, CardDefId, DeckList, GameState, Move, Player } from "../src/engine.js";
-import { legalMoves, loadGeneratedCards, nextInt, registerPoolCards } from "../src/engine.js";
+import {
+  createRng,
+  legalMoves,
+  loadGeneratedCards,
+  nextInt,
+  registerPoolCards,
+} from "../src/engine.js";
 import { sampleDeck } from "../src/sample-deck.js";
 import { commitSeed } from "../src/fingerprint.js";
 import { createMatch, submitMove, toMove, type Match } from "../src/match.js";
@@ -74,7 +80,7 @@ export interface PlayedMatch {
 export function playToEnd(match: Match, rngSeed: number, options: PlayOptions = {}): PlayedMatch {
   const maxMoves = options.maxMoves ?? 4000;
   const thinkMs = options.thinkMs ?? 0;
-  let rng = rngSeed >>> 0;
+  let rng = createRng(rngSeed);
   let nowMs = match.turnStartedAtMs;
   let moves = 0;
 

@@ -5,6 +5,7 @@
  * （同 4.1 節の S-2）。`GameState` と生の `DomainEvent` を運ぶ欄を作らない。
  */
 
+import { z } from "zod";
 import type { GameOutcome, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
 import type { MatchResult } from "./match.js";
 
@@ -21,20 +22,47 @@ export interface ClockView {
   toMove: Player | null;
 }
 
-export type ClientMessage =
-  | { t: "hello"; seatToken: string }
-  | {
-      t: "move";
-      stateVersion: number;
-      move: Move;
-      /**
-       * 画面が実際に見せた手の、`legalMoves` の中での位置（6.2 節）。全部見せたなら省く。
-       * 記録にだけ使う自己申告で、手を受理するかどうかの判断には入らない。
-       */
-      offered?: number[];
-    }
-  | { t: "concede" }
-  | { t: "ping" };
+/**
+ * 座席から届く 1 通（3.2 節）。**形を見るのはここだけである。**
+ *
+ * 通さずに配ると、`null` を 1 通送られただけで `t` を読む側が落ちる。受け手のいない
+ * 例外はプロセスごと落とすので、**そのとき指していた全員の対戦が巻き添えになる**
+ * （3.5 節に同じ形が 1 つある）。座席に就いた相手は何度でも送れるので、
+ * 「普通は来ない値」で済ませられない。
+ */
+export const clientMessageSchema = z.discriminatedUnion("t", [
+  z.object({
+    t: z.literal("hello"),
+    /**
+     * 3.2 節の表にある欄。**受け取るが、座席はこれで決めない。**
+     * 座席は接続の `seatToken`（3.3 節）で決まっている。ここの値で決め直すと、
+     * 他人の座席トークンを 1 通送るだけで座席を移れることになる。
+     */
+    seatToken: z.string().optional(),
+  }),
+  z.object({
+    t: z.literal("move"),
+    stateVersion: z.int().nonnegative(),
+    /**
+     * 手そのもの。**中身の形はここでは見ない。**
+     *
+     * `Move` はエンジンの型なので、ここへ写すとエンジンが増やすたびに 2 か所を直すことになり、
+     * 写し忘れたぶんは「正しい手なのに断られる」形で出る。サーバは受けた手を `legalMoves` と
+     * **構造ごと**突き合わせてから適用する（2.2 節の検査 3）ので、合法手と 1 欄でも違う object は
+     * そこで落ちる。ここで見るのは object であることだけでよい。
+     */
+    move: z.record(z.string(), z.unknown()),
+    /**
+     * 画面が実際に見せた手の、`legalMoves` の中での位置（6.2 節）。全部見せたなら省く。
+     * 記録にだけ使う自己申告で、手を受理するかどうかの判断には入らない。
+     */
+    offered: z.array(z.int().nonnegative()).optional(),
+  }),
+  z.object({ t: z.literal("concede") }),
+  z.object({ t: z.literal("ping") }),
+]);
+
+export type ClientMessage = z.infer<typeof clientMessageSchema>;
 
 /** 局面一式。`hello` の直後と、`stale-version` の応答として送る。 */
 export interface SyncMessage {
@@ -66,7 +94,8 @@ export interface EndedMessage {
   matchResult: MatchResult;
   /** エンジンが付けた勝敗。投了と時間切れでは null。 */
   outcome: GameOutcome | null;
-  seed: number;
+  /** 16 進 32 桁。 */
+  seed: string;
   seedNonce: string;
   view: PlayerView;
 }

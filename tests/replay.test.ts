@@ -24,7 +24,7 @@ describe("対局ログの再生", () => {
     const result = replay(record, { fingerprint: engineFingerprint() });
     expect(result.failures).toEqual([]);
     expect(result.applied).toBe(record.moves.length);
-    expect(result.state.outcome).toEqual(record.outcome);
+    expect(result.state?.outcome).toEqual(record.outcome);
   });
 
   it("再生の全局面でエンジンの不変条件が成り立つ", () => {
@@ -49,7 +49,7 @@ describe("対局ログの再生", () => {
     const record = toRecord(played.match);
     expect(seedCommitmentHolds(record)).toBe(true);
     // コミットから seed が出ないこと。接頭辞を分けている理由がこれである。
-    expect(record.seedCommit).not.toContain(record.seed.toString(16));
+    expect(record.seedCommit).not.toContain(record.seed);
   });
 
   it("投了で終わった対戦は、指された手までを再生できる", () => {
@@ -157,19 +157,28 @@ describe("対局ログの再生", () => {
     expect(result.failures.some((failure) => failure.kind === "first-player-mismatch")).toBe(true);
   });
 
-  it("版 1 のログには、合法手の数の検査を掛けない", () => {
+  // 版 2 までの seed は 32 ビットの数値で、いまの乱数は同じ値から別の列を出す。
+  it("種の読み方が変わる前の版は、手を 1 つも指さずに断る", () => {
     ensureCards();
     const played = playToEnd(newMatch("replay-12"), 2718);
     const record = toRecord(played.match);
-    const first = record.moves[0];
-    if (first === undefined) throw new Error("手が 1 つも無い");
-    const old = {
-      ...record,
-      schemaVersion: 1,
-      moves: [{ ...first, candidates: first.candidates + 1 }, ...record.moves.slice(1)],
-    };
 
-    expect(replay(old, { fingerprint: engineFingerprint() }).failures).toEqual([]);
+    for (const schemaVersion of [1, 2]) {
+      const old = { ...record, schemaVersion, seed: 1234 as unknown as string };
+      const result = replay(old, { fingerprint: engineFingerprint() });
+      expect(result.failures).toEqual([
+        { kind: "schema-too-old", recorded: schemaVersion, oldest: 3 },
+      ]);
+      // 断る側が 1 手でも指していると、そのぶん別の対戦を再生している。
+      expect(result.applied).toBe(0);
+    }
+
+    // いまの版はここを通り抜ける。上の断りが版だけを見ていることの裏。
+    expect(
+      replay(record, { fingerprint: engineFingerprint() }).failures.some(
+        (failure) => failure.kind === "schema-too-old",
+      ),
+    ).toBe(false);
   });
 
   it("1 局のログは gzip で 1 KB 台に収まる", () => {

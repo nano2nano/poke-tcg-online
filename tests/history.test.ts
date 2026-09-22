@@ -5,24 +5,17 @@
  * 他人のデッキと引きが誰にでも見えるなら、それは対戦環境として成り立たない。
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGame, playerView, projectEvents } from "../src/engine.js";
 import type { Move } from "../src/engine.js";
 import { appendRecord, toRecord, type MatchRecord } from "../src/log.js";
-import {
-  findMatch,
-  forgetListed,
-  forgetOpened,
-  frameAt,
-  isMatchId,
-  listMatches,
-  replayability,
-} from "../src/history.js";
-import { engineFingerprint } from "../src/fingerprint.js";
+import { findMatch, frameAt, isMatchId, listMatches, replayability } from "../src/history.js";
+import { closeIndexes } from "../src/match-index.js";
+import { engineFingerprint, OLDEST_REPLAYABLE_SCHEMA_VERSION } from "../src/fingerprint.js";
 import { concede } from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
 
@@ -44,6 +37,17 @@ function writeMatch(dir: string, nonce: string, players: [string, string]): Matc
 
 function newDir(): string {
   return mkdtempSync(join(tmpdir(), "poke-history-"));
+}
+
+/** 索引はテストごとに別のディレクトリへ作られる。開いたぶんは最後に閉じる。 */
+afterAll(() => closeIndexes());
+
+/** 索引のファイルを消す。正本の JSONL は残す。 */
+function dropIndex(dir: string): void {
+  closeIndexes();
+  for (const suffix of ["", "-wal", "-shm"]) {
+    rmSync(join(dir, `index.sqlite${suffix}`), { force: true });
+  }
 }
 
 describe("済んだ対戦の一覧", () => {
@@ -69,7 +73,7 @@ describe("済んだ対戦の一覧", () => {
   it("いちど読んだところを読み直さず、追記ぶんだけを読み足す", () => {
     ensureCards();
     const dir = newDir();
-    forgetListed();
+    closeIndexes();
     const first = writeMatch(dir, "hist-cache", ["あ", "い"]);
     const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
     // 読めない行は読んだときに知らせが出る。これを「読んだかどうか」の目印に使う。
@@ -85,7 +89,7 @@ describe("済んだ対戦の一覧", () => {
       expect(warn).not.toHaveBeenCalled();
 
       // 追記されたぶんは読む。壊れた行はもう読まない。
-      const second = writeMatch(dir, "hist-cache", ["あ", "う"]);
+      const second = writeMatch(dir, "hist-cache-2", ["あ", "う"]);
       expect(second.endedAt.slice(0, 10)).toBe(first.endedAt.slice(0, 10));
       expect(listMatches(dir, "あ").length).toBe(2);
       expect(warn).not.toHaveBeenCalled();
@@ -261,23 +265,18 @@ describe("1 局のリプレイ", () => {
 });
 
 /**
- * エンジンの同一性（§6.3）。この規律は再生器がすでに持っていて、リプレイにも同じものを通す。
- * カードの定義が変われば同じ `defId` が別のカードを指しうるので、黙って違う盤面を見せない。
+ * リプレイは 1 手進めるたびに 1 局を引き直す。索引はその 1 行の位置を持っているので、
+ * 読むのはその 1 行だけである。**位置を持っていることと、読んでよいかは別の話である。**
  */
-/**
- * リプレイは 1 手進めるたびに 1 局を引き直す。そのたびに全部の日を走査すると、
- * その間ずっと進行中の対戦の手も持ち時間のスイープも止まる。
- */
-describe("開いている対戦を覚えておく", () => {
-  it("覚えていても、指していない人には渡さない", () => {
+describe("索引から 1 局を引く", () => {
+  it("索引にあっても、指していない人には渡さない", () => {
     ensureCards();
     const dir = newDir();
-    forgetOpened();
+    closeIndexes();
     const record = writeMatch(dir, "hist-13", ["あ", "い"]);
 
-    // まず当人が引いて、覚えさせる。
     expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
-    // 覚えたものを、指していない人が引けてはいけない。
+    // 索引を引けることと、その対戦を読めることを取り違えない。
     expect(findMatch(dir, "そとのひと", record.matchId)).toBeNull();
     expect(findMatch(dir, "い", record.matchId)?.matchId).toBe(record.matchId);
   });
@@ -285,7 +284,7 @@ describe("開いている対戦を覚えておく", () => {
   it("見つからなかったことは覚えない。あとから書かれた対戦も引ける", () => {
     ensureCards();
     const dir = newDir();
-    forgetOpened();
+    closeIndexes();
     const first = writeMatch(dir, "hist-14", ["あ", "い"]);
     expect(findMatch(dir, "あ", "まだ無い対戦")).toBeNull();
 
@@ -293,14 +292,34 @@ describe("開いている対戦を覚えておく", () => {
     expect(findMatch(dir, "あ", later.matchId)?.matchId).toBe(later.matchId);
     expect(findMatch(dir, "あ", first.matchId)?.matchId).toBe(first.matchId);
   });
+
+  /**
+   * **索引が持つのはバイトの位置なので、1 バイトずれれば別の対戦が読める。**
+   * 同じ日のファイルに何局も並ぶので、位置がずれても `JSON.parse` は通りうる。
+   * 引いた識別子と読めた識別子が一致することまで見る。
+   */
+  it("同じ日に並んだ対戦を、それぞれ取り違えずに引く", () => {
+    ensureCards();
+    const dir = newDir();
+    closeIndexes();
+    const written = ["hist-row-1", "hist-row-2", "hist-row-3", "hist-row-4"].map((nonce) =>
+      writeMatch(dir, nonce, ["あ", nonce]),
+    );
+    expect(new Set(written.map((r) => r.endedAt.slice(0, 10))).size).toBe(1);
+
+    for (const record of written) {
+      const found = findMatch(dir, "あ", record.matchId);
+      expect(found?.matchId).toBe(record.matchId);
+      expect(found?.seats[1]?.displayName).toBe(record.seats[1].displayName);
+      expect(found?.moves.length).toBe(record.moves.length);
+    }
+  });
 });
 
 /**
- * リプレイは 1 局を名指しで引く。名指しになっていない値を通すと、事前フィルタが素通りして
- * 全部の日を解析することになる。**プレイヤーは誰でも作れるので、これは繰り返し送れる。**
- * その間は進行中の対戦の手も持ち時間のスイープも止まる。
+ * リプレイは 1 局を名指しで引く。形になっていない値を 404 ではなく 400 で断るための線である。
  */
-describe("名指しになっていない識別子では走査しない", () => {
+describe("対戦の識別子の形", () => {
   it("対戦の識別子の形だけを通す", () => {
     // `randomUUID()` が出す形。
     expect(isMatchId("6f9619ff-8b86-d011-b42d-00c04fc964ff")).toBe(true);
@@ -324,64 +343,29 @@ describe("名指しになっていない識別子では走査しない", () => {
   });
 
   /**
-   * 「引けない」だけでは足りない。空の識別子は**走査したうえで**当たらないので、
-   * 結果だけ見ると直っていなくても通ってしまう。ここは**走査したかどうか**を見る。
+   * **形の合う識別子は誰でもいくらでも作れる。** 走査していた頃は、外れの 1 つ 1 つが
+   * ログ全体の読み直しになった。索引を引く形では、外れは索引に当たらないだけで、
+   * ログは 1 バイトも読まない。
    *
-   * 読めない行を 1 つ植えておくと、走査すれば必ず `console.warn` が出る。
-   * それが出ないことが、行を 1 つも読んでいないことの証拠になる。
+   * 読めない行を 1 つ植えておくと、ログを読み直せば必ず `console.warn` が出る。
+   * それが出ないことが、行を 1 つも読み直していないことの証拠になる。
    */
-  /**
-   * **形の合う識別子は誰でもいくらでも作れる。** 外れを 1 つずつ覚える手は効かないが、
-   * 一覧のキャッシュは在る対戦の識別子を持っているので、そこに無ければ読む必要がない。
-   */
-  it("無い対戦を名指しされても、2 度目からはログを読み直さない", () => {
+  it("無い対戦を名指しされても、ログを読み直さない", () => {
     ensureCards();
     const dir = newDir();
-    forgetOpened();
-    forgetListed();
+    closeIndexes();
     const record = writeMatch(dir, "hist-17", ["あ", "い"]);
-    // 読めない行を植える。読みに行けば必ず警告が出るので、出ないことが読んでいない証拠になる。
     appendFileSync(join(dir, `${record.endedAt.slice(0, 10)}.jsonl`), `{"matchId":"こわれた"\n`);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      // 1 度目はキャッシュを作るので読む。
+      // 1 度目は索引を作るので読む。
       expect(findMatch(dir, "あ", randomUUID())).toBeNull();
       expect(warn).toHaveBeenCalled();
 
       // 2 度目からは、識別子を変えられても読み直さない。
       warn.mockClear();
       for (let i = 0; i < 20; i++) expect(findMatch(dir, "あ", randomUUID())).toBeNull();
-      expect(warn).not.toHaveBeenCalled();
-
-      // 本物はこれまでどおり引ける。
-      expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("空の識別子では、ログを読みに行きもしない", () => {
-    ensureCards();
-    const dir = newDir();
-    forgetOpened();
-    const record = writeMatch(dir, "hist-16", ["あ", "い"]);
-    // 形は通るが無い対戦の識別子を持つ、書きかけの行を植える。
-    // 事前フィルタはこの行に当たるので、走査すれば必ず解析に失敗して警告が出る。
-    const absent = randomUUID();
-    appendFileSync(
-      join(dir, `${record.endedAt.slice(0, 10)}.jsonl`),
-      `{"matchId":"${absent}","moves":[\n`,
-    );
-
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      // 走査は起きるので、読めない行の警告が出る。
-      expect(findMatch(dir, "あ", absent)).toBeNull();
-      expect(warn).toHaveBeenCalled();
-
-      // 空文字と空白は、走査そのものが起きない。
-      warn.mockClear();
       expect(findMatch(dir, "あ", "")).toBeNull();
       expect(findMatch(dir, "あ", "   ")).toBeNull();
       expect(warn).not.toHaveBeenCalled();
@@ -395,96 +379,107 @@ describe("名指しになっていない識別子では走査しない", () => {
 });
 
 /**
- * キャッシュが溢れたとき、**残すのは新しい日である。** いちばん伸びるのは今日のファイルで、
- * 伸びるたびに丸ごと読み直すことになれば、キャッシュを置いた意味が無くなる。
- * 捨てる向きが決まっていないと、古い日と新しい日が毎回お互いを追い出し続ける。
+ * **索引は消しても作り直せる。** 正本は JSONL で、索引はそこから導いた値しか持たない。
+ * これが崩れると、索引はもう「消してよいキャッシュ」ではなく、失われる記録になる。
  */
-describe("キャッシュが溢れたとき", () => {
-  it("いま伸びている日を残し、読み直しが繰り返されない", () => {
+describe("索引を消したとき", () => {
+  it("消しても、同じ一覧と同じ 1 局が読める", () => {
     ensureCards();
     const dir = newDir();
-    forgetOpened();
-    // 日を 2 つぶん置いて、合わせて上限を超える形にする。
-    forgetListed(3);
+    closeIndexes();
+    const first = writeMatch(dir, "hist-drop-1", ["あ", "い"]);
+    const second = writeMatch(dir, "hist-drop-2", ["あ", "う"]);
 
-    const old = writeMatch(dir, "hist-20", ["あ", "い"]);
-    const oldDay = join(dir, `${old.endedAt.slice(0, 10)}.jsonl`);
-    appendFileSync(oldDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`);
+    const before = listMatches(dir, "あ");
+    expect(before.map((row) => row.matchId).sort()).toEqual([first.matchId, second.matchId].sort());
 
-    // 今日のぶん。読めない行を植えておく。頭から読み直せば必ず警告が出る。
-    const todayDay = join(dir, "2099-01-01.jsonl");
-    writeFileSync(todayDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`, "utf8");
-    appendFileSync(todayDay, `{"matchId":"こわれた"\n`);
+    dropIndex(dir);
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      expect(listMatches(dir, "あ").length).toBe(3);
-      expect(warn).toHaveBeenCalled();
-
-      // 今日のファイルが伸びる。ここで今日のぶんを捨てると、次から毎回読み直しになる。
-      appendFileSync(todayDay, `${JSON.stringify({ ...old, matchId: randomUUID() })}\n`);
-      warn.mockClear();
-      // 何度呼んでも、今日のファイルを頭から読み直さない（読み直せば植えた行で警告が出る）。
-      for (let i = 0; i < 5; i++) expect(listMatches(dir, "あ").length).toBe(4);
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-      forgetListed();
-    }
+    expect(listMatches(dir, "あ")).toEqual(before);
+    expect(findMatch(dir, "あ", second.matchId)?.matchId).toBe(second.matchId);
   });
 
   /**
-   * **1 日だけで上限を超えても、いちばん新しい日は覚える。** そこがいちばん読まれて、
-   * いちばん伸びる。覚えないと毎回そのファイルを頭から読むことになり、上限を置いた目的
-   * （イベントループを止めない）と逆のことが起きる。古い日は読み直しになるが、
-   * そちらは伸びないので、読み直しの大きさは増えない。
+   * 索引が読めないことは「まだ作っていない」と同じにする。ここで投げると、
+   * **索引のせいで対戦の記録が 1 局も読めなくなる。**
    */
-  it("1 日だけで上限を超えても、いちばん新しい日は覚える", () => {
+  it("壊れた索引は作り直す。対戦は読めたままである", () => {
     ensureCards();
     const dir = newDir();
-    forgetOpened();
-    forgetListed(2);
+    closeIndexes();
+    const record = writeMatch(dir, "hist-broken-index", ["あ", "い"]);
+    expect(listMatches(dir, "あ").length).toBe(1);
 
-    const old = writeMatch(dir, "hist-21", ["あ", "い"]);
-
-    // 上限（2）を 1 日だけで超える、いちばん新しい日。読めない行を植えておく。
-    const big = join(dir, "2099-12-31.jsonl");
-    writeFileSync(
-      big,
-      [0, 1, 2]
-        .map((i) => `${JSON.stringify({ ...old, matchId: `${randomUUID()}-${i}` })}\n`)
-        .join(""),
-      "utf8",
-    );
-    appendFileSync(big, `{"matchId":"こわれた"\n`);
+    dropIndex(dir);
+    writeFileSync(join(dir, "index.sqlite"), "これは SQLite のファイルではない", "utf8");
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect(listMatches(dir, "あ").length).toBe(4);
-      expect(warn).toHaveBeenCalled();
-
-      // 2 度目からは、その日を頭から読み直さない。読み直せば植えた行の警告が出る。
-      warn.mockClear();
-      for (let i = 0; i < 3; i++) expect(listMatches(dir, "あ").length).toBe(4);
-      expect(warn).not.toHaveBeenCalled();
+      expect(listMatches(dir, "あ").length).toBe(1);
+      expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
     } finally {
       warn.mockRestore();
-      forgetListed();
     }
   });
 });
 
 /**
- * 一覧とリプレイは、**同じファイルの集合**を見なければならない。片方だけが拾うと、
- * 一覧に出るのに開けない対戦ができる。アカウントの保存先を同じディレクトリに置くと、
- * それを対戦記録として読んで警告を出すことにもなる。
+ * **索引はプロセスの外に残る。** メモリ上のキャッシュだった頃は、起動し直すたびに
+ * ログ全体を読み直していた（実測で 24,000 局・1.6 秒。その間ずっと対戦の時計が進む）。
+ * どこまで読んだかを索引の側に持たせると、その読み直しが消える。
  */
+describe("起動し直したとき", () => {
+  it("すでに索引へ入れた日を、頭から読み直さない", () => {
+    ensureCards();
+    const dir = newDir();
+    closeIndexes();
+    const record = writeMatch(dir, "hist-restart", ["あ", "い"]);
+    // 読めない行を植える。読み直せば必ず警告が出るので、出ないことが読んでいない証拠になる。
+    appendFileSync(join(dir, `${record.endedAt.slice(0, 10)}.jsonl`), `{"matchId":"こわれた"\n`);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(listMatches(dir, "あ").length).toBe(1);
+      expect(warn).toHaveBeenCalled();
+
+      // 起動し直す。索引のファイルは残したまま、開いているものだけを手放す。
+      closeIndexes();
+      warn.mockClear();
+
+      expect(listMatches(dir, "あ").length).toBe(1);
+      expect(findMatch(dir, "あ", record.matchId)?.matchId).toBe(record.matchId);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+/**
+ * 古い日を別の置き場へ移す運用（`logrotate` が消すのも同じ）で、ファイルが消えることがある。
+ * 消えたぶんが索引に残ると、**一覧には出るのに開けない対戦**になる。
+ */
+describe("日のファイルが消えたとき", () => {
+  it("消えた日のぶんは、一覧からもリプレイからも落ちる", () => {
+    ensureCards();
+    const dir = newDir();
+    closeIndexes();
+    const record = writeMatch(dir, "hist-vanish", ["あ", "い"]);
+    const day = join(dir, `${record.endedAt.slice(0, 10)}.jsonl`);
+    expect(listMatches(dir, "あ").length).toBe(1);
+
+    rmSync(day);
+
+    expect(listMatches(dir, "あ")).toEqual([]);
+    expect(findMatch(dir, "あ", record.matchId)).toBeNull();
+  });
+});
+
 describe("一覧とリプレイが見るファイル", () => {
   it("日付の名前でないファイルは、一覧もリプレイも読まない", () => {
     ensureCards();
     const dir = newDir();
-    forgetOpened();
-    forgetListed();
+    closeIndexes();
     const listed = writeMatch(dir, "hist-18", ["あ", "い"]);
 
     // 対戦記録として正しいが、日付の名前でないファイルに置いたもの。
@@ -515,6 +510,58 @@ describe("リプレイとエンジンの版", () => {
     expect(other.kind).toBe("card-data-mismatch");
   });
 
+  // 版 2 までの seed は 32 ビットの数値で、いまの乱数は同じ値から別の列を出す。
+  it("種の読み方が変わる前の版は、盤面を 1 枚も描く前に断る", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-10", ["あ", "い"]);
+    const now = engineFingerprint();
+
+    expect(replayability({ ...record, schemaVersion: 2 }, now)).toEqual({
+      kind: "schema-too-old",
+      recorded: 2,
+      oldest: OLDEST_REPLAYABLE_SCHEMA_VERSION,
+    });
+    /**
+     * 版番号が欠けた行も断る。ログは `as MatchRecord` で読み直すだけなので、欄が
+     * 無い行はここまで来る。`undefined < 3` は false なので、大小の比較では素通りする。
+     */
+    const { schemaVersion: _dropped, ...missing } = record;
+    expect(replayability(missing as MatchRecord, now).kind).toBe("schema-too-old");
+
+    // いまの版はここを通り抜ける。上の断りが版だけを見ていることの裏。
+    expect(replayability(record, now).kind).toBe("ok");
+  });
+
+  // 種を書き換えたログは、版番号が合っていても別の対戦の盤面を出す。
+  it("公開された nonce から seed が導き直せない記録を断る", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-11", ["あ", "い"]);
+    const now = engineFingerprint();
+
+    const tampered = { ...record, seed: record.seed.replace(/^./, (c) => (c === "0" ? "1" : "0")) };
+    expect(replayability(tampered, now)).toEqual({ kind: "seed-commitment-mismatch" });
+  });
+
+  /**
+   * 断る判断は `replayability` にあるが、盤面を作るのは `frameAt` である。呼ぶ順番だけに
+   * 頼ると、断るはずの記録が「誤りの無い別の対戦」として 1 回の呼び出しで出る。
+   */
+  it("読み返せない記録から盤面を作ろうとすると投げる", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-12", ["あ", "い"]);
+
+    // 黙って別の初手を返していたのがこの経路である。
+    expect(() => frameAt({ ...record, schemaVersion: 2 }, 0)).toThrow(/読み返せない/);
+    expect(() =>
+      frameAt({ ...record, seed: record.seed.replace(/^./, (c) => (c === "0" ? "1" : "0")) }, 0),
+    ).toThrow(/読み返せない/);
+    // 通る記録はこれまでどおり。
+    expect(frameAt(record, 0).views).toHaveLength(2);
+  });
+
   it("エンジンの版が違うだけなら読み返せる。ただし警告を付ける", () => {
     ensureCards();
     const dir = newDir();
@@ -530,46 +577,87 @@ describe("リプレイとエンジンの版", () => {
 });
 
 /**
- * ファイルが縮んだことは読むだけでは分からない。**読んだかどうかで覚え直すと、
- * 0 バイトに縮んだ日は読むものが無く、古いほうが上限を食ったまま残る。**
+ * **同じ大きさのまま中身が差し替わると、索引は古いままになる。** 位置だけが合っているので、
+ * 引いた対戦とは別の対戦の行が読める。識別子は長さの決まった UUID なので、1 局ぶんの行が
+ * 同じ長さのまま入れ替わることは形のうえでは起こりうる。
+ *
+ * ここで「読めたのだから返す」と倒すと、**その人に、頼んだのとは別の対戦の盤面が出る。**
+ * 索引は消しても作り直せるものという建て付けなので、信じきらない側に倒す。
+ */
+describe("索引が古くなったとき", () => {
+  it("引いた対戦と読めた対戦が違えば、渡さない", () => {
+    ensureCards();
+    const dir = newDir();
+    closeIndexes();
+    const first = writeMatch(dir, "hist-stale-1", ["あ", "い"]);
+    const second = writeMatch(dir, "hist-stale-2", ["あ", "う"]);
+    const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
+    expect(listMatches(dir, "あ").length).toBe(2);
+
+    // 識別子だけを入れ替える。行の長さも、ファイルの大きさも変わらない。
+    const swapped = [
+      JSON.stringify({ ...first, matchId: second.matchId }),
+      JSON.stringify({ ...second, matchId: first.matchId }),
+    ];
+    const before = statSync(day).size;
+    writeFileSync(day, `${swapped.join("\n")}\n`, "utf8");
+    expect(statSync(day).size).toBe(before);
+
+    // 索引はまだ入れ替わる前の位置を指している。そこを読んでも、渡さない。
+    expect(findMatch(dir, "あ", first.matchId)).toBeNull();
+    expect(findMatch(dir, "あ", second.matchId)).toBeNull();
+
+    // 正本は触っていないので、索引を作り直せば読める。
+    dropIndex(dir);
+    expect(findMatch(dir, "あ", first.matchId)?.seats[1]?.displayName).toBe("う");
+  });
+});
+
+/**
+ * ファイルが縮んだことは、読み足すだけでは分からない。**索引は 1 行ぶんのバイトの位置を持つので、
+ * 縮んだ日の行が残っていると、位置だけ合っている別の対戦の行を読むことになる。**
  * `logrotate` の `copytruncate` は、まさにこれを起こす。
  */
-describe("縮んだ日のキャッシュ", () => {
-  it("0 バイトに縮んだ日を、古いままにしない", () => {
+describe("縮んだ日", () => {
+  it("0 バイトに縮んだ日の対戦を、索引に残さない", () => {
+    ensureCards();
     const dir = newDir();
-    forgetOpened();
-    forgetListed(3);
+    closeIndexes();
+    const first = writeMatch(dir, "hist-21", ["あ", "い"]);
+    const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
+    expect(listMatches(dir, "あ").length).toBe(1);
+
+    // 中身だけ捨てる（ファイルは残る）。一覧からも消える。
+    writeFileSync(day, "", "utf8");
+    expect(listMatches(dir, "あ").length).toBe(0);
+    expect(findMatch(dir, "あ", first.matchId)).toBeNull();
+
+    /**
+     * **同じ長さの行で埋め直す。** 識別子は長さの決まった UUID なので、縮んだことを
+     * 見落とすと、消えたはずの対戦の位置に別の対戦の行が来て、そのまま読めてしまう。
+     */
+    const refilled = [randomUUID(), randomUUID(), randomUUID()];
+    for (const matchId of refilled) {
+      appendFileSync(day, `${JSON.stringify({ ...first, matchId })}\n`);
+    }
+    expect(
+      listMatches(dir, "あ")
+        .map((row) => row.matchId)
+        .sort(),
+    ).toEqual([...refilled].sort());
+    expect(findMatch(dir, "あ", first.matchId)).toBeNull();
+    expect(findMatch(dir, "あ", refilled[0] as string)?.matchId).toBe(refilled[0]);
+
+    // 読み直しは 1 度きりである。読み直せば植えた行で警告が出る。
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const first = writeMatch(dir, "hist-21", ["あ", "い"]);
-      const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
-      expect(listMatches(dir, "あ").length).toBe(1);
-
-      // 中身だけ捨てる（ファイルは残る）。一覧からも消える。
-      writeFileSync(day, "", "utf8");
-      expect(listMatches(dir, "あ").length).toBe(0);
-
-      /**
-       * 古いほうが残っていると、そのぶん上限を食う。ここでは上限 3 に対して
-       * 1 つ残っている形になり、**2 日ぶんしか入らなくなる。**
-       */
-      appendFileSync(day, `${JSON.stringify({ ...first, matchId: randomUUID() })}\n`);
-      appendFileSync(day, `${JSON.stringify({ ...first, matchId: randomUUID() })}\n`);
-      appendFileSync(day, `${JSON.stringify({ ...first, matchId: randomUUID() })}\n`);
+      appendFileSync(day, `{"matchId":"こわれた"\n`);
       expect(listMatches(dir, "あ").length).toBe(3);
-
-      // 上限ちょうどなので、覚えられている。読み直せば植えた行で警告が出る。
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        appendFileSync(day, `{"matchId":"こわれた"\n`);
-        expect(listMatches(dir, "あ").length).toBe(3);
-        warn.mockClear();
-        expect(listMatches(dir, "あ").length).toBe(3);
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        warn.mockRestore();
-      }
+      warn.mockClear();
+      expect(listMatches(dir, "あ").length).toBe(3);
+      expect(warn).not.toHaveBeenCalled();
     } finally {
-      forgetListed();
+      warn.mockRestore();
     }
   });
 });
@@ -585,15 +673,14 @@ function keysOf(value: unknown): string[] {
  * 追記は、多バイト文字の**途中で**落ちうる。表示名が日本語である以上、端数が残る形は普通に起きる。
  * 読み足した位置をバイト列でなく復号した文字列で数えると、その端数が U+FFFD 1 文字（3 バイト）に
  * 化けたぶんだけ位置が進みすぎる。ずれは次に読むときへ持ち越されるので、**その後に足した対戦**の
- * 行が頭から欠けて読めなくなる。読めなくなった対戦は一覧から消え、`isListed` が `findMatch` を
- * 塞ぐのでリプレイも引けない。
+ * 行が頭から欠けて読めなくなる。索引は 1 行ぶんの位置と長さを持つので、ずれたぶんは
+ * 一覧から消えるだけでなく、**名指しで引いたときに別の位置を読む**ことになる。
  */
 describe("文字の途中で切れた追記", () => {
-  it("そのあとに足した対戦も、キャッシュ経由で見える", () => {
+  it("そのあとに足した対戦も、索引から引ける", () => {
     ensureCards();
     const dir = newDir();
-    forgetOpened();
-    forgetListed();
+    closeIndexes();
 
     const first = writeMatch(dir, "hist-torn-1", ["ふやふ", "あいて"]);
     const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);

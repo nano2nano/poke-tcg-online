@@ -213,7 +213,7 @@ describe("入れなかった理由", () => {
     const endpoints = [
       "/api/join",
       "/api/deck/validate",
-      "/api/decklist/resolve",
+      "/api/deck/resolve",
       "/api/matches",
       "/api/replay",
       "/api/account",
@@ -251,6 +251,27 @@ describe("入れなかった理由", () => {
           /is not a function|Cannot read|TypeError|JSON at position|Unexpected token/,
         );
       }
+    }
+
+    /**
+     * **欄の型が違うものは 400 で断る。** 「形が違う」と「中身が規則に反する」を混ぜると、
+     * 送り手は直しようがない。`ok` と `errors` はデッキの中身の話に取っておく。
+     */
+    for (const [path, body] of [
+      ["/api/account/me", { secret: 7 }],
+      ["/api/matches", { secret: 7 }],
+      ["/api/join", { secret: "あ", deck: { cards: [1] } }],
+      ["/api/deck/resolve", { text: 7 }],
+      ["/api/account", { displayName: 7 }],
+      ["/api/replay", { secret: "あ", matchId: 7 }],
+    ] as [string, unknown][]) {
+      const response = await fetch(`http://${base}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status, path).toBe(400);
+      expect(((await response.json()) as JsonBody).error, path).toBe("送られた中身の形が違う");
     }
 
     // 形が通れば、エラーの中身はこれまでどおりである。
@@ -396,6 +417,27 @@ describe("マッチングから決着まで", () => {
       body: JSON.stringify({ secret: alpha.secret, matchId: planted.matchId }),
     });
     expect(stale.status).toBe(409);
+
+    /**
+     * 種の読み方が変わる前の版も読み返さない（§6.4）。こちらは弾かないと、初期盤面だけが
+     * 誤りを出さずに描けてしまい、別のシャッフルを見ていることが読む人に分からない。
+     */
+    const old: MatchRecord = {
+      ...record,
+      matchId: randomUUID(),
+      schemaVersion: 2,
+      seed: 1234 as unknown as string,
+    };
+    appendFileSync(
+      join(logDir, `${record.endedAt.slice(0, 10)}.jsonl`),
+      `${JSON.stringify(old)}\n`,
+    );
+    const outdated = await fetch(`http://${base}/api/replay`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: alpha.secret, matchId: old.matchId }),
+    });
+    expect(outdated.status).toBe(409);
 
     /**
      * **名指しになっていない識別子で走査を始めさせない。** 空文字はどの行にも含まれるので、
