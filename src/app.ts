@@ -38,6 +38,15 @@ export const TIMEOUT_SWEEP_MS = 5_000;
 const MAX_BODY_BYTES = 64 * 1024;
 
 /**
+ * 死活確認の間隔。この間 pong が返らない接続を切る。
+ *
+ * **短くしすぎない。** 詰まっているだけで、待てば戻る接続まで切ることになる。
+ * 切られた側が座席へ戻る道は、いまのところ参照クライアントには無い（10 節）ので、
+ * 切ればその人は時間切れで負ける。見つけたいのは戻ってこない接続だけである。
+ */
+export const HEARTBEAT_MS = 60_000;
+
+/**
  * アカウントを作れる速さ。**既定では掛けない。**
  *
  * 掛けるかどうかは配置先で決まる。前にプロキシがあって、その向こうの人を見分けられない
@@ -71,6 +80,8 @@ export interface AppOptions {
   accountLimit?: RateLimitOptions | null;
   /** 前にいくつプロキシを置いているか。0 なら `x-forwarded-for` を見ない。 */
   trustedProxies?: number;
+  /** 死活確認の間隔。既定は `HEARTBEAT_MS`。 */
+  heartbeatMs?: number;
 }
 
 export interface App {
@@ -126,13 +137,31 @@ export function createApp(options: AppOptions = {}): App {
     );
   });
 
-  const wss = new WebSocketServer({ server: http, path: "/ws" });
+  /**
+   * **`ws` の既定の上限は 100 MiB で、座席に就いた相手ならそれだけ送れる。**
+   * 運ぶのは 1 手と、その手を見せた位置だけなので、本文と同じ上限で足りる。
+   */
+  const wss = new WebSocketServer({ server: http, path: "/ws", maxPayload: MAX_BODY_BYTES });
+  /** 前の ping に返事のあった接続。`sweepDeadSockets` が 1 巡ごとに読み直す。 */
+  const answered = new WeakSet<WebSocket>();
   wss.on("connection", (socket: WebSocket, request: IncomingMessage) => {
+    /**
+     * **プロトコルの誤りは `error` で来る。受け手を置かないとプロセスごと落ちる。**
+     * 大きすぎる 1 通や壊れたフレームは `ws` が中で閉じるが、そのとき `error` も出す。
+     * `EventEmitter` は受け手のいない `error` をそのまま投げるので、
+     * 1 つの接続の誤りで、指している全員の対戦が落ちることになる。
+     * 席に就けなかった接続も同じなので、いちばん先に置く。
+     */
+    socket.on("error", (error: Error) => {
+      console.warn("接続で落ちた:", error.message);
+    });
     const seatToken = new URL(request.url ?? "/", "http://localhost").searchParams.get("seatToken");
     if (seatToken === null || !hub.attach(socket, seatToken)) {
       socket.close();
       return;
     }
+    answered.add(socket);
+    socket.on("pong", () => answered.add(socket));
     socket.on("message", (raw) => {
       let message: ClientMessage;
       try {
@@ -148,6 +177,11 @@ export function createApp(options: AppOptions = {}): App {
 
   const sweep = setInterval(() => hub.sweepTimeouts(), TIMEOUT_SWEEP_MS);
   sweep.unref();
+  const heartbeat = setInterval(
+    () => sweepDeadSockets(wss.clients, answered),
+    options.heartbeatMs ?? HEARTBEAT_MS,
+  );
+  heartbeat.unref();
 
   return {
     accounts,
@@ -157,11 +191,36 @@ export function createApp(options: AppOptions = {}): App {
     hub,
     close: async () => {
       clearInterval(sweep);
+      clearInterval(heartbeat);
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => http.close(() => resolve()));
     },
   };
+}
+
+/** 死活確認の向き先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
+interface Heartbeatable {
+  ping(): void;
+  terminate(): void;
+}
+
+/**
+ * 死活確認を 1 巡ぶん。返事の無かった接続を切り、残りへ次の ping を送る。
+ *
+ * **線が途中で切れると、どちらも切れたことに気付かないまま接続が残る。**
+ * 閉じたことが伝わらないので `close` も出ず、座席はその接続を持ち続ける。
+ * 対戦そのものは時計が流れて時間切れで終わるが、接続は溜まる一方になる。
+ */
+export function sweepDeadSockets(
+  clients: Iterable<Heartbeatable>,
+  answered: WeakSet<Heartbeatable>,
+): void {
+  for (const client of clients) {
+    // 消せれば前の ping に返事があったということ。無ければ 1 巡ぶん黙っているので切る。
+    if (answered.delete(client)) client.ping();
+    else client.terminate();
+  }
 }
 
 async function route(
