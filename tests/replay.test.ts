@@ -8,12 +8,24 @@
 import { describe, expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
 import { engineFingerprint } from "../src/fingerprint.js";
-import { toRecord } from "../src/log.js";
+import { toRecord, type MatchRecord } from "../src/log.js";
 import { concede } from "../src/match.js";
 import type { Player } from "../src/engine.js";
 import { initialCardIds, inspectState } from "../src/engine-invariants.js";
 import { replay, seedCommitmentHolds } from "../src/replay.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
+
+/**
+ * `seed` の幅を変える前に書かれたレコード（§9.1）。当時は同じダイジェストの先頭 4 バイトを
+ * 数値で持っていたので、型の上では文字列のまま数値を入れる。
+ */
+function beforeSeedWidened(record: MatchRecord): MatchRecord {
+  return {
+    ...record,
+    schemaVersion: 2,
+    seed: Number.parseInt(record.seed.slice(0, 8), 16) as unknown as string,
+  };
+}
 
 describe("対局ログの再生", () => {
   it("seed と move 列だけから同じ対戦が出る", () => {
@@ -50,6 +62,21 @@ describe("対局ログの再生", () => {
     expect(seedCommitmentHolds(record)).toBe(true);
     // コミットから seed が出ないこと。接頭辞を分けている理由がこれである。
     expect(record.seedCommit).not.toContain(record.seed);
+  });
+
+  /**
+   * 偽ると「シャッフルが仕組まれていた」という意味になるので、**幅を変えた日に
+   * 過去のログが一斉に偽ってはならない**（§9.1）。`tools/replay-verify.ts` は
+   * これで落ちると 1 を返す。
+   */
+  it("seed が数値だった頃の記録も、コミットが導き直せる", () => {
+    ensureCards();
+    const record = toRecord(playToEnd(newMatch("replay-old-seed"), 55).match);
+    const old = beforeSeedWidened(record);
+    expect(seedCommitmentHolds(old)).toBe(true);
+    // 幅を詰めたぶんが合っているだけでは通さない。nonce と食い違えば偽る。
+    expect(seedCommitmentHolds({ ...old, seedNonce: "べつの nonce" })).toBe(false);
+    expect(seedCommitmentHolds({ ...old, seed: 0 as unknown as string })).toBe(false);
   });
 
   it("投了で終わった対戦は、指された手までを再生できる", () => {
@@ -163,7 +190,7 @@ describe("対局ログの再生", () => {
     const record = toRecord(played.match);
     const first = record.moves[0];
     if (first === undefined) throw new Error("手が 1 つも無い");
-    const old = {
+    const old: MatchRecord = {
       ...record,
       schemaVersion: 1,
       moves: [{ ...first, candidates: first.candidates + 1 }, ...record.moves.slice(1)],

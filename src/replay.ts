@@ -149,10 +149,28 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
   };
 }
 
-/** 公開された `nonce` から `seed` とコミットを導き直す（6.4 節）。 */
+/** 32 ビットは 16 進で 8 桁。新旧どちらの `seed` も、同じダイジェストの先頭から取っている。 */
+const NUMERIC_SEED_DIGITS = 8;
+
+/**
+ * 公開された `nonce` から `seed` とコミットを導き直す（6.4 節）。
+ *
+ * **古いレコードを偽装と呼ばない。** これが偽ると「シャッフルが仕組まれていた」という
+ * 意味になる。`seed` の幅を変える前の記録は数値を持っているので（§9.1）、そのまま
+ * 比べると過去の対局ログが一つ残らずここで落ち、`tools/replay-verify.ts` が 1 を返す。
+ * 当時の幅まで詰めれば当時の値に戻るので、そちらで比べる。
+ *
+ * **見るのは `schemaVersion` ではなく値そのものである。** JSONL は型を持たないので、
+ * 版の申告と中身が食い違う行はありうる。
+ */
 export function seedCommitmentHolds(record: MatchRecord): boolean {
   const recomputed = commitSeed(record.seedNonce);
-  return recomputed.seed === record.seed && recomputed.commit === record.seedCommit;
+  if (recomputed.commit !== record.seedCommit) return false;
+  const seed: unknown = record.seed;
+  if (typeof seed === "number") {
+    return Number.parseInt(recomputed.seed.slice(0, NUMERIC_SEED_DIGITS), 16) === seed;
+  }
+  return recomputed.seed === seed;
 }
 
 /** `game-started` が運ぶ先攻。`src/match.ts` と同じ読み方をする。 */
