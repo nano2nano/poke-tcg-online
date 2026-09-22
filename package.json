@@ -20,7 +20,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.0",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.6.2",
     "@types/ws": "^8.18.1",
     "oxfmt": "^0.68.0",
