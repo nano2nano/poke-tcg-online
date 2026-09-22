@@ -86,6 +86,9 @@ async function join() {
   const outcome = await postJson("/api/join", request);
   if (!outcome.ok) {
     // 断られる理由はデッキとは限らない。アカウントが見つからないこともここへ来る。
+    // そのときは、この画面が覚えているアカウントがもう無い。読み直しに行かせる。
+    // シークレットを捨ててよいかの判断は `/api/account` の経路が持っているので、ここでは忘れるだけにする。
+    if (outcome.code === "account-not-found") loadingAccount = null;
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
     return;
   }

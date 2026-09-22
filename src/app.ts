@@ -19,7 +19,9 @@ import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
 import { Lobby, type JoinRequest } from "./lobby.js";
-import { AccountStore, type Account } from "./accounts.js";
+import { ACCOUNT_NOT_FOUND, AccountStore, type Account } from "./accounts.js";
+
+export { ACCOUNT_NOT_FOUND };
 import { findMatch, frameAt, isMatchId, listMatches, replayability } from "./history.js";
 import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
@@ -301,9 +303,6 @@ async function route(
 }
 
 const MALFORMED = "送られた中身の形が違う";
-
-/** アカウントが見つからないことを、画面の文言に頼らずに伝える合図。 */
-export const ACCOUNT_NOT_FOUND = "account-not-found";
 
 /** 作る間隔が短すぎることの合図。 */
 export const TOO_MANY_ACCOUNTS = "too-many-accounts";

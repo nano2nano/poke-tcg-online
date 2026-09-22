@@ -166,6 +166,27 @@ describe("入れなかった理由", () => {
     expect(body.error).toBeUndefined();
   });
 
+  /**
+   * **アカウントが無いことは、デッキの違反と同じ形で返してはいけない。** 画面は文言でしか
+   * 見分けられなくなり、覚えているアカウントを読み直しに行けない。`/api/account` と同じ合図を付ける。
+   */
+  it("アカウントが無いときは、デッキの違反と見分けられる合図が付く", async () => {
+    const gone = await fetch(`http://${base}/api/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: "そんなシークレットは無い", deck: legalDecks()[0] }),
+    });
+    expect(((await gone.json()) as JsonBody).code).toBe("account-not-found");
+
+    const account = await postJson("/api/account", { displayName: "デッキが変な人" });
+    const bad = await fetch(`http://${base}/api/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: account.secret, deck: { cards: [] } }),
+    });
+    expect(((await bad.json()) as JsonBody).code).toBeUndefined();
+  });
+
   it("デッキが通らないときも、通らない箇所が並びで返る", async () => {
     const account = await postJson("/api/account", { displayName: "デッキが変な人" });
     const response = await fetch(`http://${base}/api/join`, {

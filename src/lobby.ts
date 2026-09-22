@@ -13,7 +13,7 @@ import type { DeckList, Player } from "./engine.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { createMatch, type SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
-import type { AccountStore } from "./accounts.js";
+import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
 
 export interface JoinRequest {
   /** プレイヤーのシークレット（7.2 節）。これが無い対戦は始めない。 */
@@ -33,7 +33,8 @@ export interface Ticket {
 }
 
 export type JoinOutcome =
-  | { ok: false; errors: string[] }
+  /** `code` は画面が文言で分岐せずに済むようにする（§4）。無い断りはデッキの違反である。 */
+  | { ok: false; errors: string[]; code?: string }
   | { ok: true; ticket: string }
   | { ok: true; ticket: string; seat: Seated };
 
@@ -109,7 +110,9 @@ export class Lobby {
     // シークレットを先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
     // ここでは読むだけで、ストアは書き換えない。
     const known = this.accounts.bySecret(request.secret);
-    if (known === null) return { ok: false, errors: ["アカウントが見つからない"] };
+    if (known === null) {
+      return { ok: false, code: ACCOUNT_NOT_FOUND, errors: ["アカウントが見つからない"] };
+    }
 
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {

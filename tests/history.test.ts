@@ -580,3 +580,44 @@ function keysOf(value: unknown): string[] {
   if (value === null || typeof value !== "object") return [];
   return Object.entries(value).flatMap(([key, nested]) => [key, ...keysOf(nested)]);
 }
+
+/**
+ * 追記は、多バイト文字の**途中で**落ちうる。表示名が日本語である以上、端数が残る形は普通に起きる。
+ * 読み足した位置をバイト列でなく復号した文字列で数えると、その端数が U+FFFD 1 文字（3 バイト）に
+ * 化けたぶんだけ位置が進みすぎる。ずれは次に読むときへ持ち越されるので、**その後に足した対戦**の
+ * 行が頭から欠けて読めなくなる。読めなくなった対戦は一覧から消え、`isListed` が `findMatch` を
+ * 塞ぐのでリプレイも引けない。
+ */
+describe("文字の途中で切れた追記", () => {
+  it("そのあとに足した対戦も、キャッシュ経由で見える", () => {
+    ensureCards();
+    const dir = newDir();
+    forgetOpened();
+    forgetListed();
+
+    const first = writeMatch(dir, "hist-torn-1", ["ふやふ", "あいて"]);
+    const day = join(dir, `${first.endedAt.slice(0, 10)}.jsonl`);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // ここまでを読んでキャッシュに載せる。
+      expect(listMatches(dir, "ふやふ").map((m) => m.matchId)).toEqual([first.matchId]);
+
+      // 「ふ」= E3 81 B5 の 2 バイトめで落ちた追記。行として閉じていない。
+      appendFileSync(day, Buffer.from([0x7b, 0xe3, 0x81]));
+      appendFileSync(day, "\n");
+
+      // ここを読んだ時点で、次に読む位置がずれる。
+      const second = writeMatch(dir, "hist-torn-2", ["ふやふ", "あいて"]);
+      expect(listMatches(dir, "ふやふ").map((m) => m.matchId)).toContain(second.matchId);
+
+      // ずれていれば、この行は頭が欠けて読めない。
+      const third = writeMatch(dir, "hist-torn-3", ["ふやふ", "あいて"]);
+      expect(listMatches(dir, "ふやふ").map((m) => m.matchId)).toContain(third.matchId);
+      // 名指しで引くほうも、一覧と同じものを見る。
+      expect(findMatch(dir, "ふやふ", third.matchId)?.matchId).toBe(third.matchId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

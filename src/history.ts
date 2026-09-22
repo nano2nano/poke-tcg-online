@@ -263,21 +263,29 @@ function countListed(): number {
   return total;
 }
 
-/** 前に読んだ続きから、改行で終わっているところまでを読み足す。 */
+/**
+ * 前に読んだ続きから、改行で終わっているところまでを読み足す。
+ *
+ * **次に読む位置は、復号した文字列ではなくバイト列の側で数える。** 追記が多バイト文字の
+ * 途中で落ちると、その端数は復号の時点で U+FFFD 1 文字（3 バイト）に化ける。文字列を
+ * 測り直すとそのぶん位置が進みすぎ、境目をまたぐ 1 行が読めなくなって、その対戦が
+ * 一覧から消える（`isListed` が `findMatch` を塞ぐので、リプレイも引けなくなる）。
+ */
 function appendListed(path: string, day: ListedDay, size: number): void {
   const length = size - day.consumed;
   const buffer = Buffer.alloc(length);
   const file = openSync(path, "r");
+  let read = 0;
   try {
-    readSync(file, buffer, 0, length, day.consumed);
+    read = readSync(file, buffer, 0, length, day.consumed);
   } finally {
     closeSync(file);
   }
-  const text = buffer.toString("utf8");
-  const end = text.lastIndexOf("\n");
+  const chunk = buffer.subarray(0, read);
+  const end = chunk.lastIndexOf(0x0a);
   if (end < 0) return;
   let broken = 0;
-  for (const line of text.slice(0, end).split("\n")) {
+  for (const line of chunk.subarray(0, end).toString("utf8").split("\n")) {
     if (line.trim() === "") continue;
     try {
       const listed = listedOf(JSON.parse(line) as MatchRecord);
@@ -289,7 +297,7 @@ function appendListed(path: string, day: ListedDay, size: number): void {
   }
   // 追記の途中で落ちれば書きかけの行が残る。1 行のために全員の一覧を止めない。
   if (broken > 0) console.warn(`${path}: 読めない行を ${broken} 行とばした`);
-  day.consumed += Buffer.byteLength(text.slice(0, end + 1), "utf8");
+  day.consumed += end + 1;
 }
 
 function listedOf(record: MatchRecord): ListedMatch {

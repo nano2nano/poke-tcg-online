@@ -18,6 +18,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+
+/** アカウントが見つからないことを、画面の文言に頼らずに伝える合図。 */
+export const ACCOUNT_NOT_FOUND = "account-not-found";
 import { fileURLToPath } from "node:url";
 
 /** 最初のレーティング。 */
