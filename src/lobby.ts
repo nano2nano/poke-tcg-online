@@ -1,10 +1,10 @@
 /**
  * 相手を見つける（`docs/spec/battle-server.md` 7 節）。
  *
- * 合言葉と、待ち行列 1 本だけを持つ。レーティングで帯を分けない。
+ * ルームコードと、マッチングキュー 1 本だけを持つ。レーティング帯で分けない。
  * 人が少ないうちは待ち時間が伸びるだけである。
  *
- * 待ち合わせは要求と応答で足りるので HTTP に載せる。押し出しが要るのは
+ * マッチングは要求と応答で足りるので HTTP に載せる。サーバからのプッシュが要るのは
  * 対戦が始まってからで、そこから先が WebSocket である（3.1 節）。
  */
 
@@ -13,15 +13,15 @@ import type { DeckList, Player } from "./engine.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { createMatch, type SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
-import type { AccountStore } from "./accounts.js";
+import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
 
 export interface JoinRequest {
-  /** 打ち手の合言葉（7.2 節）。これが無い対戦は始めない。 */
+  /** プレイヤーのシークレット（7.2 節）。これが無い対戦は始めない。 */
   secret: string;
   deck: DeckList;
-  /** 名乗り直すとき。省けば登録済みの表示名を使う。 */
+  /** 表示名を変えるとき。省けば登録済みの表示名を使う。 */
   displayName?: string;
-  /** 同じ文字列を入れた 2 人を繋ぐ。無ければ待ち行列へ入る。 */
+  /** 同じ文字列を入れた 2 人を繋ぐ。無ければマッチングキューへ入る。 */
   roomCode?: string;
 }
 
@@ -33,7 +33,8 @@ export interface Ticket {
 }
 
 export type JoinOutcome =
-  | { ok: false; errors: string[] }
+  /** `code` は画面が文言で分岐せずに済むようにする（§4）。無い断りはデッキの違反である。 */
+  | { ok: false; errors: string[]; code?: string }
   | { ok: true; ticket: string }
   | { ok: true; ticket: string; seat: Seated };
 
@@ -44,21 +45,21 @@ export interface Seated {
 }
 
 /**
- * 待っている札の行方。
+ * 待っているチケットの行方。
  *
- * `dropped` が要るのは、**札が黙って消えることがある**からである。同じ打ち手が
- * 別の窓から入ると古い札は降りる。それを `waiting` と同じ応答にすると、
- * 古い窓は「相手を待っています」のまま永久に問い合わせ続ける。
+ * `dropped` が要るのは、チケットが黙って消えることがあるからである。同じプレイヤーが
+ * 別のタブから入ると古いチケットは降りる。それを `waiting` と同じ応答にすると、
+ * 古いタブは「相手を待っています」のまま永久に問い合わせ続ける。
  *
  * `finished` が別に要るのは、**席が決まったあとに終わった対戦がある**からである。
  * 取りに行く前に相手が投了するか時間切れになると、席そのものはもう無い。
- * これを `dropped` と同じにすると「別の窓から入り直した」と嘘を出すことになる。
- * その人は指していないが打ち手としては数えられていて、持ち点も動き、記録も残っている。
+ * これを `dropped` と同じにすると「別のタブから入り直した」と嘘を出すことになる。
+ * その人は指していないがプレイヤーとしては数えられていて、レーティングも動き、記録も残っている。
  *
  * `unknown` が別に要るのは、**知らないチケットと、降ろしたチケットは別である**からである。
  * ロビーはメモリにしか無いので、サーバを入れ替えればチケットは全部知らないものになる。
  * 覚えていられる数を超えたぶんも同じである。これを `dropped` と答えると、
- * ウィンドウを 1 つしか開いていない人に「別のウィンドウから入り直した」と言うことになる。
+ * タブを 1 つしか開いていない人に「別のタブから入り直した」と言うことになる。
  */
 export type ClaimOutcome =
   | { kind: "waiting" }
@@ -68,13 +69,13 @@ export type ClaimOutcome =
   | { kind: "unknown" };
 
 /**
- * 引き取り口をいくつ覚えておくか。超えたぶんは、**終わった対戦の席から**捨てる。
+ * 引き換え待ちの座席をいくつ覚えておくか。超えたぶんは、**終わった対戦の席から**捨てる。
  * 終わっていない席は残すので、同時に進んでいる対戦が多ければこの数を超えて持つ。
  */
 const SEATED_LIMIT = 256;
 
 /**
- * 降ろしたチケットをいくつ覚えておくか。降ろされたウィンドウが次に取りに来るまで持てばよい。
+ * 降ろしたチケットをいくつ覚えておくか。降ろされたタブが次に取りに来るまで持てばよい。
  * 溢れたぶんは `unknown` になる。「知らない」は、いつでも本当のことである。
  */
 const DROPPED_LIMIT = 256;
@@ -86,30 +87,32 @@ const DROPPED_LIMIT = 256;
 const FINISHED_LIMIT = 4_096;
 
 export class Lobby {
-  /** 待っている人。合言葉ごとに 1 人ずつと、合言葉なしの行列。 */
+  /** 待っている人。ルームコードごとに 1 人ずつと、ルームコードなしのキュー。 */
   private readonly waitingByRoom = new Map<string, Ticket>();
   /** こちらから降ろしたチケット。知らないチケットと区別するためだけに持つ。 */
   private readonly dropped = new Set<string>();
   /** 溢れて捨てた席の、対戦の識別子。席が無くなっても「もう終わっている」と答えるために持つ。 */
   private readonly finished = new Map<string, string>();
   private readonly queue: Ticket[] = [];
-  /** 相手が見つかった人の引き取り口。本人が取りに来るまで置く。 */
+  /** マッチングが成立した人の座席。本人が引き換えに来るまで置く。 */
   private readonly seated = new Map<string, Seated>();
 
   constructor(
     private readonly registry: MatchRegistry,
     private readonly accounts: AccountStore,
     private readonly now: () => number = () => Date.now(),
-    /** 覚えておく席の数。試験が 256 局を作らずに済むように差し替えられる。 */
+    /** 覚えておく席の数。テストが 256 局を作らずに済むように差し替えられる。 */
     private readonly seatedLimit: number = SEATED_LIMIT,
   ) {}
 
   join(request: JoinRequest): JoinOutcome {
     const nowMs = this.now();
-    // 合言葉を先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
-    // ここでは読むだけで、置き場は書き換えない。
+    // シークレットを先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
+    // ここでは読むだけで、ストアは書き換えない。
     const known = this.accounts.bySecret(request.secret);
-    if (known === null) return { ok: false, errors: ["打ち手が見つからない"] };
+    if (known === null) {
+      return { ok: false, code: ACCOUNT_NOT_FOUND, errors: ["アカウントが見つからない"] };
+    }
 
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {
@@ -117,9 +120,9 @@ export class Lobby {
     }
 
     /**
-     * **置き場を書き換えるのは、入れると決まってからである。** 先に書くと、デッキで
-     * 断られた人の名乗りだけが変わって残る。断られた側から見れば何も起きていないのに、
-     * 置き場でもそれ以後の対局ログでも名前が変わっている。
+     * **ストアを書き換えるのは、入れると決まってからである。** 先に書くと、デッキで
+     * 断られた人の表示名だけが変わって残る。断られた側から見れば何も起きていないのに、
+     * ストアでもそれ以後の対局ログでも名前が変わっている。
      */
     const account =
       (request.displayName === undefined
@@ -128,7 +131,7 @@ export class Lobby {
 
     const ticket: Ticket = {
       ticket: newToken(),
-      // ここの持ち点は仮である。記録に残すのは**対戦が始まった時点**の値で、`start` が読み直す。
+      // ここのレーティングは仮である。記録に残すのは対戦が始まった時点の値で、`start` が読み直す。
       seat: {
         playerId: account.playerId,
         displayName: account.displayName,
@@ -139,9 +142,9 @@ export class Lobby {
     };
 
     /**
-     * **同じ打ち手は 1 つしか待たせない。** 別の窓を開いたり、待っている間に読み込み直すと、
+     * **同じプレイヤーは 1 つしか待たせない。** 別のタブを開いたり、待っている間に読み込み直すと、
      * 同じ `playerId` が両側に座りうる。自分と自分の対戦が 1 局として記録に残り、
-     * その打ち手に 1 勝 1 敗が付く。古いほうを降ろせば、自分に当たること自体が起きない。
+     * そのプレイヤーに 1 勝 1 敗が付く。古いほうを降ろせば、自分に当たること自体が起きない。
      */
     this.dropWaiting(account.playerId);
 
@@ -158,20 +161,20 @@ export class Lobby {
   }
 
   /**
-   * 待っている人が相手を見つけたかどうかを取りに来る口。
+   * 待っている人が相手を見つけたかどうかを引き換えに来るエンドポイント。
    *
-   * **取りに来ても消さない。** 1 度読んだら消す作りだと、その応答が回線の不調で
-   * 落ちたときに、次に取りに来た人へ「もう降りている」と答えることになる。
-   * 対戦のほうは始まっているので、その人は座らないまま時間切れで負ける。
-   * 札そのものが引き取りの合鍵なので、同じ札で何度取りに来ても同じ座席を返す。
+   * **引き換えに来ても消さない。** 1 度読んだら消す作りだと、その応答が回線の不調で
+   * 落ちただけで、次に来た人へ「もう降りている」と答えることになる。対戦のほうは
+   * 始まっているので、その人は座らないまま時間切れで負ける。チケットが引き換えの鍵なので、
+   * 同じチケットには同じ座席を返す。
    */
   claim(ticketId: string): ClaimOutcome {
     const seat = this.seated.get(ticketId);
     if (seat !== undefined) {
       /**
-       * **終わった対戦と、降りた札は別である。** 取りに行く前に相手が投了するか
-       * 時間切れになると席はもう無いが、それは「別の窓から入り直した」ではない。
-       * 対戦はあったことにして、そう答える。生きているかどうかは台帳が知っている。
+       * **終わった対戦と、降りたチケットは別である。** 取りに行く前に相手が投了するか
+       * 時間切れになると席はもう無いが、それは「別のタブから入り直した」ではない。
+       * 対戦はあったことにして、そう答える。生きているかどうかはレジストリが知っている。
        */
       if (this.registry.bySeatToken(seat.seatToken) === undefined) {
         return { kind: "finished", matchId: seat.matchId };
@@ -238,7 +241,7 @@ export class Lobby {
     return this.queue.some((waiting) => waiting.ticket === ticketId);
   }
 
-  /** その打ち手が待っているものを、どこにいても降ろす。 */
+  /** そのプレイヤーが待っているものを、どこにいても降ろす。 */
   private dropWaiting(playerId: string): void {
     for (const [room, waiting] of this.waitingByRoom) {
       if (waiting.seat.playerId === playerId) {
@@ -297,7 +300,7 @@ export class Lobby {
     return this.queue.shift() ?? null;
   }
 
-  /** 札の座席を、今の持ち点と名乗りで取り直す。打ち手が消えていれば札のままを使う。 */
+  /** チケットの座席を、今のレーティングと表示名で取り直す。プレイヤーが消えていればチケットのままを使う。 */
   private seatNow(ticket: Ticket): SeatInfo {
     const account = this.accounts.byPlayerId(ticket.seat.playerId);
     if (account === null) return ticket.seat;
@@ -317,8 +320,8 @@ export class Lobby {
     const nowMs = this.now();
     const seatTokens: [string, string] = [newToken(), newToken()];
     /**
-     * **持ち点は今この場で読み直す**（7.2 節）。待っている間に別の窓の対戦が終われば
-     * 持ち点は動いている。札を取ったときの値を残すと、記録が「対戦を始めた時点」でなくなる。
+     * レーティングは今この場で読み直す（7.2 節）。待っている間に別のタブの対戦が終われば
+     * レーティングは動いている。チケットを取ったときの値を残すと、記録が「対戦を始めた時点」でなくなる。
      */
     const seats: [SeatInfo, SeatInfo] = [this.seatNow(first), this.seatNow(second)];
     const match = createMatch({

@@ -1,12 +1,9 @@
 /**
  * 対局ログ（`docs/spec/battle-server.md` 6 節）。
  *
- * 正本は seed と move 列である。局面もイベントも保存しない。エンジンの C-4
+ * 唯一の情報源は seed と move 列である。局面もイベントも保存しない。エンジンの C-4
  * （同一 seed ＋同一 move 列 → 同一の状態列とイベント列）がこれを保証する。
- *
- * 実測（一様ランダムの自己対戦 20 局）では、move 列は 1 局 12.2 KB（gzip 0.63 KB）、
- * 全イベントを残すと 115 KB、1 局面の `GameState` だけで 9.1 KB である。
- * イベントと局面はいずれも再生で作り直せる値なので、持たない。
+ * どちらも再生で作り直せる値で、残すと桁が変わる。大きさの実測は 6.1 節にある。
  */
 
 import { appendFileSync, mkdirSync } from "node:fs";
@@ -64,7 +61,7 @@ export function toRecord(match: Match): MatchRecord {
   };
 }
 
-/** 既定の置き場。`createApp` も読み返しのためにこれを引く。 */
+/** 既定の保存先。`createApp` もリプレイのためにこれを引く。 */
 export const DEFAULT_LOG_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -75,8 +72,8 @@ export const DEFAULT_LOG_DIR = join(
 /**
  * 日付で切った JSONL へ 1 行追記する（6.5 節）。データベースは置かない。
  *
- * 1 局 0.63 KB（gzip）なので、100 万局で 630 MB である。学習は先頭から順に読むだけで、
- * 索引を要する問い合わせは生きている対戦にしか無く、それはメモリにある。
+ * 学習は先頭から順に読むだけで、索引を要する問い合わせは生きている対戦にしか無く、
+ * それはメモリにある。
  */
 export function appendRecord(record: MatchRecord, dir: string = DEFAULT_LOG_DIR): string {
   mkdirSync(dir, { recursive: true });
