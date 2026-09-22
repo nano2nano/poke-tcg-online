@@ -8,3 +8,10 @@ updates:
       interval: weekly
     commit-message:
       prefix: ci
+  # npm の依存も週ごとに見る。ここが無いと、勧告が出ても PR が来ない。
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps

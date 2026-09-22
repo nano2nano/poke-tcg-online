@@ -8,7 +8,7 @@
  * `viewFor` / `eventsFor` / `legalMovesFor` を通さない経路をここに作らない（1 節の S-2）。
  */
 
-import type { DomainEvent, Player } from "./engine.js";
+import type { DomainEvent, Move, Player } from "./engine.js";
 import {
   clockView,
   concede,
@@ -93,11 +93,17 @@ export class MatchHub {
         send(socket, { t: "pong" });
         return;
       case "move": {
+        /**
+         * **手の形を見るのはエンジンである。** `clientMessageSchema` が見るのは封筒までで、
+         * ここへ来る `move` は「object である」しか分かっていない。`submitMove` は
+         * `legalMoves` と構造ごと突き合わせてから適用するので、合法手と 1 欄でも違えば
+         * `illegal-move` で落ちる。型を合わせるためだけの変換をここに置く。
+         */
         const outcome = submitMove(
           match,
           seat,
           message.stateVersion,
-          message.move,
+          message.move as unknown as Move,
           this.now(),
           message.offered ?? null,
         );
