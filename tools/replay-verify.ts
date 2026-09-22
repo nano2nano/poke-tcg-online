@@ -30,6 +30,14 @@ const fingerprint = engineFingerprint();
 
 let records = 0;
 let failed = 0;
+/**
+ * エンジンの commit がログと違う行で通らなかったぶん。
+ *
+ * **これで 1 を返さない。** エンジンを直せば、それ以前のログは指せない手を含みうる。
+ * §6.3 は commit の食い違いを警告にとどめると決めているので、終了コードも同じ線を引く。
+ * 数えて出しはするので、見たければ出力に出ている。
+ */
+let failedOnOlderEngine = 0;
 let commitDiffers = 0;
 
 for (const path of expand(targets)) {
@@ -39,17 +47,26 @@ for (const path of expand(targets)) {
     const record = JSON.parse(line) as MatchRecord;
 
     let initialCards: string[] = [];
-    const result = replay(record, {
-      fingerprint,
-      inspect: (state, index) => {
-        if (index === 0) initialCards = initialCardIds(state);
-        inspectState(state, initialCards);
-      },
-    });
+    let result;
+    try {
+      result = replay(record, {
+        fingerprint,
+        inspect: (state, index) => {
+          if (index === 0) initialCards = initialCardIds(state);
+          inspectState(state, initialCards);
+        },
+      });
+    } catch (error) {
+      // 1 行の壊れで走査ごと止めない。残りの行と残りの日は読める。
+      failed += 1;
+      process.stdout.write(`${path}:${lineNumber + 1} ${record.matchId}\n  ${String(error)}\n`);
+      continue;
+    }
 
     if (result.engineCommitDiffers) commitDiffers += 1;
     if (result.failures.length === 0) continue;
-    failed += 1;
+    if (result.engineCommitDiffers) failedOnOlderEngine += 1;
+    else failed += 1;
     process.stdout.write(`${path}:${lineNumber + 1} ${record.matchId}\n`);
     for (const failure of result.failures) {
       process.stdout.write(`  ${JSON.stringify(failure)}\n`);
@@ -68,7 +85,8 @@ if (records === 0) {
 
 process.stdout.write(
   `${records} 件を再生し、${failed} 件が通らなかった` +
-    `（エンジンの commit が違うログ ${commitDiffers} 件）\n`,
+    `（エンジンの commit が違うログ ${commitDiffers} 件。` +
+    `うち通らなかった ${failedOnOlderEngine} 件は終了コードに入れない）\n`,
 );
 process.exit(failed === 0 ? 0 : 1);
 

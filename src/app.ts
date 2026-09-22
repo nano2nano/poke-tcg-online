@@ -215,6 +215,10 @@ async function route(
       });
       return;
     }
+    if (readable.kind === "unusable-seed") {
+      respondJson(response, 409, { error: "この対戦の記録が壊れている。読み返せない。" });
+      return;
+    }
     const ply = typeof body.ply === "number" ? body.ply : 0;
     respondJson(response, 200, { seats: record.seats, frame: frameAt(record, ply) });
     return;

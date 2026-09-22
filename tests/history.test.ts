@@ -545,6 +545,24 @@ describe("リプレイとエンジンの版", () => {
     expect(other.kind).toBe("card-data-mismatch");
   });
 
+  /**
+   * JSONL は型を持たず、読み手は `as MatchRecord` で名前を付けているだけである。
+   * 幅を変える前は `seed >>> 0` が何であれ 0 に均し、**黙って違う盤面**を見せていた。
+   * いまのエンジンは 16 進でない `seed` で投げるので、手前で読めないと言う。
+   */
+  it("エンジンへ渡せない seed の記録は、読み返せないと言う", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-bad-seed", ["あ", "い"]);
+
+    for (const seed of ["", "ぜんぜん 16 進じゃない", "0".repeat(33), null, {}]) {
+      const broken = { ...record, seed } as unknown as MatchRecord;
+      expect(replayability(broken)).toEqual({ kind: "unusable-seed" });
+    }
+    // 幅を変える前の数値は読める。§9.1 で読み続けると決めている。
+    expect(replayability({ ...record, seed: 1234 as unknown as string }).kind).toBe("ok");
+  });
+
   it("エンジンの版が違うだけなら読み返せる。ただし警告を付ける", () => {
     ensureCards();
     const dir = newDir();

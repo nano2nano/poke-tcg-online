@@ -83,7 +83,22 @@ export interface ReplayFrame {
  */
 export type Replayability =
   | { kind: "ok"; engineCommitDiffers: boolean }
-  | { kind: "card-data-mismatch"; expected: string; actual: string };
+  | { kind: "card-data-mismatch"; expected: string; actual: string }
+  | { kind: "unusable-seed" };
+
+/**
+ * エンジンへ渡せる `seed` か。数値と 1〜32 桁の 16 進だけが通る（エンジンの `RngSeed`）。
+ *
+ * **通らない値でエンジンを呼ばない。** JSONL は型を持たず、読み手は `as MatchRecord` で
+ * 名前を付けているだけである。壊れた行をそのまま渡すとエンジンが投げ、エンドポイントは
+ * 500 を返す。幅を変える前は `seed >>> 0` が何であれ 0 に均していたので、投げない代わりに
+ * **黙って違う盤面**を見せていた。どちらも避けて、読めないと言う。
+ */
+function seedIsUsable(record: MatchRecord): boolean {
+  const seed: unknown = record.seed;
+  if (typeof seed === "number") return Number.isFinite(seed);
+  return typeof seed === "string" && /^[0-9a-fA-F]{1,32}$/.test(seed);
+}
 
 export function replayability(
   record: MatchRecord,
@@ -96,6 +111,7 @@ export function replayability(
       actual: fingerprint.cardDataSha256,
     };
   }
+  if (!seedIsUsable(record)) return { kind: "unusable-seed" };
   return { kind: "ok", engineCommitDiffers: record.engine.commit !== fingerprint.commit };
 }
 

@@ -77,6 +77,11 @@ describe("対局ログの再生", () => {
     // 幅を詰めたぶんが合っているだけでは通さない。nonce と食い違えば偽る。
     expect(seedCommitmentHolds({ ...old, seedNonce: "べつの nonce" })).toBe(false);
     expect(seedCommitmentHolds({ ...old, seed: 0 as unknown as string })).toBe(false);
+    /**
+     * **いまの版を名乗りながら数値を持つ行は通さない。** 通すと、幅を削った記録が
+     * 健全に見える。検証が偽らないことは「幅は削れない」（§9）の後ろ盾である。
+     */
+    expect(seedCommitmentHolds({ ...old, schemaVersion: record.schemaVersion })).toBe(false);
   });
 
   it("投了で終わった対戦は、指された手までを再生できる", () => {

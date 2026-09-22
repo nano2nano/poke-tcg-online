@@ -397,6 +397,23 @@ describe("マッチングから決着まで", () => {
     });
     expect(stale.status).toBe(409);
 
+    // 壊れた seed の行も、例外を外へ出さずに同じ断りへ落とす（§9.1）。
+    const corrupt = {
+      ...record,
+      matchId: randomUUID(),
+      seed: "ぜんぜん 16 進じゃない",
+    };
+    appendFileSync(
+      join(logDir, `${record.endedAt.slice(0, 10)}.jsonl`),
+      `${JSON.stringify(corrupt)}\n`,
+    );
+    const broken = await fetch(`http://${base}/api/replay`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: alpha.secret, matchId: corrupt.matchId }),
+    });
+    expect(broken.status).toBe(409);
+
     /**
      * **名指しになっていない識別子で走査を始めさせない。** 空文字はどの行にも含まれるので、
      * 通すと 1 回の問い合わせで全部の日を解析することになる。プレイヤーは誰でも作れるので、

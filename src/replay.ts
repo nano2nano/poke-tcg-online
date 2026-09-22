@@ -151,6 +151,8 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
 
 /** 32 ビットは 16 進で 8 桁。新旧どちらの `seed` も、同じダイジェストの先頭から取っている。 */
 const NUMERIC_SEED_DIGITS = 8;
+/** `seed` が 32 ビットの数値だった頃のレコードの版（§9.1）。 */
+const NUMERIC_SEED_SCHEMA = 2;
 
 /**
  * 公開された `nonce` から `seed` とコミットを導き直す（6.4 節）。
@@ -160,15 +162,19 @@ const NUMERIC_SEED_DIGITS = 8;
  * 比べると過去の対局ログが一つ残らずここで落ち、`tools/replay-verify.ts` が 1 を返す。
  * 当時の幅まで詰めれば当時の値に戻るので、そちらで比べる。
  *
- * **見るのは `schemaVersion` ではなく値そのものである。** JSONL は型を持たないので、
- * 版の申告と中身が食い違う行はありうる。
+ * **詰めた比較は、版と中身の両方が古いときだけ使う。** JSONL は型を持たないので、
+ * 版の申告と中身は独立に食い違いうる。版だけ古い行は幅そのままで比べ、いまの版を
+ * 名乗りながら数値を持つ行は通さない。後者を通すと、幅を削った記録が健全に見える。
  */
 export function seedCommitmentHolds(record: MatchRecord): boolean {
   const recomputed = commitSeed(record.seedNonce);
   if (recomputed.commit !== record.seedCommit) return false;
   const seed: unknown = record.seed;
   if (typeof seed === "number") {
-    return Number.parseInt(recomputed.seed.slice(0, NUMERIC_SEED_DIGITS), 16) === seed;
+    return (
+      record.schemaVersion <= NUMERIC_SEED_SCHEMA &&
+      Number.parseInt(recomputed.seed.slice(0, NUMERIC_SEED_DIGITS), 16) === seed
+    );
   }
   return recomputed.seed === seed;
 }
