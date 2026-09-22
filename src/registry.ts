@@ -43,13 +43,30 @@ export class MatchRegistry {
   /**
    * 終わった対戦をログへ落として台帳から外す。
    * すでに外れていれば何もしない（決着と切断が同じ対戦を二度連れてくる）。
+   *
+   * **返すのは、ログへ落ちた対戦だけである。** 書けなかったときは `null` を返す。
+   * 呼び手はこれを見て、記録に残らなかった対戦で持ち点を動かさずに済む（7.2 節）。
    */
   retire(match: Match): MatchRecord | null {
     if (!this.matches.has(match.matchId)) return null;
     this.matches.delete(match.matchId);
     for (const token of match.seatTokens) this.seats.delete(token);
     const record = toRecord(match);
-    appendRecord(record, this.logDir);
+    try {
+      appendRecord(record, this.logDir);
+    } catch (error) {
+      /**
+       * **落ちても投げ返さない。** ここは持ち時間の見回りと WebSocket の処理から呼ばれる。
+       * 投げると走っているもの全体が止まり、同じ見回りで終わらせるはずだった別の対戦も残る。
+       * 記録は失われるが、それは投げても同じで、投げるとさらに失う。大きく残す。
+       *
+       * **そして `null` を返す。** 持ち点は対局ログから作り直せる、というのが 7.2 節である。
+       * 書けなかった対戦で持ち点だけ動かすと、その関係が切れる。一覧にも出ない対戦のぶん
+       * 持ち点が動いていて、どこから来た差か誰にも言えなくなる。動かさないほうが直せる。
+       */
+      console.error(`対局ログを書けなかった（${match.matchId}）。持ち点は動かさない:`, error);
+      return null;
+    }
     return record;
   }
 

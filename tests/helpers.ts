@@ -45,8 +45,8 @@ export function newMatch(seedNonce: string, nowMs = 0): Match {
     matchId: `match-${seedNonce}`,
     decks: legalDecks(),
     seats: [
-      { playerId: "player-a", displayName: "あ" },
-      { playerId: "player-b", displayName: "い" },
+      { playerId: "player-a", displayName: "あ", rating: 1500 },
+      { playerId: "player-b", displayName: "い", rating: 1500 },
     ],
     seatTokens: [`token-a-${seedNonce}`, `token-b-${seedNonce}`],
     nowMs,

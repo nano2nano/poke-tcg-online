@@ -135,3 +135,23 @@ button.secondary {
   font-family: inherit;
   font-size: 0.95rem;
 }
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+
+.history-list button {
+  text-align: left;
+  background: #eef1f5;
+  color: #1c2530;
+}
+
+.replay-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}

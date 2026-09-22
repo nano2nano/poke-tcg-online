@@ -33,9 +33,15 @@ import { commitSeed, type SeedCommitment } from "./fingerprint.js";
 import type { ClockView, RejectReason } from "./protocol.js";
 
 export interface SeatInfo {
-  /** クライアントが保存する識別子。対戦をまたいで同じ人を指す（7 節）。 */
+  /** サーバが発行した識別子。対戦をまたいで同じ人を指す（7.2 節）。 */
   playerId: string;
   displayName: string;
+  /**
+   * 対戦を始めた時点の持ち点。**あとから座席と人を結び直すことはできない**ので、
+   * ここで持たなければこの対戦には二度と付けられない。
+   * 終わったあとの持ち点は、対戦の並びから導けるので持たない。
+   */
+  rating: number;
 }
 
 /**
@@ -205,6 +211,17 @@ export function applyTimeout(match: Match, nowMs: number): boolean {
   if (!isTimedOut(match.clocks[mover], elapsedMs)) return false;
   finish(match, { kind: "timeout", winner: opponent(mover), timedOut: mover }, nowMs);
   return true;
+}
+
+/**
+ * 座席 0 から見た結果。勝ち 1・引き分け 0.5・負け 0。持ち点の計算がこれを使う。
+ *
+ * 投了と時間切れも普通の勝敗として数える。規則上の敗北条件ではない（2.3 節）ことは
+ * `matchResult.kind` が区別して持っているので、持ち点の側で分ける必要はない。
+ */
+export function scoreForSeatZero(result: MatchResult): number {
+  if (result.kind === "normal" && result.winner === null) return 0.5;
+  return result.winner === 0 ? 1 : 0;
 }
 
 /** エンジンが付けた勝敗。投了と時間切れでは対戦が途中なので null になる。 */

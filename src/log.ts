@@ -64,7 +64,13 @@ export function toRecord(match: Match): MatchRecord {
   };
 }
 
-const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data", "matches");
+/** 既定の置き場。`createApp` も読み返しのためにこれを引く。 */
+export const DEFAULT_LOG_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "data",
+  "matches",
+);
 
 /**
  * 日付で切った JSONL へ 1 行追記する（6.5 節）。データベースは置かない。
@@ -72,7 +78,7 @@ const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data", 
  * 1 局 0.63 KB（gzip）なので、100 万局で 630 MB である。学習は先頭から順に読むだけで、
  * 索引を要する問い合わせは生きている対戦にしか無く、それはメモリにある。
  */
-export function appendRecord(record: MatchRecord, dir: string = DEFAULT_DIR): string {
+export function appendRecord(record: MatchRecord, dir: string = DEFAULT_LOG_DIR): string {
   mkdirSync(dir, { recursive: true });
   const day = record.endedAt.slice(0, 10);
   const path = join(dir, `${day}.jsonl`);

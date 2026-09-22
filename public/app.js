@@ -15,12 +15,39 @@ let seat = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しで個体番号からカードの名前を引くのに使う。 */
 let lastView = null;
+/** 走っている打ち手の読み込み。`ensureAccount` が待ち合わせに使う。 */
+let loadingAccount = null;
 
 const nameOf = (defId) => cards[defId]?.name ?? defId;
 
 $("join-button").addEventListener("click", () => {
   join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
 });
+
+/**
+ * 人が名乗りを触ったか。
+ *
+ * 読み込みは非同期なので、**返ってくる前に名乗りを書き換えて「対戦をさがす」を
+ * 押せてしまう。** そこで欄を埋め直すと、打った名前が消えてから送られる。
+ */
+let nameTouched = false;
+$("name").addEventListener("input", () => {
+  nameTouched = true;
+});
+
+ensureAccount().catch((error) => setStatus(`打ち手を読めませんでした: ${error.message}`));
+
+/** 持ち点と戦績を引き直す。対戦が終われば動くので、そのたびに読む。 */
+async function refreshAccount() {
+  const secret = storedSecret();
+  if (secret === null) return;
+  const response = await fetch("/api/account/me", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secret }),
+  });
+  if (response.ok) showAccount(await response.json());
+}
 
 $("check-button").addEventListener("click", () => {
   checkDeck()
@@ -38,6 +65,8 @@ $("concede-button").addEventListener("click", () => {
 async function join() {
   setStatus("デッキを送っています");
   cards = await getJson("/api/cards");
+  // **ここで名前の欄を書き戻さない。** 書き戻すと、入力した名前が消えてから読まれる。
+  await ensureAccount();
   const deck = await deckToSubmit();
   if (deck === null) {
     setStatus("デッキを直してから、もう一度おしてください。");
@@ -46,15 +75,18 @@ async function join() {
 
   const room = $("room").value.trim();
   const request = {
-    playerId: playerId(),
-    displayName: $("name").value.trim() || "ななし",
+    secret: storedSecret(),
     deck: { cards: deck.cards },
   };
+  // **名乗り直しは、その人が欄を触ったときだけ送る。** 名乗り直しは対局ログにも残り、
+  // 取り消せない。欄の中身がその人の意思だとは限らない以上、送る条件は「打ったこと」にする。
+  if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
   if (room !== "") request.roomCode = room;
 
   const outcome = await postJson("/api/join", request);
   if (!outcome.ok) {
-    setStatus(`デッキが通りませんでした:\n${outcome.errors.join("\n")}`);
+    // 断られる理由はデッキとは限らない。打ち手が見つからないこともここへ来る。
+    setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
     return;
   }
   if (outcome.seat !== undefined) {
@@ -141,11 +173,47 @@ function pickChoice(line, name, defId) {
     .catch((error) => showDeckStatus([`確かめられませんでした: ${error.message}`], "ng"));
 }
 
+/**
+ * 相手が見つかるまで取りに行く。
+ *
+ * **札が降りていたら待つのをやめる。** 同じ打ち手が別の窓から入ると古い札は降りる。
+ * それを「まだ待っている」と読むと、この窓は永久に問い合わせ続けることになる。
+ */
 async function waitForOpponent(ticket) {
   for (;;) {
-    const claimed = await getJson(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
-    if (claimed.seat !== null) {
+    let claimed = null;
+    try {
+      claimed = await getJson(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
+      setStatus("相手を待っています");
+    } catch {
+      /**
+       * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
+       * やめるとその対戦に座らないまま時間切れで負ける。札は何度でも使えるので、
+       * 取り直せばよい。本当に降りていれば、繋がった時点で `dropped` が返る。
+       */
+      setStatus("相手を待っています（つながりが悪いので取り直しています）");
+    }
+    if (claimed?.kind === "seated") {
       openMatch(claimed.seat);
+      return;
+    }
+    if (claimed?.kind === "finished") {
+      // 席に着く前に終わっている。指していなくても記録には残り、持ち点も動いている。
+      setStatus("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
+      refreshAccount().catch(() => {});
+      return;
+    }
+    if (claimed?.kind === "dropped") {
+      setStatus("別の窓から入り直したので、この窓は待つのをやめました。");
+      return;
+    }
+    /**
+     * **知らない答えで待ち続けない。** 「まだ待っている」以外は、こちらが知らない形でも
+     * 待つのをやめる。入れ替えのあとに古いタブが新しい答えを受け取ることがあり、
+     * 待ち続けると `dropped` を足す前と同じ「永久に問い合わせ続ける」に戻る。
+     */
+    if (claimed !== null && claimed.kind !== "waiting") {
+      setStatus("受付の記録が無くなりました。もう一度「対戦をさがす」を押してください。");
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -181,6 +249,8 @@ function receive(message) {
       renderMoves(null);
       addEvent(describeEnd(message));
       $("clock").textContent = "対戦は終わりました";
+      // 決着で持ち点が動く。開いた時点の値のまま置かない。
+      refreshAccount().catch(() => {});
       return;
     case "reject":
       // 古い画面から押したときは、サーバが正しい局面を送り直してくる。
@@ -271,11 +341,14 @@ function renderMoves(moves) {
 /**
  * 手の見出し。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
  * ここが知らない型が来ても、型の名前だけは出す。
+ *
+ * 名前を引くのは **その手を指す直前の盤面** からである。指したあとの盤面では、
+ * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
-function describeMove(move) {
+function describeMove(move, view = lastView) {
   switch (move.type) {
     case "PlayBasic":
-      return `${handCardName(move.cardInstanceId)} をだす`;
+      return `${handCardName(move.cardInstanceId, view)} をだす`;
     case "Evolve":
       return "進化させる";
     case "AttachEnergy":
@@ -299,7 +372,7 @@ function describeMove(move) {
     case "EndTurn":
       return "番を終わる";
     case "AnswerChoice":
-      return describeAnswer(move.answer);
+      return describeAnswer(move.answer, view);
     default:
       return move.type;
   }
@@ -310,18 +383,18 @@ function describeMove(move) {
  * カード、場の個体、位置、番号のいずれかである。
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
-function describeAnswer(answer) {
+function describeAnswer(answer, view) {
   switch (answer.kind) {
     case "accept":
       return "はい";
     case "decline":
       return "いいえ";
     case "card":
-      return handCardName(answer.card);
+      return handCardName(answer.card, view);
     case "cardDef":
       return nameOf(answer.defId);
     case "inPlay":
-      return inPlayName(answer.target);
+      return inPlayName(answer.target, view);
     case "position":
       return `${answer.index + 1} 番目`;
     case "effectIndex":
@@ -336,23 +409,31 @@ function describeAnswer(answer) {
 }
 
 /** 場の個体番号から、いちばん上のカードの名前を引く。 */
-function inPlayName(inPlayId) {
-  if (lastView === null) return inPlayId;
-  for (const side of [lastView.self, lastView.opponent]) {
+function inPlayName(inPlayId, view) {
+  if (!view) return inPlayId;
+  for (const side of [view.self, view.opponent]) {
     for (const pokemon of [side.active, ...side.bench]) {
       if (pokemon === null || pokemon.concealed === true) continue;
       if (pokemon.inPlayId !== inPlayId) continue;
-      const own = side === lastView.self ? "自分の" : "相手の";
+      const own = side === view.self ? "自分の" : "相手の";
       return own + nameOf(pokemon.stack[pokemon.stack.length - 1].defId);
     }
   }
   return inPlayId;
 }
 
-/** 手札の個体番号からカードの名前を引く。盤面に無ければ番号のまま出す。 */
-function handCardName(instanceId) {
-  const card = lastView?.self.hand.find((held) => held.instanceId === instanceId);
-  return card === undefined ? instanceId : nameOf(card.defId);
+/**
+ * 手札の個体番号からカードの名前を引く。盤面に無ければ番号のまま出す。
+ *
+ * 両側を見るのは読み返しのためである。対戦中は相手の手札が `hand` を持たないので、
+ * 自分の手札しか当たらない。
+ */
+function handCardName(instanceId, view) {
+  for (const side of [view?.self, view?.opponent]) {
+    const card = side?.hand?.find((held) => held.instanceId === instanceId);
+    if (card !== undefined) return nameOf(card.defId);
+  }
+  return instanceId;
 }
 
 function addEvent(text) {
@@ -370,13 +451,77 @@ function setStatus(text) {
 }
 
 /** 座席に名乗る識別子。口座は持たないので、この端末が覚えているだけである（7 節）。 */
-function playerId() {
-  let id = localStorage.getItem("poke-player-id");
-  if (id === null) {
-    id = crypto.randomUUID();
-    localStorage.setItem("poke-player-id", id);
+/**
+ * 打ち手の合言葉。**サーバは控えを持たない**ので、失うとその戦績には戻れない。
+ * この画面は確認用なので、localStorage に置くだけにしておく。
+ */
+function storedSecret() {
+  return localStorage.getItem("poke-account-secret");
+}
+
+/**
+ * 打ち手を 1 人だけ用意する。
+ *
+ * **走っている途中の呼び出しを待ち合わせる。** 画面を開いたときの読み込みと、
+ * それを待たずに押された「対戦をさがす」が重なると、打ち手が 2 人できる。
+ * 画面に出ている持ち点と、実際に指す打ち手が食い違い、片方が迷子になる。
+ */
+function ensureAccount() {
+  // 失敗したものを覚えると二度と作り直せないので、そのときだけ忘れる。
+  loadingAccount ??= loadAccount()
+    .then((account) => {
+      showAccount(account);
+      // **読めたときは必ず欄へ入れる。画面を開いたときの 1 回だけにしない。**
+      // 開いたときに失敗すると、欄は既定の「ななし」のまま残る。次に「対戦をさがす」で
+      // 読み直して通っても入れ直さないと、その「ななし」が名乗りとして送られる。
+      if (!nameTouched) $("name").value = account.displayName;
+      return account;
+    })
+    .catch((error) => {
+      loadingAccount = null;
+      throw error;
+    });
+  return loadingAccount;
+}
+
+/** 合言葉が無ければ打ち手を作る。あれば戦績を読み直す。 */
+async function loadAccount() {
+  const secret = storedSecret();
+  if (secret !== null) {
+    const response = await fetch("/api/account/me", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret }),
+    });
+    if (response.ok) return response.json();
+    /**
+     * **消すのは、サーバが「その打ち手はいない」と言ったときだけである。**
+     * サーバは合言葉の控えを持たないので、ここで消すと持ち点も戦績も読み返しも戻らない。
+     * 404 という番号だけでは足りない。静的ファイルの取りこぼしも、前の版が動いている
+     * サーバも、間に挟まった中継も 404 を返す。合図が付いている応答だけを本物とする。
+     */
+    const failure = await response.json().catch(() => null);
+    if (failure?.code !== "account-not-found") {
+      throw new Error(`打ち手を読めなかった（${response.status}）。合言葉はそのまま残してある。`);
+    }
+    localStorage.removeItem("poke-account-secret");
   }
-  return id;
+  const created = await postJson("/api/account", {
+    displayName: $("name").value.trim() || "ななし",
+  });
+  // 合言葉として置けるのは文字列だけである。`undefined` を置くと次に開くまで直らない。
+  if (typeof created?.secret !== "string") throw new Error("打ち手を作れなかった");
+  localStorage.setItem("poke-account-secret", created.secret);
+  return created.account;
+}
+
+/** 持ち点と戦績の 1 行。**名前の欄には触れない。** 入力の途中かもしれない。 */
+function showAccount(account) {
+  const record =
+    account.games === 0
+      ? "まだ対戦していません"
+      : `${account.games} 戦 ${account.wins} 勝 ${account.losses} 敗 ${account.draws} 分`;
+  $("account").textContent = `持ち点 ${account.rating}（${record}）`;
 }
 
 async function getJson(path) {
@@ -385,13 +530,179 @@ async function getJson(path) {
   return response.json();
 }
 
+/**
+ * **応答の可否を見る。** 見ないと、誤りの本文をそのまま中身として読むことになり、
+ * `undefined` を触った先で分かりにくい誤りになる。サーバの言い分をそのまま持ち上げる。
+ *
+ * ただし **`ok: false` は投げない。** 「デッキのここが規則に通らない」のような、
+ * 呼び手が読んで人に見せるための断りである。投げると理由が落ちて、
+ * 「400 が返った」しか出せなくなる。通信が失敗したこととは別の話である。
+ */
 async function postJson(path, body) {
   const response = await fetch(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return response.json();
+  const answer = await response.json().catch(() => null);
+  if (response.ok || answer?.ok === false) return answer;
+  throw new Error(answer?.error ?? `${path} が ${response.status} を返した`);
+}
+
+/** 読み返している対戦。開いていなければ null。 */
+let replaying = null;
+
+$("history-button").addEventListener("click", () => {
+  showHistory().catch((error) => setStatus(`一覧を出せませんでした: ${error.message}`));
+});
+
+$("replay-close").addEventListener("click", () => {
+  replaying = null;
+  $("replay").hidden = true;
+});
+
+for (const [id, step] of [
+  ["replay-first", () => 0],
+  ["replay-prev", (ply) => ply - 1],
+  ["replay-next", (ply) => ply + 1],
+  ["replay-last", () => replaying.moveCount],
+]) {
+  $(id).addEventListener("click", () => {
+    if (replaying === null) return;
+    // 数えるのは**頼んだ手数**からである。描けた手数から数えると、続けて押したぶんが
+    // すべて同じ 1 手への問い合わせになり、6 回押しても 1 手しか進まない。
+    goToPly(step(replaying.wanted)).catch((error) => {
+      $("replay-status").textContent = `辿れませんでした: ${error.message}`;
+    });
+  });
+}
+
+async function showHistory() {
+  // **打ち手ができるのを待つ。** 初めて来た人は合言葉をまだ持たないので、
+  // 待たずに送ると `secret: null` になり、「打ち手が見つからない」と断られる。
+  await ensureAccount();
+  if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
+  const { matches } = await postJson("/api/matches", { secret: storedSecret() });
+  const list = $("history-list");
+  list.innerHTML = "";
+  if (matches.length === 0) {
+    list.textContent = "まだ読み返せる対戦がありません。";
+    return;
+  }
+  for (const summary of matches) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = describeSummary(summary);
+    button.addEventListener("click", () => {
+      openReplay(summary).catch((error) => setStatus(`開けませんでした: ${error.message}`));
+    });
+    list.append(button);
+  }
+}
+
+function describeSummary(summary) {
+  const outcome = { win: "勝ち", loss: "負け", draw: "引き分け" }[summary.outcome];
+  const how = { normal: "", concede: "（投了）", timeout: "（時間切れ）" }[
+    summary.matchResult.kind
+  ];
+  const when = new Date(summary.endedAt).toLocaleString("ja-JP");
+  return `${when} ${summary.opponentName} と ${outcome}${how} ${summary.moveCount} 手`;
+}
+
+async function openReplay(summary) {
+  const opened = {
+    matchId: summary.matchId,
+    seat: summary.seat,
+    /** 描けている手数。 */
+    ply: 0,
+    /** 頼んだ手数。まだ返ってきていないぶんを含む。 */
+    wanted: 0,
+    moveCount: summary.moveCount,
+    // 出した順に番号を振る。返ってくる順は、これと同じとは限らない。
+    asked: 0,
+  };
+  replaying = opened;
+  $("replay").hidden = false;
+  try {
+    await goToPly(0);
+  } catch (error) {
+    // 開けないものを空の欄で見せない。断りは一覧のところに出す。
+    // **いま開いているものが自分のときだけ閉じる。** 先に別の対戦を開いていれば、
+    // 遅れて届いたこちらの失敗で、映っているほうを閉じることになる。
+    if (replaying === opened) {
+      $("replay").hidden = true;
+      replaying = null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * その手数の局面を取りに行って描く。局面を持たないので、毎回サーバが作り直す。
+ *
+ * **古い応答では描かない。** 「1 手 ▶」を続けて押したり別の対戦へ移ったりすると、
+ * 出した順と返る順が入れ替わる。あとから来た古い盤面で上書きすると、
+ * 手数の表示と盤面がずれたまま残る。
+ */
+async function goToPly(ply) {
+  if (replaying === null) return;
+  const opened = replaying;
+  const mine = ++opened.asked;
+  const wanted = Math.max(0, Math.min(ply, opened.moveCount));
+  opened.wanted = wanted;
+  let frame;
+  try {
+    ({ frame } = await postJson("/api/replay", {
+      secret: storedSecret(),
+      matchId: opened.matchId,
+      ply: wanted,
+    }));
+  } catch (error) {
+    // **行き先を戻す。** 戻さないと、1 度失敗しただけで次に押したぶんが 1 手飛ぶ。
+    // あとから出したぶんが走っていれば、その行き先のほうが新しいので触らない。
+    if (replaying === opened && mine === opened.asked) opened.wanted = opened.ply;
+    throw error;
+  }
+  // 別の対戦へ移ったか、あとから出した問い合わせが先に返っていれば、これは捨てる。
+  if (replaying !== opened || mine !== opened.asked) return;
+  replaying.ply = frame.ply;
+  /**
+   * **辿れる上限を、再現できる地点まで下げる。** 下げないと「さいごまで」がその先を
+   * 頼み続け、毎回同じ手数が返ってきて進まないように見える。
+   */
+  if (frame.divergedAt !== null) {
+    opened.moveCount = frame.divergedAt;
+    opened.wanted = frame.ply;
+  }
+
+  const board = readerBoard(frame.views, replaying.seat);
+  $("replay-self").innerHTML = sideHtml(board.self, true);
+  $("replay-opponent").innerHTML = sideHtml(board.opponent, true);
+
+  const before = readerBoard(frame.beforeViews, replaying.seat);
+  const move = frame.playedMove === null ? "対戦の開始時" : describeMove(frame.playedMove, before);
+  // エンジンの版が違っても止めない。止めるのはカードの定義が変わったときだけである（§6.3）。
+  const warning = frame.engineCommitDiffers
+    ? "　※ この対戦を指したときとエンジンの版が違います"
+    : "";
+  // 記録された手が、いまのエンジンでは合法でなくなった地点。ここから先は辿れない。
+  const diverged =
+    frame.divergedAt === null
+      ? ""
+      : `　※ ${frame.divergedAt} 手目から先は、いまのエンジンでは再現できません`;
+  $("replay-status").textContent =
+    `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}${diverged}`;
+}
+
+/**
+ * 座席ごとの射影 2 つを、読み手から見た 1 枚の盤面にする。
+ *
+ * 相手の側も**相手自身の射影の `self`** から取る。終わった対戦なので、相手の手札も
+ * そのまま見えてよい（6.6 節）。
+ */
+function readerBoard(views, seat) {
+  if (!views) return null;
+  return { self: views[seat].self, opponent: views[seat === 0 ? 1 : 0].self };
 }
 
 function escape(text) {
