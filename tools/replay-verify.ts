@@ -35,13 +35,25 @@ const fingerprint = engineFingerprint();
 let records = 0;
 let failed = 0;
 let refused = 0;
+let broken = 0;
 let commitDiffers = 0;
 
 for (const path of expand(targets)) {
   for (const [lineNumber, line] of readFileSync(path, "utf8").split("\n").entries()) {
     if (line.trim() === "") continue;
+    /**
+     * 追記の途中で落ちれば書きかけの行が残る。**1 行のために走査ごと止めない。**
+     * ここだけ `JSON.parse` が裸だったので、切れた 1 行で全部の日が読めなくなっていた。
+     * サーバ側の読み手（`src/history.ts`、`src/accounts.ts`）は前から数えて飛ばしている。
+     */
+    let record: MatchRecord;
+    try {
+      record = JSON.parse(line) as MatchRecord;
+    } catch {
+      broken += 1;
+      continue;
+    }
     records += 1;
-    const record = JSON.parse(line) as MatchRecord;
 
     let initialCards: string[] = [];
     const result = replay(record, {
@@ -75,6 +87,7 @@ if (records === 0) {
   process.exit(2);
 }
 
+if (broken > 0) process.stdout.write(`読めない行を ${broken} 行とばした\n`);
 process.stdout.write(
   `${records} 件のうち ${refused} 件は版が古く再生しなかった。` +
     `残りを再生して ${failed} 件が通らなかった` +
