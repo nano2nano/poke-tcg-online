@@ -80,3 +80,23 @@ jobs:
       # 型検査、書式、全テスト。engine/ 配下は .prettierignore で書式検査の対象外。
       - name: 検査する
         run: npm run verify:all
+
+      # ブラウザは PR ごとに取り直す。入れるのは chromium 1 つだけで、
+      # `--with-deps` が Ubuntu 側の不足ライブラリも入れる。
+      - name: ブラウザを入れる
+        run: npx playwright install --with-deps chromium
+
+      - name: 画面を動かして検査する
+        run: npm run test:e2e
+
+      # 落ちたときだけ trace を残す。`retain-on-failure` が `test-results/` へ出すが、
+      # 上げておかないとランナーごと捨てられる。**手元で再現しない競合はこれしか手掛かりが無い。**
+      # `verify:all` の段で落ちるとこのディレクトリは無いので、無ければ黙って通す。
+      - name: 落ちたときの trace を残す
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-trace
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
