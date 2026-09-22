@@ -28,10 +28,16 @@ describe("シャッフルのコミット", () => {
     expect(verifySeedCommitment(first)).toBe(true);
   });
 
-  // 接頭辞を分けないと、コミットを総当たりして seed が出る（seed は 32 ビットしかない）。
+  // 接頭辞を分けないと、コミットが seed そのものの導出になる。
   it("コミットから seed が導けないよう、別々の接頭辞で導く", () => {
     const commitment = commitSeed("べつの nonce");
-    expect(commitment.commit).not.toContain(commitment.seed.toString(16));
-    expect(verifySeedCommitment({ ...commitment, seed: commitment.seed + 1 })).toBe(false);
+    expect(commitment.commit).not.toContain(commitment.seed);
+    // 1 桁足すだけにする。特定の文字へ置き換えると、元がその文字だった seed で改変にならない。
+    expect(verifySeedCommitment({ ...commitment, seed: `${commitment.seed}0` })).toBe(false);
+  });
+
+  // 数値で持つと、整数で配れる幅が 2^53 で頭打ちになる（仕様 9 節）。
+  it("seed は 16 進 32 桁の文字列である", () => {
+    expect(commitSeed("さらにべつの nonce").seed).toMatch(/^[0-9a-f]{32}$/);
   });
 });

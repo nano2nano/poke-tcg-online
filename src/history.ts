@@ -27,8 +27,13 @@ import {
   projectEvents,
 } from "./engine.js";
 import type { GameState, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
-import { engineFingerprint, type EngineFingerprint } from "./fingerprint.js";
+import {
+  engineFingerprint,
+  OLDEST_REPLAYABLE_SCHEMA_VERSION,
+  type EngineFingerprint,
+} from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
+import { seedCommitmentHolds } from "./replay.js";
 import type { MatchResult } from "./match.js";
 
 /** 一覧に出す 1 行。局面は含まない。 */
@@ -76,19 +81,39 @@ export interface ReplayFrame {
 }
 
 /**
- * その記録を、いまのエンジンでリプレイしてよいか（§6.3）。
+ * その記録を、いまのエンジンでリプレイしてよいか。
  *
- * `cardDataSha256` の不一致は拒否し、`commit` の不一致は警告にとどめる。
- * 分ける理由は §6.3 にある。再生器（`src/replay.ts`）と同じ判断を返す。
+ * 拒否するのは、盤面を描けてしまうのに**それが記録された対戦の盤面だと言えない**ときである。
+ * `commit` の不一致だけは警告にとどめる。分ける理由は §6.3 にある。
  */
 export type Replayability =
   | { kind: "ok"; engineCommitDiffers: boolean }
+  | { kind: "schema-too-old"; recorded: number; oldest: number }
+  | { kind: "seed-commitment-mismatch" }
   | { kind: "card-data-mismatch"; expected: string; actual: string };
 
 export function replayability(
   record: MatchRecord,
   fingerprint: EngineFingerprint = engineFingerprint(),
 ): Replayability {
+  // 種の読み方そのものが変わっている版は、盤面を 1 枚も描く前に断る（§6.4）。
+  // 欠けている版番号も断る側へ倒す。`undefined < 3` は false なので、大小では素通りする。
+  if (!(record.schemaVersion >= OLDEST_REPLAYABLE_SCHEMA_VERSION)) {
+    return {
+      kind: "schema-too-old",
+      recorded: record.schemaVersion,
+      oldest: OLDEST_REPLAYABLE_SCHEMA_VERSION,
+    };
+  }
+  /**
+   * **公開された `nonce` から `seed` を導き直せない記録は断る。**
+   *
+   * 上の版番号の判定は、境目を上げ忘れると黙って効かなくなる。こちらは導出そのものを
+   * やり直すので、種の作り方が変わればどの版でも必ず食い違う。書き換えられた `seed` も
+   * ここで止まる。再生器（`src/replay.ts`）はログの検査が仕事なので、同じ食い違いを
+   * 止めずに `failures` へ載せて先へ進む。画面へ出すかどうかはこちらで決める。
+   */
+  if (!seedCommitmentHolds(record)) return { kind: "seed-commitment-mismatch" };
   if (record.engine.cardDataSha256 !== fingerprint.cardDataSha256) {
     return {
       kind: "card-data-mismatch",
@@ -390,13 +415,18 @@ export function forgetOpened(): void {
  * 返すのは `playerView` と `projectEvents` の結果だけである（1 節の S-2）。
  * 終わった対戦でも、生の `GameState` を外へ出す経路は作らない。
  *
- * 呼ぶ前に `replayability` を通すこと。カードの定義が変わった記録は、ここでは止まらない。
+ * **読み返せない記録からは盤面を作らず、投げる。** 呼ぶ順番だけに頼ると、断るはずの記録が
+ * 1 回の呼び出しで「誤りの無い別の対戦」として出る。出たものが別の対戦だと、読む人には分からない。
  */
 export function frameAt(
   record: MatchRecord,
   ply: number,
   fingerprint: EngineFingerprint = engineFingerprint(),
 ): ReplayFrame {
+  const readable = replayability(record, fingerprint);
+  if (readable.kind !== "ok") {
+    throw new Error(`読み返せない記録から盤面を作ろうとした: ${readable.kind}`);
+  }
   // 手数は整数に丸める。丸めないと `ply: 1.5` を受け取り、盤面は 2 手目の後なのに
   // 応答には 1.5 と返る。数でないものだけ 0 にし、大きすぎるものは下の丸めに任せる。
   const asked = Number.isNaN(ply) ? 0 : Math.floor(ply);

@@ -9,10 +9,11 @@
 
 import { applyMove, createGame, legalMoves, movesEqual } from "./engine.js";
 import type { DomainEvent, GameOutcome, GameState, Player } from "./engine.js";
-import { commitSeed } from "./fingerprint.js";
+import { commitSeed, OLDEST_REPLAYABLE_SCHEMA_VERSION } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
 
 export type ReplayFailure =
+  | { kind: "schema-too-old"; recorded: number; oldest: number }
   | { kind: "card-data-mismatch"; expected: string; actual: string }
   | { kind: "seed-commitment" }
   | { kind: "first-player-mismatch"; expected: Player; actual: Player }
@@ -23,8 +24,13 @@ export type ReplayFailure =
   | { kind: "threw"; index: number; message: string };
 
 export interface ReplayResult {
-  /** 最後まで再生できたときの終局面。失敗したときは途中の局面。 */
-  state: GameState;
+  /**
+   * 最後まで再生できたときの終局面。途中で止まったときはそこまでの局面。
+   *
+   * **再生を始めなかったときは null。** 断った記録から局面を作って返すと、一度も
+   * 存在しなかった盤面を「途中まで」として渡すことになる。
+   */
+  state: GameState | null;
   /** 実際に適用できた手の数。 */
   applied: number;
   failures: ReplayFailure[];
@@ -49,15 +55,35 @@ export interface ReplayOptions {
  *
  * 1 だけでは、合法手の集合そのものが変わった再生を止められない。4 がそれを見る。
  *
- * `cardDataSha256` の不一致は再生を拒否し、`commit` の不一致は警告にとどめる。
+ * 再生を始める前に 2 つ断る。版が古すぎる記録（`OLDEST_REPLAYABLE_SCHEMA_VERSION`）と、
+ * `cardDataSha256` が食い違う記録である。`commit` の不一致は警告にとどめる。
  * 分ける理由は 6.3 節にある。
  */
 export function replay(record: MatchRecord, options: ReplayOptions = {}): ReplayResult {
   const failures: ReplayFailure[] = [];
+  /**
+   * **種の読み方が変わった版より前は、再生を始めない**（`OLDEST_REPLAYABLE_SCHEMA_VERSION`）。
+   * 走らせても 0 手目から止まるが、出てくるのは「エンジンが変わった」という誤った読みである。
+   * 欠けている版番号も断る側へ倒す。`undefined < 3` は false なので、大小では素通りする。
+   */
+  if (!(record.schemaVersion >= OLDEST_REPLAYABLE_SCHEMA_VERSION)) {
+    return {
+      state: null,
+      applied: 0,
+      failures: [
+        {
+          kind: "schema-too-old",
+          recorded: record.schemaVersion,
+          oldest: OLDEST_REPLAYABLE_SCHEMA_VERSION,
+        },
+      ],
+      engineCommitDiffers: false,
+    };
+  }
   const expectedCardData = options.fingerprint?.cardDataSha256;
   if (expectedCardData !== undefined && expectedCardData !== record.engine.cardDataSha256) {
     return {
-      state: createGame({ seed: record.seed, decks: record.decks }).state,
+      state: null,
       applied: 0,
       failures: [
         {
@@ -83,9 +109,6 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
   }
   options.inspect?.(result.state, 0);
 
-  // 版 1 のログは 1 手ごとの合法手の数と位置を持たない。持っている版だけ突き合わせる。
-  const checkChoiceSet = record.schemaVersion >= 2;
-
   let applied = 0;
   for (const [index, logged] of record.moves.entries()) {
     const legal = legalMoves(result.state);
@@ -102,7 +125,7 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
       });
       break;
     }
-    if (checkChoiceSet && legal.length !== logged.candidates) {
+    if (legal.length !== logged.candidates) {
       failures.push({
         kind: "choice-set-mismatch",
         index,
@@ -110,7 +133,7 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
         actual: legal.length,
       });
     }
-    if (checkChoiceSet && chosen !== logged.chosen) {
+    if (chosen !== logged.chosen) {
       failures.push({
         kind: "choice-set-mismatch",
         index,

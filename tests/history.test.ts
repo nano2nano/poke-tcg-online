@@ -22,7 +22,7 @@ import {
   listMatches,
   replayability,
 } from "../src/history.js";
-import { engineFingerprint } from "../src/fingerprint.js";
+import { engineFingerprint, OLDEST_REPLAYABLE_SCHEMA_VERSION } from "../src/fingerprint.js";
 import { concede } from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
 
@@ -513,6 +513,58 @@ describe("リプレイとエンジンの版", () => {
     expect(replayability(record, now)).toEqual({ kind: "ok", engineCommitDiffers: false });
     const other = replayability(record, { ...now, cardDataSha256: "ちがうカードデータ" });
     expect(other.kind).toBe("card-data-mismatch");
+  });
+
+  // 版 2 までの seed は 32 ビットの数値で、いまの乱数は同じ値から別の列を出す。
+  it("種の読み方が変わる前の版は、盤面を 1 枚も描く前に断る", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-10", ["あ", "い"]);
+    const now = engineFingerprint();
+
+    expect(replayability({ ...record, schemaVersion: 2 }, now)).toEqual({
+      kind: "schema-too-old",
+      recorded: 2,
+      oldest: OLDEST_REPLAYABLE_SCHEMA_VERSION,
+    });
+    /**
+     * 版番号が欠けた行も断る。ログは `as MatchRecord` で読み直すだけなので、欄が
+     * 無い行はここまで来る。`undefined < 3` は false なので、大小の比較では素通りする。
+     */
+    const { schemaVersion: _dropped, ...missing } = record;
+    expect(replayability(missing as MatchRecord, now).kind).toBe("schema-too-old");
+
+    // いまの版はここを通り抜ける。上の断りが版だけを見ていることの裏。
+    expect(replayability(record, now).kind).toBe("ok");
+  });
+
+  // 種を書き換えたログは、版番号が合っていても別の対戦の盤面を出す。
+  it("公開された nonce から seed が導き直せない記録を断る", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-11", ["あ", "い"]);
+    const now = engineFingerprint();
+
+    const tampered = { ...record, seed: record.seed.replace(/^./, (c) => (c === "0" ? "1" : "0")) };
+    expect(replayability(tampered, now)).toEqual({ kind: "seed-commitment-mismatch" });
+  });
+
+  /**
+   * 断る判断は `replayability` にあるが、盤面を作るのは `frameAt` である。呼ぶ順番だけに
+   * 頼ると、断るはずの記録が「誤りの無い別の対戦」として 1 回の呼び出しで出る。
+   */
+  it("読み返せない記録から盤面を作ろうとすると投げる", () => {
+    ensureCards();
+    const dir = newDir();
+    const record = writeMatch(dir, "hist-12", ["あ", "い"]);
+
+    // 黙って別の初手を返していたのがこの経路である。
+    expect(() => frameAt({ ...record, schemaVersion: 2 }, 0)).toThrow(/読み返せない/);
+    expect(() =>
+      frameAt({ ...record, seed: record.seed.replace(/^./, (c) => (c === "0" ? "1" : "0")) }, 0),
+    ).toThrow(/読み返せない/);
+    // 通る記録はこれまでどおり。
+    expect(frameAt(record, 0).views).toHaveLength(2);
   });
 
   it("エンジンの版が違うだけなら読み返せる。ただし警告を付ける", () => {

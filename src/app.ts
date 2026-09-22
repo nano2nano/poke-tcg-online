@@ -264,8 +264,22 @@ async function route(
       respondJson(response, 404, { error: "対戦が見つからない" });
       return;
     }
-    // カードの定義が変わっていれば、誤りを出さずに違う盤面を見せることになる（§6.3）。
+    // 断らずに読むと、誤りを出さずに違う盤面を見せることになる（§6.3、§6.4）。
     const readable = replayability(record);
+    if (readable.kind === "schema-too-old") {
+      respondJson(response, 409, {
+        error: "この対戦は、いまとは違う乱数で指されている。読み返せない。",
+        recorded: readable.recorded,
+        oldestReplayable: readable.oldest,
+      });
+      return;
+    }
+    if (readable.kind === "seed-commitment-mismatch") {
+      respondJson(response, 409, {
+        error: "この対戦は、記録された種が公開された値と合わない。読み返せない。",
+      });
+      return;
+    }
     if (readable.kind === "card-data-mismatch") {
       respondJson(response, 409, {
         error: "この対戦は、いまとは違うカードデータで指されている。読み返せない。",

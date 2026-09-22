@@ -48,4 +48,4 @@ export type {
 export { classifyDefId, listUnimplementedDefIds } from "../engine/src/coverage.js";
 export { registerPoolCards } from "../engine/src/cardpool/index.js";
 export { loadGeneratedCards } from "../engine/src/cardpool/generated-cards.js";
-export { nextInt } from "../engine/src/rng.js";
+export { createRng, nextInt } from "../engine/src/rng.js";
