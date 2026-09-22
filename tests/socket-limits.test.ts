@@ -42,7 +42,7 @@ async function postJson(path: string, body: unknown): Promise<Record<string, any
 
 /**
  * 座席に就くまで。2 人ぶん入れないと対戦が始まらないので、両方を出す。
- * 席に就けた側のトークンを返す。試験ごとに別の部屋を使い、前の対戦の相手を拾わない。
+ * 席に就けた側のトークンを返す。テストごとに別のルームコードを使い、前の対戦の相手を拾わない。
  */
 async function seatToken(room: string): Promise<string> {
   const deck = legalDecks()[0];
@@ -84,7 +84,7 @@ describe("1 通の大きさ", () => {
       socket.on("message", (raw) => resolve(String(raw)));
       socket.on("close", (code) => resolve(`closed:${code}`));
     });
-    // JSON として読めない中身なので、断りが返るのが正しい。切られてはいけない。
+    // JSON として読めない中身なので、エラーが返るのが正しい。切られてはいけない。
     socket.send("x".repeat(32 * 1024));
 
     expect(await answer).toContain("JSON として読めない");

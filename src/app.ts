@@ -186,7 +186,7 @@ export function createApp(options: AppOptions = {}): App {
   };
 }
 
-/** 死活確認の向き先。`ws` の `WebSocket` はこの形を満たす。試験では素のオブジェクトを渡す。 */
+/** 死活確認の向き先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
 interface Heartbeatable {
   ping(): void;
   terminate(): void;
