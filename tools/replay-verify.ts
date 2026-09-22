@@ -28,14 +28,30 @@ if (targets.length === 0) {
 registerPoolCards();
 const fingerprint = engineFingerprint();
 
+/**
+ * エンジンを直せば起きうる食い違い。ログの側に落ち度は無い。
+ *
+ * ここに挙がっていないもの（`seed-commitment` と `card-data-mismatch`）は、
+ * **エンジンを直しても起きない。** 前者はシャッフルが仕組まれていたという意味で、
+ * 後者は違うカードデータで指されたという意味である。版の違いを口実にこの 2 つを
+ * 見逃すと、エンジンを上げた日から先、対局ログ全体で公正さの検査が止まる。
+ */
+const ENGINE_DRIFT: ReadonlySet<string> = new Set([
+  "first-player-mismatch",
+  "choice-set-mismatch",
+  "illegal-move",
+  "no-move-available",
+  "outcome-mismatch",
+  "threw",
+]);
+
 let records = 0;
 let failed = 0;
 /**
- * エンジンの commit がログと違う行で通らなかったぶん。
+ * エンジンの commit がログと違い、食い違いがエンジンを直せば起きうるものだけだった行。
  *
- * **これで 1 を返さない。** エンジンを直せば、それ以前のログは指せない手を含みうる。
- * §6.3 は commit の食い違いを警告にとどめると決めているので、終了コードも同じ線を引く。
- * 数えて出しはするので、見たければ出力に出ている。
+ * **これで 1 を返さない。** §6.3 は commit の食い違いを警告にとどめると決めているので、
+ * 終了コードも同じ線を引く。数えて出しはするので、見たければ出力に出ている。
  */
 let failedOnOlderEngine = 0;
 let commitDiffers = 0;
@@ -44,11 +60,14 @@ for (const path of expand(targets)) {
   for (const [lineNumber, line] of readFileSync(path, "utf8").split("\n").entries()) {
     if (line.trim() === "") continue;
     records += 1;
-    const record = JSON.parse(line) as MatchRecord;
 
     let initialCards: string[] = [];
+    let record: MatchRecord;
     let result;
     try {
+      // **1 行の壊れで走査ごと止めない。** 残りの行と残りの日は読める。
+      // 解析もここへ入れる。切れた行は `JSON.parse` の側で投げる。
+      record = JSON.parse(line) as MatchRecord;
       result = replay(record, {
         fingerprint,
         inspect: (state, index) => {
@@ -57,15 +76,15 @@ for (const path of expand(targets)) {
         },
       });
     } catch (error) {
-      // 1 行の壊れで走査ごと止めない。残りの行と残りの日は読める。
       failed += 1;
-      process.stdout.write(`${path}:${lineNumber + 1} ${record.matchId}\n  ${String(error)}\n`);
+      process.stdout.write(`${path}:${lineNumber + 1}\n  ${String(error)}\n`);
       continue;
     }
 
     if (result.engineCommitDiffers) commitDiffers += 1;
     if (result.failures.length === 0) continue;
-    if (result.engineCommitDiffers) failedOnOlderEngine += 1;
+    const onlyDrift = result.failures.every((failure) => ENGINE_DRIFT.has(failure.kind));
+    if (result.engineCommitDiffers && onlyDrift) failedOnOlderEngine += 1;
     else failed += 1;
     process.stdout.write(`${path}:${lineNumber + 1} ${record.matchId}\n`);
     for (const failure of result.failures) {
