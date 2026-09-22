@@ -23,6 +23,7 @@ import { ACCOUNT_NOT_FOUND, AccountStore, type Account } from "./accounts.js";
 
 export { ACCOUNT_NOT_FOUND };
 import { findMatch, frameAt, isMatchId, listMatches, replayability } from "./history.js";
+import { closeIndex, syncIndex } from "./match-index.js";
 import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
 import { clientMessageSchema } from "./protocol.js";
@@ -105,6 +106,11 @@ export function createApp(options: AppOptions = {}): App {
   const now = options.now ?? (() => Date.now());
   const logDir = options.logDir ?? DEFAULT_LOG_DIR;
   const registry = new MatchRegistry(logDir);
+  /**
+   * 索引を立ち上げのうちに作っておく。作るのは初回だけだが、そこは対局ログを全部読む
+   * （実測で 24,000 局・1.4 秒）。最初に一覧を開いた人にそれを払わせない。
+   */
+  syncIndex(logDir);
   const accounts = new AccountStore(options.accountDir);
   const lobby = new Lobby(registry, accounts, now);
   const limitOptions =
@@ -214,6 +220,7 @@ export function createApp(options: AppOptions = {}): App {
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => http.close(() => resolve()));
+      closeIndex(logDir);
     },
   };
 }
