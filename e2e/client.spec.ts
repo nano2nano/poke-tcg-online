@@ -147,8 +147,18 @@ async function replayOfFinishedMatch(
   await settled;
 
   await a.click("#history-button");
+  /**
+   * **最初の 1 枚が描けるまで待ってから返す。**
+   *
+   * `#replay` が見えるのは最初のフレームを取りに行く**前**なので、見えたことだけを
+   * 待って返すと、そのあとテストが差し込む細工が初回フレームに当たることがある。
+   * 初回フレームが落ちると読み返しは閉じ、以降の「1 手 ▶」は押せないまま固まる。
+   */
+  const firstFrame = a.waitForResponse((response) => response.url().endsWith("/api/replay"));
   await a.locator("#history-list button").first().click();
+  await firstFrame;
   await expect(a.locator("#replay")).toBeVisible();
+  await expect(a.locator("#replay-status")).toContainText(/(^|[^0-9])0 \//);
 
   return [a, async () => void (await Promise.all([first.close(), second.close()]))];
 }
