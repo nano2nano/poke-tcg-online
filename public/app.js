@@ -18,6 +18,15 @@ let lastView = null;
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 
+/**
+ * 指している座席を置く鍵。
+ *
+ * **持たずに閉じると、その対戦には二度と入れない。** 繋ぎ直しに要るのは座席トークンだけ
+ * （3.3 節）だが、この画面はそれを対戦のあいだメモリに持つだけだった。切断中も時計は
+ * 流れるので（3.4 節）、戻れないまま時間切れで負ける。
+ */
+const SEAT_KEY = "poke-seat";
+
 const nameOf = (defId) => cards[defId]?.name ?? defId;
 
 $("join-button").addEventListener("click", () => {
@@ -36,6 +45,26 @@ $("name").addEventListener("input", () => {
 });
 
 ensureAccount().catch((error) => setStatus(`アカウントを読めませんでした: ${error.message}`));
+
+resumeSeat();
+
+/**
+ * 覚えている座席があれば、そこへ繋ぎ直す。
+ *
+ * **カードの名前の表を待たずに繋ぐ。** 指していないあいだも時計は流れるので（3.4 節）、
+ * 取りに行っているあいだに手番が終わる。表が届いたら、そのとき出ている盤面を描き直す。
+ */
+function resumeSeat() {
+  const seated = storedSeat();
+  if (seated === null) return;
+  openMatch(seated);
+  getJson("/api/cards")
+    .then((loaded) => {
+      cards = loaded;
+      if (lastView !== null) renderView(lastView);
+    })
+    .catch(() => {});
+}
 
 /** レーティングと戦績を引き直す。対戦が終われば動くので、そのたびに読む。 */
 async function refreshAccount() {
@@ -225,6 +254,7 @@ async function waitForOpponent(ticket) {
 
 function openMatch(seated) {
   seat = seated.seat;
+  rememberSeat(seated);
   setStatus("");
   $("join").hidden = true;
   $("table").hidden = false;
@@ -233,8 +263,64 @@ function openMatch(seated) {
   socket = new WebSocket(
     `${scheme}://${location.host}/ws?seatToken=${encodeURIComponent(seated.seatToken)}`,
   );
-  socket.addEventListener("message", (event) => receive(JSON.parse(event.data)));
-  socket.addEventListener("close", () => addEvent("接続が切れました。読み込み直すと戻れます"));
+  /**
+   * 一度でも `sync` が届いたかどうか。閉じた理由を分けるのに使う。
+   *
+   * 届く前に閉じたなら、サーバはこの座席を知らない（対戦はもう終わっている）。
+   * 覚えている座席を持ったままだと、開き直すたびに同じ座席へ繋ぎに行って同じ形で閉じ、
+   * マッチングの画面に戻れなくなる。
+   */
+  let synced = false;
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.t === "sync") synced = true;
+    receive(message);
+  });
+  socket.addEventListener("close", () => {
+    if (storedSeat() === null) return;
+    if (synced) {
+      addEvent("接続が切れました。読み込み直すと戻れます");
+      return;
+    }
+    forgetSeat();
+    backToJoin("指していた対戦は、もう終わっています。");
+  });
+}
+
+/** マッチングの画面へ戻す。座席を失ったときだけ通る。 */
+function backToJoin(text) {
+  socket = null;
+  seat = null;
+  $("table").hidden = true;
+  $("join").hidden = false;
+  setStatus(text);
+}
+
+function rememberSeat(seated) {
+  localStorage.setItem(SEAT_KEY, JSON.stringify(seated));
+}
+
+function forgetSeat() {
+  localStorage.removeItem(SEAT_KEY);
+}
+
+/** 覚えている座席。読めない値が入っていたら捨てる。 */
+function storedSeat() {
+  const raw = localStorage.getItem(SEAT_KEY);
+  if (raw === null) return null;
+  let seated = null;
+  try {
+    seated = JSON.parse(raw);
+  } catch {
+    forgetSeat();
+    return null;
+  }
+  // 座席トークンが無ければ繋ぎようがない。座席の番号は時計と手札の向きに使う。
+  if (typeof seated?.seatToken !== "string" || (seated.seat !== 0 && seated.seat !== 1)) {
+    forgetSeat();
+    return null;
+  }
+  return seated;
 }
 
 function receive(message) {
@@ -248,6 +334,8 @@ function receive(message) {
       renderMoves(message.legalMoves);
       return;
     case "ended":
+      // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
+      forgetSeat();
       renderView(message.view);
       renderMoves(null);
       addEvent(describeEnd(message));

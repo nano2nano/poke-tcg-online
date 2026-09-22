@@ -287,3 +287,87 @@ test("追い越して届いた古い局面では描き直さない", async ({ br
 
   await close();
 });
+
+/**
+ * 切断からの繋ぎ直し（仕様 3.3 節）。
+ *
+ * サーバ側の繋ぎ直しは座席トークンだけで済むが、**それを画面が持っていなければ使えない。**
+ * 切断中も時計は流れる（3.4 節）ので、戻れないことはそのまま時間切れ負けになる。
+ */
+test("読み込み直しても、指していた座席へ戻る", async ({ browser, pageErrors }) => {
+  const room = `もどる-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#table")).toBeVisible();
+  await expect(b.locator("#table")).toBeVisible();
+
+  await a.reload();
+
+  // 盤面が描けたことまで見る。`#table` が出るのは繋ぐ前なので、見えただけでは座席に就けていない。
+  await expect(a.locator("#join")).toBeHidden();
+  await expect(a.locator("#table")).toBeVisible();
+  await expect(a.locator("#clock")).not.toBeEmpty();
+
+  /**
+   * **戻った座席から指せることまで見る。** 盤面はサーバが送ってくるので、描けただけなら
+   * 読むだけの繋ぎ直しでも通る。手が通るのは、サーバがこの接続を元の座席と認めたときだけである。
+   */
+  let played = false;
+  for (let attempt = 0; attempt < 6 && !played; attempt += 1) {
+    played = (await playOne(a)) || (await playOne(b));
+  }
+  expect(played).toBe(true);
+
+  await close();
+});
+
+/**
+ * 覚えている座席が通らなかったときに、マッチングの画面へ戻すこと。
+ *
+ * 戻さないと、開くたびに同じ座席へ繋ぎに行って同じ形で閉じる。**対戦を始める画面が
+ * 二度と出ない**ので、その人はこのブラウザで指せなくなる。
+ */
+test("サーバが知らない座席を覚えていたら、マッチングの画面へ戻す", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "もう無い座席" })),
+  );
+  await page.reload();
+
+  await expect(page.locator("#join")).toBeVisible();
+  await expect(page.locator("#table")).toBeHidden();
+  await expect(page.locator("#join-status")).not.toBeEmpty();
+  // 覚えたままだと、次に開いたときも同じ形で閉じる。
+  expect(await page.evaluate(() => localStorage.getItem("poke-seat"))).toBeNull();
+});
+
+/**
+ * 終わった対戦の座席を覚えたままにしないこと。
+ *
+ * 覚えたままでも、次に開いたときは上の歯止めが働いてマッチングの画面へ戻る。
+ * ただしそこまで往復が 1 つ増え、そのあいだ「もう終わっている」と言えない。
+ */
+test("対戦が終わったら、座席を覚えておかない", async ({ browser, pageErrors }) => {
+  const room = `おわる-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#table")).toBeVisible();
+
+  // 決着を受け取った印はレーティングの引き直しである。画面の文言では判定しない。
+  const settled = a.waitForResponse((response) => response.url().endsWith("/api/account/me"));
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+  await settled;
+
+  expect(await a.evaluate(() => localStorage.getItem("poke-seat"))).toBeNull();
+
+  await close();
+});
