@@ -12,12 +12,14 @@
     "fmt:check": "oxfmt --check .",
     "start": "tsx src/main.ts",
     "replay:verify": "tsx tools/replay-verify.ts",
-    "verify:all": "npm run typecheck && npm run fmt:check && npm run test"
+    "verify:all": "npm run typecheck && npm run fmt:check && npm run test",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
     "@types/node": "^22.20.1",
     "@types/ws": "^8.18.1",
     "oxfmt": "^0.64.0",

@@ -5,3 +5,6 @@ data/matches/
 # 書きかけの別名（`accounts.jsonl.writing`）と、旧形式の `accounts.json` も含める。
 # プロセスが落ちたときに残り、シークレットのハッシュを丸ごと持っている。
 data/accounts.*
+e2e-results/
+playwright-report/
+test-results/

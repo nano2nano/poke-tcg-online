@@ -80,3 +80,11 @@ jobs:
       # 型検査、書式、全テスト。engine/ 配下は .prettierignore で書式検査の対象外。
       - name: 検査する
         run: npm run verify:all
+
+      # ブラウザは PR ごとに取り直す。入れるのは chromium 1 つだけで、
+      # `--with-deps` が Ubuntu 側の不足ライブラリも入れる。
+      - name: ブラウザを入れる
+        run: npx playwright install --with-deps chromium
+
+      - name: 画面を動かして検査する
+        run: npm run test:e2e
