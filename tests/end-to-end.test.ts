@@ -213,7 +213,7 @@ describe("入れなかった理由", () => {
     const endpoints = [
       "/api/join",
       "/api/deck/validate",
-      "/api/decklist/resolve",
+      "/api/deck/resolve",
       "/api/matches",
       "/api/replay",
       "/api/account",
@@ -251,6 +251,27 @@ describe("入れなかった理由", () => {
           /is not a function|Cannot read|TypeError|JSON at position|Unexpected token/,
         );
       }
+    }
+
+    /**
+     * **欄の型が違うものは 400 で断る。** 「形が違う」と「中身が規則に反する」を混ぜると、
+     * 送り手は直しようがない。`ok` と `errors` はデッキの中身の話に取っておく。
+     */
+    for (const [path, body] of [
+      ["/api/account/me", { secret: 7 }],
+      ["/api/matches", { secret: 7 }],
+      ["/api/join", { secret: "あ", deck: { cards: [1] } }],
+      ["/api/deck/resolve", { text: 7 }],
+      ["/api/account", { displayName: 7 }],
+      ["/api/replay", { secret: "あ", matchId: 7 }],
+    ] as [string, unknown][]) {
+      const response = await fetch(`http://${base}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status, path).toBe(400);
+      expect(((await response.json()) as JsonBody).error, path).toBe("送られた中身の形が違う");
     }
 
     // 形が通れば、エラーの中身はこれまでどおりである。

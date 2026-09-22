@@ -12,20 +12,28 @@ import { readFileSync } from "node:fs";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { DeckList } from "./engine.js";
+import type { ZodType } from "zod";
 import { cardIndex } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub } from "./hub.js";
-import { Lobby, type JoinRequest } from "./lobby.js";
+import { Lobby } from "./lobby.js";
 import { ACCOUNT_NOT_FOUND, AccountStore, type Account } from "./accounts.js";
 
 export { ACCOUNT_NOT_FOUND };
 import { findMatch, frameAt, isMatchId, listMatches, replayability } from "./history.js";
 import { DEFAULT_LOG_DIR } from "./log.js";
 import { scoreForSeatZero } from "./match.js";
-import type { ClientMessage } from "./protocol.js";
+import { clientMessageSchema } from "./protocol.js";
+import {
+  createAccountSchema,
+  deckListSchema,
+  joinRequestSchema,
+  replayRequestSchema,
+  resolveDecklistSchema,
+  secretRequestSchema,
+} from "./requests.js";
 import { MatchRegistry } from "./registry.js";
 import { RateLimit, type RateLimitOptions } from "./ratelimit.js";
 
@@ -41,8 +49,8 @@ const MAX_BODY_BYTES = 64 * 1024;
  * 死活確認の間隔。この間 pong が返らない接続を切る。
  *
  * **短くしすぎない。** 詰まっているだけで、待てば戻る接続まで切ることになる。
- * 切られた側が座席へ戻る道は、いまのところ参照クライアントには無い（10 節）ので、
- * 切ればその人は時間切れで負ける。見つけたいのは戻ってこない接続だけである。
+ * 切られた側は繋ぎ直せる（3.3 節）が、そのあいだも時計は流れる（3.4 節）。
+ * 見つけたいのは戻ってこない接続だけである。
  */
 export const HEARTBEAT_MS = 60_000;
 
@@ -163,14 +171,25 @@ export function createApp(options: AppOptions = {}): App {
     answered.add(socket);
     socket.on("pong", () => answered.add(socket));
     socket.on("message", (raw) => {
-      let message: ClientMessage;
+      let parsed: unknown;
       try {
-        message = JSON.parse(String(raw)) as ClientMessage;
+        parsed = JSON.parse(String(raw));
       } catch {
         socket.send(JSON.stringify({ t: "error", message: "JSON として読めない" }));
         return;
       }
-      hub.handle(socket, seatToken, message);
+      /**
+       * **形を見てから配る。** `as ClientMessage` で配っていたときは、`null` を 1 通
+       * 送られただけで受け手が `t` を読んで落ちた。ここは `ws` の `message` の中なので、
+       * 投げた例外は受け手のいないまま上がり、**プロセスごと落ちる。**
+       * そのとき指していた全員の対戦が巻き添えになる（同じ形を 1 つ上の `error` で直してある）。
+       */
+      const message = clientMessageSchema.safeParse(parsed);
+      if (!message.success) {
+        socket.send(JSON.stringify({ t: "error", message: MALFORMED }));
+        return;
+      }
+      hub.handle(socket, seatToken, message.data);
     });
     socket.on("close", () => hub.detach(socket));
   });
@@ -246,19 +265,16 @@ async function route(
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/replay") {
-    const body = (await readBody(request)) as {
-      secret?: unknown;
-      matchId?: unknown;
-      ply?: unknown;
-    };
-    const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
+    const body = parseBody(replayRequestSchema, await readBody(request));
+    const account = accounts.bySecret(body.secret);
     if (account === null) {
       respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
       return;
     }
-    // 形を確かめてから走査に入る。名指しになっていない値で全部の日を読まない（6.6 節）。
-    const matchId = typeof body.matchId === "string" && isMatchId(body.matchId) ? body.matchId : "";
-    const record = matchId === "" ? null : findMatch(logDir, account.playerId, matchId);
+    // 名指しの形かどうかは、走査に入る前に見る。そうでない値で全部の日を読まない（6.6 節）。
+    const record = isMatchId(body.matchId)
+      ? findMatch(logDir, account.playerId, body.matchId)
+      : null;
     if (record === null) {
       // 指していない対戦と、存在しない対戦を、同じ応答にする。
       respondJson(response, 404, { error: "対戦が見つからない" });
@@ -288,14 +304,13 @@ async function route(
       });
       return;
     }
-    const ply = typeof body.ply === "number" ? body.ply : 0;
-    respondJson(response, 200, { seats: record.seats, frame: frameAt(record, ply) });
+    respondJson(response, 200, { seats: record.seats, frame: frameAt(record, body.ply ?? 0) });
     return;
   }
 
   // プレイヤーを作る。シークレットを返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
   if (request.method === "POST" && url.pathname === "/api/account") {
-    const body = (await readBody(request)) as { displayName?: unknown };
+    const body = parseBody(createAccountSchema, await readBody(request));
     /**
      * **作った覚えの無いものが際限なく増えないようにする。** プレイヤーを消すエンドポイントは無く、
      * 増えるのはメモリと `accounts.jsonl` の行で、後者は起動のたびに同期で読む。
@@ -308,14 +323,14 @@ async function route(
       });
       return;
     }
-    const displayName = typeof body.displayName === "string" ? body.displayName : "";
-    respondJson(response, 200, accounts.create(displayName, now()));
+    respondJson(response, 200, accounts.create(body.displayName ?? "", now()));
     return;
   }
   // 自分の戦績を見る。シークレットは本文で受け取る。URL に載せるとログや履歴に残る。
   if (request.method === "POST" && url.pathname === "/api/account/me") {
-    const body = (await readBody(request)) as { secret?: unknown };
-    const account = typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
+    const account = accounts.bySecret(
+      parseBody(secretRequestSchema, await readBody(request)).secret,
+    );
     if (account === null) {
       respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
       return;
@@ -333,12 +348,8 @@ async function route(
   }
   // 人が書いた文字列を `defId` の列へ直す（5.3 節）。同じ名前が複数あるときは候補を返す。
   if (request.method === "POST" && url.pathname === "/api/deck/resolve") {
-    const body = (await readBody(request)) as { text?: unknown };
-    if (typeof body.text !== "string") {
-      respondJson(response, 400, { ok: false, errors: ["デッキの文字列が要る"] });
-      return;
-    }
-    const resolved = resolveDecklist(body.text);
+    const { text } = parseBody(resolveDecklistSchema, await readBody(request));
+    const resolved = resolveDecklist(text);
     if (!resolved.ok) {
       respondJson(response, 200, {
         ok: false,
@@ -358,13 +369,13 @@ async function route(
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/deck/validate") {
-    const deck = toDeckList(await readBody(request));
+    const deck = parseBody(deckListSchema, await readBody(request));
     const errors = validateDeck(deck).map(describeViolation);
     respondJson(response, 200, { ok: errors.length === 0, errors });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/join") {
-    const outcome = lobby.join(toJoinRequest(await readBody(request)));
+    const outcome = lobby.join(parseBody(joinRequestSchema, await readBody(request)));
     respondJson(response, outcome.ok ? 200 : 400, outcome);
     return;
   }
@@ -420,7 +431,8 @@ function originOf(request: IncomingMessage, trustedProxies: number): string {
 class BadRequest extends Error {}
 
 /**
- * 外から来た本文をデッキへ直す。**形の合わないものはエンドポイントで落とす。**
+ * 本文をスキーマに通す。**形が違えば、内側の文言を出さずに断る。**
+ *
  * 素通りさせると中身を触った先で落ち、その場の例外メッセージ（`filter is not a function`
  * など）がそのまま外へ出る。読む人に意味が無く、内側の作りだけが分かる。
  *
@@ -428,27 +440,10 @@ class BadRequest extends Error {}
  * 形が違うのは送り手の誤りなので `error` 1 本で断る。`ok` と `errors` は
  * 「そのデッキはこの点で成立しない」を並べるためのもので、読む人が直せる話である。
  */
-function toDeckList(body: unknown): DeckList {
-  if (typeof body !== "object" || body === null) throw new BadRequest(MALFORMED);
-  const { cards } = body as Record<string, unknown>;
-  if (!Array.isArray(cards) || cards.some((card) => typeof card !== "string")) {
-    throw new BadRequest(MALFORMED);
-  }
-  return { cards: cards as DeckList["cards"] };
-}
-
-/** 外から来た本文を `JoinRequest` へ直す。省ける欄は、あれば形を確かめる。 */
-function toJoinRequest(body: Record<string, unknown>): JoinRequest {
-  const { secret, deck, displayName, roomCode } = body;
-  if (typeof secret !== "string") throw new BadRequest(MALFORMED);
-  if (displayName !== undefined && typeof displayName !== "string") throw new BadRequest(MALFORMED);
-  if (roomCode !== undefined && typeof roomCode !== "string") throw new BadRequest(MALFORMED);
-  return {
-    secret,
-    deck: toDeckList(deck),
-    ...(displayName === undefined ? {} : { displayName }),
-    ...(roomCode === undefined ? {} : { roomCode }),
-  };
+function parseBody<T>(schema: ZodType<T>, body: unknown): T {
+  const outcome = schema.safeParse(body);
+  if (!outcome.success) throw new BadRequest(MALFORMED);
+  return outcome.data;
 }
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
@@ -487,18 +482,17 @@ async function accountFromBody(
   request: IncomingMessage,
   accounts: AccountStore,
 ): Promise<Account | null> {
-  const body = (await readBody(request)) as { secret?: unknown };
-  return typeof body.secret === "string" ? accounts.bySecret(body.secret) : null;
+  return accounts.bySecret(parseBody(secretRequestSchema, await readBody(request)).secret);
 }
 
 /**
- * 本文を読む。**返すのは必ず object である。**
+ * 本文を読む。**大きさだけを見て、形は見ない。**
  *
- * `null` は JSON として正しいので `JSON.parse` は通る。そのまま返していたときは、
- * 各エンドポイントの `body.secret` が落ちて、その例外の文言が外へ出ていた。
- * 形の検査をエンドポイントごとに足すと足し忘れが残るので、ここで一度だけ通す。
+ * 形は `parseBody` がスキーマで見る（`requests.ts`）。ここでも object かどうかを見ていたが、
+ * 同じ規則が 2 か所にあると、片方だけ変わったときに食い違いが出る。上限はここでしか見られない
+ * （読み切る前に切る必要がある）ので、それだけを残す。
  */
-async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -506,12 +500,9 @@ async function readBody(request: IncomingMessage): Promise<Record<string, unknow
     if (size > MAX_BODY_BYTES) throw new BadRequest("要求の本文が大きすぎる");
     chunks.push(chunk as Buffer);
   }
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   } catch {
     throw new BadRequest(MALFORMED);
   }
-  if (typeof parsed !== "object" || parsed === null) throw new BadRequest(MALFORMED);
-  return parsed as Record<string, unknown>;
 }
