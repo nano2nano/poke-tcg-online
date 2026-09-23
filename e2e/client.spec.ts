@@ -14,6 +14,7 @@ import {
   type Page,
   type WebSocketRoute,
 } from "@playwright/test";
+import { loadGeneratedCards } from "../src/engine.js";
 
 /**
  * 画面が投げっぱなしにした例外を集め、テストの終わりに 1 つも無いことを確かめる。
@@ -1289,4 +1290,180 @@ test("画像を出す設定なら、デッキを組む画面の候補にも画�
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card-row .card.thumb img").first()).toBeVisible();
+});
+
+/**
+ * 公式サイトのデッキ確認ページの代わり。欄の形は公式のページに合わせてある。
+ * カード ID はこのリポジトリへ書かないので、正規データの収録から実行時に拾う。
+ */
+function officialPage(
+  fields: Record<string, { cardId: string; count: number }[]>,
+  names: Record<string, string> = {},
+): string {
+  const inputs = Object.entries(fields).map(
+    ([id, cards]) =>
+      `<input type="hidden" name="${id}" id="${id}" value="${cards.map((card) => `${card.cardId}_${card.count}_1`).join("-")}" />`,
+  );
+  const script = Object.entries(names)
+    .map(([cardId, name]) => `PCGDECK.searchItemName[${cardId}]='${name}';`)
+    .join("\n");
+  return `<!DOCTYPE html><html><body><form>${inputs.join("")}</form><script>${script}</script></body></html>`;
+}
+
+const OFFICIAL_PAGE = "https://www.pokemon-card.com/deck/confirm.html/deckID/**";
+
+/** カード ID → それを収録に持つ `defId`。 */
+function cardIds(): Map<string, string[]> {
+  const built = new Map<string, string[]>();
+  for (const def of loadGeneratedCards()) {
+    for (const print of def.prints) {
+      built.set(print.cardID, [...(built.get(print.cardID) ?? []), def.defId]);
+    }
+  }
+  return built;
+}
+
+test("公式のデッキコードで読み込むと、無いカードだけを名前で出し、残りはデッキに入る", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
+  const counts = new Map<string, number>();
+  for (const defId of deck.cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
+  const byDefId = new Map<string, string>();
+  for (const [cardId, defIds] of cardIds()) {
+    if (defIds.length === 1) byDefId.set(defIds[0] as string, cardId);
+  }
+  const known = [...counts].map(([defId, count]) => ({
+    cardId: byDefId.get(defId) as string,
+    count,
+  }));
+  const missing = String(Math.max(...[...cardIds().keys()].map(Number)) + 1);
+  const requested: string[] = [];
+  await page.route(OFFICIAL_PAGE, (route) => {
+    requested.push(route.request().url());
+    return route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: officialPage(
+        { deck_pke: [...known, { cardId: missing, count: 1 }], deck_gds: [], deck_ajs: [] },
+        { [missing]: "このサーバに無いカード" },
+      ),
+    });
+  });
+
+  // デッキのページの URL を貼っても読む。
+  await page.fill(
+    "#deck-code",
+    `https://www.pokemon-card.com/deck/confirm.html/deckID/abc123-DEF456-ghi789/`,
+  );
+  await page.click("#deck-code-button");
+
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(counts.size);
+  expect(requested).toEqual([
+    "https://www.pokemon-card.com/deck/confirm.html/deckID/abc123-DEF456-ghi789/",
+  ]);
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+  await expect(page.locator("#deck-status")).toContainText("このサーバに無いカード");
+  for (const [defId, count] of counts) {
+    await expect(
+      page.locator(`#deck-cards .card-row[data-def-id="${defId}"] .card-count`),
+    ).toHaveText(String(count));
+  }
+});
+
+test("公式のデッキコードが見つからなければ、組んでいるデッキを残す", async ({ page }) => {
+  await page.goto("/");
+  const [entry] = await sampleDeckEntries(page);
+  const { defId, name } = entry as { defId: string; name: string };
+  await page.fill(
+    "#card-search",
+    `${name} ${[entry?.set, entry?.number].filter(Boolean).join(" ")}`,
+  );
+  await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
+  // 見つからないコードでも、公式のページは空の欄を並べて返す。
+  await page.route(OFFICIAL_PAGE, (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: officialPage({ deck_pke: [], deck_gds: [], deck_ene: [] }),
+    }),
+  );
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.fill("#deck-code", "nothing-here-000000");
+  await page.click("#deck-code-button");
+
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+});
+
+test("公式のカード ID で定義が決まらないカードは、枚数に届くまで候補を 1 枚ずつ選べる", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const [cardId, defIds] = [...cardIds()].find(([, ids]) => ids.length > 1) as [string, string[]];
+  await page.route(OFFICIAL_PAGE, (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: officialPage({ deck_sta: [{ cardId, count: 2 }] }),
+    }),
+  );
+
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  const choices = page.locator("#deck-status .choices button");
+  await expect(choices).toHaveCount(defIds.length);
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(0);
+
+  // 左右 2 枚で 1 つのスタジアムは、左と右を 1 枚ずつ入れられなければ場に出せない。
+  const sorted = [...defIds].sort();
+  await choices.nth(0).click();
+  await choices.nth(1).click();
+  for (const defId of sorted.slice(0, 2)) {
+    await expect(
+      page.locator(`#deck-cards .card-row[data-def-id="${defId}"] .card-count`),
+    ).toHaveText("1");
+  }
+  await expect(choices).toHaveCount(0);
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+});
+
+test("公式サイトの返事を待つあいだにデッキを組み替えたら、置き換えない", async ({ page }) => {
+  await page.goto("/");
+  const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
+  const byDefId = new Map<string, string>();
+  for (const [cardId, defIds] of cardIds()) {
+    if (defIds.length === 1) byDefId.set(defIds[0] as string, cardId);
+  }
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(OFFICIAL_PAGE, async (route) => {
+    await held;
+    await route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: officialPage({
+        deck_ene: [
+          { cardId: byDefId.get(deck.cards[deck.cards.length - 1] as string) as string, count: 4 },
+        ],
+      }),
+    });
+  });
+
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  const [entry] = await sampleDeckEntries(page);
+  const { defId, name } = entry as { defId: string; name: string };
+  await page.fill(
+    "#card-search",
+    `${name} ${[entry?.set, entry?.number].filter(Boolean).join(" ")}`,
+  );
+  await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
+  release();
+
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+  await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
 });

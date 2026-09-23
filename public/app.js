@@ -38,6 +38,12 @@ let seatLink = null;
  */
 const SEAT_KEY = "poke-seat";
 
+/**
+ * 公式サイトのデッキ確認ページ。ブラウザから直接取る（仕様 5.4 節）。このページは
+ * どのオリジンからの読み取りも許しているので、サーバを中継させずに済む。
+ */
+const OFFICIAL_DECK_PAGE = "https://www.pokemon-card.com/deck/confirm.html/deckID/";
+
 /** 組んでいるデッキを置く localStorage のキー。開き直すたびに組み直させないよう、ブラウザに残す。 */
 const DECK_KEY = "poke-deck";
 
@@ -259,6 +265,20 @@ $("card-search").addEventListener("input", renderSearch);
 $("import-button").addEventListener("click", () => {
   if (deckEntries.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
   importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
+});
+
+$("deck-code-button").addEventListener("click", () => {
+  if (deckEntries.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
+  const button = $("deck-code-button");
+  // 公式サイトの返事を待つあいだに 2 度押されると、2 つの結果が前後して書き込まれる。
+  button.disabled = true;
+  importDeckCode()
+    .catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"))
+    .finally(() => (button.disabled = false));
+});
+
+$("deck-code").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") $("deck-code-button").click();
 });
 
 $("clear-button").addEventListener("click", () => {
@@ -501,6 +521,167 @@ async function importText() {
   else showDeckStatus(outcome.errors, "ng");
 }
 
+/**
+ * 公式のデッキコードで読み込んだデッキのうち、まだ決まっていないカードと、画面に出す理由。
+ * `deck` はこちらが最後に置いたデッキで、ほかの操作で組み替わっていたら候補を押させない。
+ * 押させると、読み込んだのとは別のデッキにカードが足される。
+ */
+let officialImport = null;
+
+/**
+ * 公式のデッキコードのデッキと置き換える。取り込めないカードがあっても、取り込めたぶんで
+ * 置き換え、残りはどのカードかを公式のページにある名前で出す。
+ */
+async function importDeckCode() {
+  const code = deckCodeOf($("deck-code").value);
+  if (code === null) {
+    showDeckStatus(["デッキコードか、公式サイトのデッキのページの URL を入れてください。"], "ng");
+    return;
+  }
+  const before = deckEntries;
+  showDeckStatus(["公式サイトからデッキを読んでいます。"], "");
+  const official = await fetchOfficialDeck(code);
+  if (official === null) {
+    showDeckStatus([`デッキコード ${code} のデッキは公式サイトにありません。`], "ng");
+    return;
+  }
+  const outcome = await postJson("/api/deck/official", { cards: official.cards });
+  if (outcome.entries === undefined) {
+    showDeckStatus(outcome.errors ?? ["読み込めませんでした。"], "ng");
+    return;
+  }
+  // 待つあいだに組み替えられていたら、置き換えると組み替えたぶんが黙って消える。
+  if (deckEntries !== before) {
+    showDeckStatus(["読み込むあいだにデッキが変わったので、置き換えませんでした。"], "ng");
+    return;
+  }
+
+  const nameOf = (cardId) => official.names[cardId] ?? `カード ID ${cardId}`;
+  const missing = outcome.failures
+    .filter((failure) => failure.kind !== "ambiguous")
+    .map((failure) => `このサーバに無いカードです: ${nameOf(failure.cardId)} ${failure.count} 枚`);
+  const pending = outcome.failures
+    .filter((failure) => failure.kind === "ambiguous")
+    .map((failure) => ({ ...failure, name: nameOf(failure.cardId), left: failure.count }));
+  // 1 枚も決まらず選ぶものも無ければ、組んでいるデッキを空にしてまで置き換えない。
+  if (outcome.entries.length === 0 && pending.length === 0) {
+    officialImport = null;
+    showDeckStatus(missing, "ng");
+    return;
+  }
+  setDeck(outcome.entries);
+  officialImport = { deck: deckEntries, missing, pending, errors: outcome.errors };
+  showOfficialStatus();
+}
+
+/**
+ * 決まっていないカードは、候補を 1 枚ずつ押させる。左右 2 枚で 1 つのスタジアムは公式サイトでは
+ * 1 つのカードなので、枚数を左右にどう分けるかはデッキコードからは分からない。
+ */
+function showOfficialStatus() {
+  const { missing, pending, errors } = officialImport;
+  const open = pending.filter((group) => group.left > 0);
+  const messages = [...missing];
+  for (const group of open) {
+    messages.push(
+      `${group.name} は ${group.choices.length} 通りあります。あと ${group.left} 枚を選んでください。`,
+    );
+  }
+  // 選び終わるまでの検査の結果は、選ぶ前のデッキのものなので出さない。
+  if (errors === null) messages.push("デッキを確かめています。");
+  else if (open.length === 0) messages.push(...errors);
+  const ok = open.length === 0 && missing.length === 0 && errors?.length === 0;
+  if (ok) messages.push(`デッキは ${deckCards().length} 枚で、規則を通ります。`);
+  showDeckStatus(messages, ok ? "ok" : errors === null ? "" : "ng");
+  for (const group of open) {
+    const list = document.createElement("div");
+    list.className = "choices";
+    for (const choice of group.choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `${group.name}（${describeCard(choice) || choice.defId}）`;
+      button.addEventListener("click", () => {
+        pickOfficial(group, choice.defId).catch((error) =>
+          showDeckStatus([`確かめられませんでした: ${error.message}`], "ng"),
+        );
+      });
+      list.append(button);
+    }
+    $("deck-status").append(list);
+  }
+}
+
+async function pickOfficial(group, defId) {
+  if (officialImport?.deck !== deckEntries) {
+    officialImport = null;
+    showDeckStatus(["デッキが変わっています。もう一度デッキコードを読み込んでください。"], "ng");
+    return;
+  }
+  if (group.left === 0) return;
+  group.left -= 1;
+  setDeck(withCount(deckEntries, defId, 1));
+  const current = officialImport;
+  current.deck = deckEntries;
+  const done = current.pending.every((each) => each.left === 0);
+  // 選び終えたら、検査の結果が届くまでは「確かめています」を出す。
+  if (done) current.errors = null;
+  showOfficialStatus();
+  if (!done) return;
+  const outcome = await postJson("/api/deck/validate", { cards: deckCards() });
+  if (officialImport !== current || current.deck !== deckEntries) return;
+  current.errors = outcome.errors ?? [];
+  showOfficialStatus();
+}
+
+/** 入れた文字からデッキコードを取り出す。デッキのページの URL を貼られても読む。 */
+function deckCodeOf(text) {
+  const trimmed = text.trim();
+  const code = /deckID[/=]([0-9A-Za-z-]+)/.exec(trimmed)?.[1] ?? trimmed;
+  return /^[0-9A-Za-z]+(-[0-9A-Za-z]+)*$/.test(code) ? code : null;
+}
+
+/**
+ * 公式のデッキ確認ページから、カード ID と枚数、カード名を読む。デッキが無ければ null。
+ *
+ * 枚数は `deck_*` の hidden input に「カード ID_枚数_…」を `-` でつないだ形で入っている。
+ * 見つからないコードでも input は空で並ぶので、1 つも無ければページの形が変わったと読む。
+ */
+async function fetchOfficialDeck(code) {
+  let response;
+  try {
+    response = await fetch(`${OFFICIAL_DECK_PAGE}${encodeURIComponent(code)}/`, {
+      credentials: "omit",
+    });
+  } catch {
+    throw new Error("公式サイトに繋がりませんでした");
+  }
+  if (!response.ok) throw new Error(`公式サイトが ${response.status} を返しました`);
+  const html = await response.text();
+  const fields = new DOMParser()
+    .parseFromString(html, "text/html")
+    .querySelectorAll('input[id^="deck_"]');
+  if (fields.length === 0) throw new Error("公式サイトのページの形が変わっています");
+
+  const cards = [];
+  for (const field of fields) {
+    for (const item of field.value.split("-").filter(Boolean)) {
+      const match = /^([0-9]+)_([0-9]+)(_|$)/.exec(item);
+      if (match === null) throw new Error("公式サイトのページの形が変わっています");
+      cards.push({ cardId: match[1], count: Number(match[2]) });
+    }
+  }
+  if (cards.length === 0) return null;
+
+  // 名前はページのスクリプトの中にある。DOMParser はスクリプトを動かさないので、文字列として読む。
+  const names = {};
+  for (const [, cardId, quoted] of html.matchAll(
+    /searchItemName\[([0-9]+)\]\s*=\s*'((?:[^'\\]|\\.)*)'/g,
+  )) {
+    names[cardId] = quoted.replace(/\\(.)/g, "$1");
+  }
+  return { cards, names };
+}
+
 /** 違反の一覧。曖昧な行だけは、選べる候補を押せる形で出す。 */
 function showDeckStatus(messages, tone, failures = []) {
   const box = $("deck-status");
@@ -609,15 +790,19 @@ function setDeck(entries) {
 }
 
 function changeCount(defId, delta) {
-  const next = deckEntries
-    .map((entry) => (entry.defId === defId ? { defId, count: entry.count + delta } : entry))
-    .filter((entry) => entry.count > 0);
-  if (delta > 0 && !deckEntries.some((entry) => entry.defId === defId)) {
-    next.push({ defId, count: delta });
-  }
-  setDeck(next);
+  setDeck(withCount(deckEntries, defId, delta));
   // 前に出した検査の結果は、組み替えた時点で古くなる。
   showDeckStatus([], "");
+}
+
+function withCount(entries, defId, delta) {
+  const next = entries
+    .map((entry) => (entry.defId === defId ? { defId, count: entry.count + delta } : entry))
+    .filter((entry) => entry.count > 0);
+  if (delta > 0 && !entries.some((entry) => entry.defId === defId)) {
+    next.push({ defId, count: delta });
+  }
+  return next;
 }
 
 /**
