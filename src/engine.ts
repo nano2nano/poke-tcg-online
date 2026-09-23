@@ -9,6 +9,7 @@
  */
 
 export {
+  DEFAULT_BENCH_SIZE,
   applyMove,
   createGame,
   getCardDef,

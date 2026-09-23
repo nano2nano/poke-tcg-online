@@ -16,8 +16,10 @@ import {
   engineOutcome,
   eventsFor,
   legalMovesFor,
+  setupViewFor,
   spectatorViewFor,
   submitMove,
+  submitSetup,
   toMove,
   viewFor,
   type Match,
@@ -263,6 +265,19 @@ export class MatchHub {
         if (match.result !== null) this.endMatch(match);
         return;
       }
+      case "setup": {
+        const outcome = submitSetup(match, seat, message.active, message.bench, this.now());
+        if (!outcome.ok) {
+          send(socket, { t: "reject", reason: outcome.reason, stateVersion: match.version });
+          send(socket, this.syncFor(match, seat));
+          return;
+        }
+        // 順番が来ていなければ局面は動かない。変わったのは出した座席の画面だけである。
+        if (outcome.events.length === 0) send(socket, this.syncFor(match, seat));
+        else this.broadcastDelta(match, outcome.events);
+        if (match.result !== null) this.endMatch(match);
+        return;
+      }
       case "concede":
         if (concede(match, seat, this.now())) this.endMatch(match);
         return;
@@ -361,6 +376,7 @@ export class MatchHub {
       stateVersion: match.version,
       view: viewFor(match, seat),
       legalMoves: legalMovesFor(match, seat),
+      setup: setupViewFor(match, seat),
       clock: clockView(match, this.now()),
       seedCommit: match.seedCommitment.commit,
       spectatorToken: match.spectatorToken,
@@ -374,6 +390,7 @@ export class MatchHub {
       events: eventsFor(events, seat),
       view: viewFor(match, seat),
       legalMoves: legalMovesFor(match, seat),
+      setup: setupViewFor(match, seat),
       clock: clockView(match, this.now()),
     };
   }
