@@ -454,13 +454,13 @@ test("決着のあと、両座席がシャッフルを検算して合う", async
   await close();
 });
 
-test("決着で開かれた寄与が差し替えられていたら、合わないと出す", async ({
+test("決着で開かれたシェアが差し替えられていたら、合わないと出す", async ({
   browser,
   pageErrors,
 }) => {
   const room = `さしかえ-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  // b に届く決着だけ、両座席の寄与を入れ替える。サーバが並びを選び直したのと同じ形になる。
+  // b に届く決着だけ、両座席のシェアを入れ替える。サーバが並びを選び直したのと同じ形になる。
   await b.routeWebSocket(/\/ws\?/, (client) => {
     const server = client.connectToServer();
     server.onMessage((raw) => {
@@ -486,13 +486,16 @@ test("決着で開かれた寄与が差し替えられていたら、合わな�
 });
 
 /**
- * 相手の寄与を待っているあいだに接続が切れても、席を忘れない。`sync` が届く前に切れたことだけで
+ * 相手のシェアを待っているあいだに接続が切れても、席を忘れない。`sync` が届く前に切れたことだけで
  * 「サーバが座席を知らない」と読むと、始まる直前の対戦から降り、座らないまま時間切れで負ける。
  */
-test("相手の寄与を待っているあいだに切れても、席を覚えている", async ({ browser, pageErrors }) => {
+test("相手のシェアを待っているあいだに切れても、席を覚えている", async ({
+  browser,
+  pageErrors,
+}) => {
   const room = `まちぼうけ-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  // b は席を取っても繋がない。対戦は寄与がそろうのを待ったままになる。
+  // b は席を取っても繋がない。対戦はシェアがそろうのを待ったままになる。
   await b.routeWebSocket(/\/ws\?/, (client) => client.close());
   // a の接続は、`pending` を受け取ったところで切る。
   let pendingSeen = false;
@@ -520,11 +523,11 @@ test("相手の寄与を待っているあいだに切れても、席を覚え�
 });
 
 /**
- * サーバが自分の寄与のコミットをすり替え、自分の寄与として別の値を開いた形。
- * コミットと寄与の組は辻褄が合っているので、送ったコミットと見比べないと「寄与が使われていない」
+ * サーバが自分のシェアのコミットをすり替え、自分のシェアとして別の値を開いた形。
+ * コミットとシェアの組は辻褄が合っているので、送ったコミットと見比べないと「シェアが使われていない」
  * としか出せず、すり替えだと分からない。
  */
-test("自分の寄与のコミットがすり替えられていたら、合わないと出す", async ({
+test("自分のシェアのコミットがすり替えられていたら、合わないと出す", async ({
   browser,
   pageErrors,
 }) => {
@@ -568,14 +571,14 @@ test("自分の寄与のコミットがすり替えられていたら、合わ�
 });
 
 /**
- * 相手の寄与が期限に遅れたとされた形。サーバは届いた寄与を捨てるかどうかで並びを
+ * 相手のシェアが期限に遅れたとされた形。サーバは届いたシェアを捨てるかどうかで並びを
  * 2 通りから選べるので、値の対応が合っていても、黙って「合う」とだけは出さない。
  */
-test("相手の寄与が使われていなければ、そう出す", async ({ browser, pageErrors }) => {
+test("相手のシェアが使われていなければ、そう出す", async ({ browser, pageErrors }) => {
   const room = `おくれ-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
   const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
-  // a（座席 0）に届く決着だけ、相手の寄与を null にして seed を作り直す。
+  // a（座席 0）に届く決着だけ、相手のシェアを null にして seed を作り直す。
   await a.routeWebSocket(/\/ws\?/, (client) => {
     const server = client.connectToServer();
     server.onMessage((raw) => {

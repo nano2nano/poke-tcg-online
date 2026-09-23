@@ -1,8 +1,8 @@
 /**
- * 座席の寄与をシャッフルへ混ぜる（`docs/spec/battle-server.md` 6.4 節）。
+ * 座席のシェアをシャッフルへ混ぜる（`docs/spec/battle-server.md` 6.4 節）。
  *
  * サーバだけが `nonce` を引く形では、対戦の前に引き直して並びを選べる。座席が
- * 寄与のコミットを先に送り、サーバのコミットを受け取ってから寄与を開けば、
+ * シェアのコミットを先に送り、サーバのコミットを受け取ってからシェアを開けば、
  * サーバは並びを決める値の一部を知らないまま `nonce` に縛られる。
  */
 
@@ -25,21 +25,21 @@ import { ensureCards, legalDecks } from "./helpers.js";
 const SHARE_A = "a".repeat(64);
 const SHARE_B = "b".repeat(64);
 
-describe("寄与を混ぜた seed", () => {
-  it("寄与が無ければ、寄与を混ぜる前と同じ seed になる", () => {
+describe("シェアを混ぜた seed", () => {
+  it("シェアが無ければ、シェアを混ぜる前と同じ seed になる", () => {
     expect(commitSeed("n", [null, null])).toEqual(commitSeed("n"));
   });
 
-  it("寄与は seed だけを動かし、座席の位置も区別する", () => {
+  it("シェアは seed だけを動かし、座席の位置も区別する", () => {
     const none = commitSeed("n");
     const first = commitSeed("n", [SHARE_A, null]);
     const second = commitSeed("n", [null, SHARE_A]);
     expect(new Set([none.seed, first.seed, second.seed]).size).toBe(3);
-    // コミットは寄与を開く前に配るので、寄与に依ってはいけない。
+    // コミットはシェアを開く前に配るので、シェアに依ってはいけない。
     expect(first.commit).toBe(none.commit);
   });
 
-  it("参加の要求は、寄与のコミットを 16 進 64 桁でだけ受ける", () => {
+  it("参加の要求は、シェアのコミットを 16 進 64 桁でだけ受ける", () => {
     const body = { secret: "s", deck: { cards: [] } };
     expect(joinRequestSchema.safeParse({ ...body, seedShareCommit: "x" }).success).toBe(false);
     expect(joinRequestSchema.parse({ ...body, seedShareCommit: commitShare(SHARE_A) })).toEqual({
@@ -74,7 +74,7 @@ function newArena(): Arena {
 }
 
 /**
- * 2 人を同じルームコードで入れ、両方の席を返す。寄与のコミットは渡されたものだけ送る。
+ * 2 人を同じルームコードで入れ、両方の席を返す。シェアのコミットは渡されたものだけ送る。
  * 先に待っていた側は対戦が始まる前に引き換えるので、始まる前の席も引き換えられることをここで通す。
  */
 function seatBoth(arena: Arena, commits: SeedShares): [Seated, Seated] {
@@ -113,7 +113,7 @@ function matchOf(arena: Arena, seated: Seated) {
   return ref.match;
 }
 
-describe("寄与の開示", () => {
+describe("シェアの開示", () => {
   it("両座席が開くまで対戦を始めず、そろったら両方へ局面を送る", () => {
     const arena = newArena();
     const [a, b] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
@@ -138,7 +138,7 @@ describe("寄与の開示", () => {
     );
   });
 
-  it("コミットと合わない寄与は受け取らず、繋ぎ直して正しい値を開けば始まる", () => {
+  it("コミットと合わないシェアは受け取らず、繋ぎ直して正しい値を開けば始まる", () => {
     const arena = newArena();
     const [a, b] = seatBoth(arena, [commitShare(SHARE_A), null]);
     const wrong = recorder();
@@ -150,7 +150,7 @@ describe("寄与の開示", () => {
     expect(matchOf(arena, b).seedCommitment.shares).toEqual([SHARE_A, null]);
   });
 
-  it("期限までに開かなかった座席の寄与は null のまま始め、時計はそこから流れる", () => {
+  it("期限までに開かなかった座席のシェアは null のまま始め、時計はそこから流れる", () => {
     const arena = newArena();
     const [a] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     const socketA = recorder();
@@ -224,7 +224,7 @@ describe("寄与の開示", () => {
     expect(arena.registry.holdsSeat("broken-0")).toBe(false);
   });
 
-  it("決着で寄与を明かし、記録から寄与とコミットを検算できる", () => {
+  it("決着でシェアを明かし、記録からシェアとコミットを検算できる", () => {
     const arena = newArena();
     const [a, b] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     const socketA = recorder();
@@ -252,21 +252,21 @@ describe("記録の検算", () => {
     } as MatchRecord;
   }
 
-  it("開かなかった座席は、コミットだけあって寄与が null でも通る", () => {
+  it("開かなかった座席は、コミットだけあってシェアが null でも通る", () => {
     const record = recordWith([SHARE_A, null], [commitShare(SHARE_A), commitShare(SHARE_B)]);
     expect(seedCommitmentHolds(record)).toBe(true);
   });
 
   /**
-   * seed を導き直すだけでは足りない。サーバが寄与を差し替えて並びを選び、差し替えた
+   * seed を導き直すだけでは足りない。サーバがシェアを差し替えて並びを選び、差し替えた
    * 値で seed を作り直せば、記録の中の辻褄は合ってしまう。
    */
-  it("コミットと合わない寄与で作り直した記録は断る", () => {
+  it("コミットと合わないシェアで作り直した記録は断る", () => {
     const record = recordWith([SHARE_B, null], [commitShare(SHARE_A), null]);
     expect(seedCommitmentHolds(record)).toBe(false);
   });
 
-  it("コミットの無い座席に寄与がある記録は断る", () => {
+  it("コミットの無い座席にシェアがある記録は断る", () => {
     const record = recordWith([SHARE_A, null], [null, null]);
     expect(seedCommitmentHolds(record)).toBe(false);
   });

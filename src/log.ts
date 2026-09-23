@@ -29,8 +29,8 @@ export interface MatchRecord {
   seedNonce: string;
   seedCommit: string;
   /**
-   * 座席の寄与と、その寄与のコミット（6.4 節）。どちらの座席も寄与を出さなかった対戦では
-   * 欄ごと省く。省いた記録は、寄与を混ぜる前の記録と同じ読み方で検算できる。
+   * 座席のシェアと、そのシェアのコミット（6.4 節）。どちらの座席もシェアを出さなかった対戦では
+   * 欄ごと省く。省いた記録は、シェアを混ぜる前の記録と同じ読み方で検算できる。
    */
   seedShares?: SeedShares;
   seedShareCommits?: SeedShares;

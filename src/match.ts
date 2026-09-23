@@ -84,7 +84,7 @@ export interface LoggedMove {
 export interface Match {
   readonly matchId: string;
   readonly seedCommitment: SeedCommitment;
-  /** 参加のときに座席が送った、寄与のコミット。開いた寄与が本物かを記録から検算するために残す。 */
+  /** 参加のときに座席が送った、シェアのコミット。開いたシェアが本物かを記録から検算するために残す。 */
   readonly seedShareCommits: SeedShares;
   readonly decks: [DeckList, DeckList];
   readonly seats: [SeatInfo, SeatInfo];

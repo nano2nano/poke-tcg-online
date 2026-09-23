@@ -84,7 +84,7 @@ function cardDataSha256(): string {
  * 対戦中は `seed` を何も明かさないこと（秘匿）の 2 つである。接頭辞を分けておけば、
  * この 2 つが `seed` の幅に依存しない。
  *
- * `shares` は座席が出した寄与である。サーバが `nonce` を引き直して有利な並びを選べないよう、
+ * `shares` は座席が出したシェアである。サーバが `nonce` を引き直して有利な並びを選べないよう、
  * サーバがコミットしたあとで座席が開いた値を `seed` に混ぜる。
  */
 export interface SeedCommitment {
@@ -102,17 +102,17 @@ export interface SeedCommitment {
   shares: SeedShares;
 }
 
-/** 座席ごとの寄与。出さなかった座席、または期限までに開かなかった座席は null。 */
+/** 座席ごとのシェア。出さなかった座席、または期限までに開かなかった座席は null。 */
 export type SeedShares = [string | null, string | null];
 
-/** 呼ぶたびに新しい配列を返す。共有すると、1 局の寄与を書き換えたときにほかの対戦まで変わる。 */
+/** 呼ぶたびに新しい配列を返す。共有すると、1 局のシェアを書き換えたときにほかの対戦まで変わる。 */
 export function noShares(): SeedShares {
   return [null, null];
 }
 
 /**
- * 寄与とそのコミットの形。どちらも 32 バイトの 16 進である。形を決めておかないと、
- * 区切り文字を含む寄与で別の組と同じ入力を作れる。
+ * シェアとそのコミットの形。どちらも 32 バイトの 16 進である。形を決めておかないと、
+ * 区切り文字を含むシェアで別の組と同じ入力を作れる。
  */
 export const SEED_SHARE_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -133,8 +133,8 @@ export function commitSeed(
 }
 
 /**
- * 寄与が 1 つも無いときは、寄与を混ぜる前と同じ入力にする。そうしておけば、
- * 寄与の欄を持たない記録を、読み方を分けずに検算できる。
+ * シェアが 1 つも無いときは、シェアを混ぜる前と同じ入力にする。そうしておけば、
+ * シェアの欄を持たない記録を、読み方を分けずに検算できる。
  */
 function seedInput(nonce: string, shares: SeedShares): string {
   if (shares[0] === null && shares[1] === null) return `seed:${nonce}`;
@@ -145,7 +145,7 @@ export function commitShare(share: string): string {
   return createHash("sha256").update(`share:${share}`).digest("hex");
 }
 
-/** 公開された `nonce` と寄与が、対戦の開始時に配ったコミットと `seed` に一致することを確かめる。 */
+/** 公開された `nonce` とシェアが、対戦の開始時に配ったコミットと `seed` に一致することを確かめる。 */
 export function verifySeedCommitment(commitment: SeedCommitment): boolean {
   const recomputed = commitSeed(commitment.nonce, commitment.shares);
   return recomputed.seed === commitment.seed && recomputed.commit === commitment.commit;

@@ -12,7 +12,7 @@ const $ = (id) => document.getElementById(id);
 let cards = {};
 let socket = null;
 let seat = null;
-/** 着いている座席。決着のあとにシャッフルを検算するため、寄与とコミットもここに持つ。 */
+/** 着いている座席。決着のあとにシャッフルを検算するため、シェアとコミットもここに持つ。 */
 let seatedNow = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
@@ -163,8 +163,8 @@ async function join() {
 }
 
 /**
- * シャッフルへの寄与を作る（仕様 6.4 節）。送るのはコミットだけで、値は席に着いてから開く。
- * `crypto.subtle` は https か localhost でしか使えない。無ければ寄与を出さずに入る。
+ * シャッフルへのシェアを作る（仕様 6.4 節）。送るのはコミットだけで、値は席に着いてから開く。
+ * `crypto.subtle` は https か localhost でしか使えない。無ければシェアを出さずに入る。
  */
 async function newSeedShare() {
   if (globalThis.crypto?.subtle === undefined) return null;
@@ -184,7 +184,7 @@ function toHex(bytes) {
 
 /**
  * 決着のあとに開かれた値を、席に着く前に受け取ったコミットと突き合わせる（仕様 6.4 節）。
- * 比べる相手はサーバが今送ってきた値ではなく、寄与を開く前に覚えた値である。
+ * 比べる相手はサーバが今送ってきた値ではなく、シェアを開く前に覚えた値である。
  * サーバの言い分同士を比べても、あとから選び直した並びは見分けられない。
  */
 async function showShuffleCheck(seated, ended) {
@@ -208,12 +208,12 @@ async function verifyShuffle(seated, ended) {
   const shares = ended.seedShares;
   const problems = [];
   // 座席の割り当てに載ってきた自分のコミットが、送ったものと同じか。すり替えられていれば、
-  // サーバが選んだ値を自分の寄与として開いても、下の突き合わせは全部通ってしまう。
+  // サーバが選んだ値を自分のシェアとして開いても、下の突き合わせは全部通ってしまう。
   if (
     typeof seated.seedShare === "string" &&
     seated.seedShareCommits[seated.seat] !== (await sha256Hex(`share:${seated.seedShare}`))
   ) {
-    problems.push("自分の寄与のコミットがすり替えられています");
+    problems.push("自分のシェアのコミットがすり替えられています");
   }
   if ((await sha256Hex(`commit:${ended.seedNonce}`)) !== seated.seedCommit) {
     problems.push("サーバのコミットと合いません");
@@ -223,7 +223,7 @@ async function verifyShuffle(seated, ended) {
     if (share === null) continue;
     const commit = seated.seedShareCommits[side];
     if (commit === null || (await sha256Hex(`share:${share}`)) !== commit) {
-      problems.push(`${side === seated.seat ? "自分" : "相手"}の寄与がコミットと合いません`);
+      problems.push(`${side === seated.seat ? "自分" : "相手"}のシェアがコミットと合いません`);
     }
   }
   const input =
@@ -239,15 +239,15 @@ async function verifyShuffle(seated, ended) {
   if (typeof seated.seedShare === "string" && shares[seated.seat] !== seated.seedShare) {
     return [
       "share-unused",
-      "シャッフルに自分の寄与が使われていません。席に着くのが期限に間に合わなかったか、サーバが寄与を捨てています。",
+      "シャッフルに自分のシェアが使われていません。席に着くのが期限に間に合わなかったか、サーバがシェアを捨てています。",
     ];
   }
-  // 期限に遅れたことにして寄与を捨てれば、サーバは並びを 2 通りから選べる。黙って「合う」とだけ出さない。
+  // 期限に遅れたことにしてシェアを捨てれば、サーバは並びを 2 通りから選べる。黙って「合う」とだけ出さない。
   const opponent = 1 - seated.seat;
   if (shares[opponent] === null && seated.seedShareCommits[opponent] !== null) {
     return [
       "opponent-share-unused",
-      "シャッフルの値を検算しました。ただし相手の寄与は期限までに開かれず、並びはサーバと自分の値で決まりました。",
+      "シャッフルの値を検算しました。ただし相手のシェアは期限までに開かれず、並びはサーバと自分の値で決まりました。",
     ];
   }
   // 確かめたのは値の対応までである。その seed で対局したかは、記録を再生しないと分からない。
@@ -384,7 +384,7 @@ function openMatch(seated) {
   setStatus("");
   $("join").hidden = true;
   $("table").hidden = false;
-  // 両者が寄与を開くまで局面は届かない。
+  // 両者がシェアを開くまで局面は届かない。
   $("clock").textContent = "相手が席に着くのを待っています";
   $("shuffle-check").hidden = true;
 

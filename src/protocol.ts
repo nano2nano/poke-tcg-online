@@ -107,7 +107,7 @@ export interface EndedMessage {
   /** 16 進 32 桁。 */
   seed: string;
   seedNonce: string;
-  /** 両座席の寄与。参加のときに受け取ったコミットと突き合わせる（6.4 節）。 */
+  /** 両座席のシェア。参加のときに受け取ったコミットと突き合わせる（6.4 節）。 */
   seedShares: SeedShares;
   view: PlayerView;
 }
@@ -157,7 +157,7 @@ export type ServerMessage =
   | { t: "reject"; reason: RejectReason; stateVersion: number }
   | { t: "error"; message: string }
   /**
-   * 席は取れているが、寄与がそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
+   * 席は取れているが、シェアがそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
    * `sync` の届かないまま切れた接続を、席を失ったのと見分けられない。
    */
   | { t: "pending" }

@@ -103,7 +103,7 @@ export class MatchHub {
 
   private acceptShare(socket: SeatSocket, ref: PendingSeatRef, seedShare: string | null): void {
     if (reveal(ref.pending, ref.seat, seedShare) === "mismatch") {
-      send(socket, { t: "error", message: "寄与が、参加のときに送ったコミットと合わない" });
+      send(socket, { t: "error", message: "シェアが、参加のときに送ったコミットと合わない" });
     }
     if (allRevealed(ref.pending)) this.startPending(ref.pending);
   }
@@ -310,7 +310,7 @@ export class MatchHub {
   }
 
   /**
-   * 寄与を開く期限を過ぎた対戦を始め、持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
+   * シェアを開く期限を過ぎた対戦を始め、持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
    *
    * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じスイープで終わらせるはずだった
    * ほかの対戦が、時計を過ぎたまま残り続ける。

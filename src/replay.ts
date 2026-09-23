@@ -178,11 +178,11 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
 }
 
 /**
- * 公開された `nonce` と寄与から `seed` とコミットを導き直す（6.4 節）。
+ * 公開された `nonce` とシェアから `seed` とコミットを導き直す（6.4 節）。
  *
- * **開いた寄与は、参加のときのコミットと突き合わせる。** 突き合わせないと、サーバが
- * 寄与を差し替えて並びを選んでも、記録の中では辻褄が合ってしまう。コミットがあって
- * 寄与が無いのは、期限までに開かなかった座席で、これは正しい記録である。
+ * **開いたシェアは、参加のときのコミットと突き合わせる。** 突き合わせないと、サーバが
+ * シェアを差し替えて並びを選んでも、記録の中では辻褄が合ってしまう。コミットがあって
+ * シェアが無いのは、期限までに開かなかった座席で、これは正しい記録である。
  */
 export function seedCommitmentHolds(record: MatchRecord): boolean {
   const shares = record.seedShares ?? noShares();
