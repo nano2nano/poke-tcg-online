@@ -10,6 +10,9 @@ const $ = (id) => document.getElementById(id);
 
 /** defId から名前を引く表。対戦ごとに変わらないので一度だけ取る。 */
 let cards = {};
+let loadingCards = null;
+/** `cards` から作った検索用の形。`cards` が差し替わったら作り直す。 */
+let searchIndex = null;
 let socket = null;
 let seat = null;
 /** 着いている座席。決着のあとにシャッフルを検算するため、シェアとコミットもここに持つ。 */
@@ -43,6 +46,7 @@ const DECK_KEY = "poke-deck";
  */
 const DECK_SIZE = 60;
 const SAME_NAME_LIMIT = 4;
+const ACE_SPEC_LIMIT = 1;
 
 const STAGES = { basic: "たね", stage1: "1 進化", stage2: "2 進化" };
 const KINDS = { pokemon: "ポケモン", trainer: "トレーナーズ", energy: "エネルギー" };
@@ -105,13 +109,27 @@ function resumeSeat() {
   openMatch(seated);
 }
 
+/**
+ * 名前の表を取る。取りに行っている最中なら同じ要求を待つ。失敗したら次に呼ばれたときに
+ * 取り直す。1 度の失敗で諦めると、読み込み直すまでデッキを組めない。
+ */
+function loadCards() {
+  loadingCards ??= getJson("/api/cards").then(
+    (loaded) => {
+      cards = loaded;
+    },
+    (error) => {
+      loadingCards = null;
+      throw error;
+    },
+  );
+  return loadingCards;
+}
+
 /** 名前の表を待たずに描き始める画面向け。届いたら `redraw` で描き直す。 */
 function loadCardsThen(redraw) {
-  getJson("/api/cards")
-    .then((loaded) => {
-      cards = loaded;
-      redraw();
-    })
+  loadCards()
+    .then(redraw)
     .catch(() => {});
 }
 
@@ -189,6 +207,7 @@ window.addEventListener("storage", (event) => {
   deckEntries = loadDeck();
   renderDeck();
   renderSearch();
+  showDeckStatus([], "");
 });
 
 $("concede-button").addEventListener("click", () => {
@@ -208,7 +227,7 @@ seatChannel?.addEventListener("message", (event) => {
 
 async function join() {
   setStatus("デッキを送っています");
-  cards = await getJson("/api/cards");
+  await loadCards();
   // ここで名前の欄を書き戻さない。 書き戻すと、入力した名前が消えてから読まれる。
   await ensureAccount();
   const deck = await deckToSubmit();
@@ -409,7 +428,7 @@ function showDeckStatus(messages, tone, failures = []) {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = `${failure.name}（${describeCard(choice) || choice.defId}）`;
-      button.addEventListener("click", () => pickChoice(failure.line, choice.defId));
+      button.addEventListener("click", () => pickChoice(failure.line, failure.name, choice.defId));
       list.append(button);
     }
     box.append(list);
@@ -431,15 +450,22 @@ function describeCard(card) {
   } else {
     parts.push(card.basicEnergy ? "基本エネルギー" : (KINDS[card.kind] ?? card.kind));
   }
+  if (card.aceSpec) parts.push("ACE SPEC");
   if (card.set !== undefined) parts.push(`${card.set} ${card.number ?? ""}`.trim());
   return parts.filter(Boolean).join(" / ");
 }
 
-function pickChoice(line, defId) {
+/**
+ * 選んだ候補の `defId` をその行に書き足す。`defId` を読めるのは「名前 枚数 defId」の形だけなので、
+ * 「枚数 名前」で書かれた行も並べ替える。うしろに足すだけだと `defId` が名前の一部として読まれる。
+ */
+function pickChoice(line, name, defId) {
   const lines = $("decklist").value.split("\n");
   const index = line - 1;
   if (lines[index] === undefined) return;
-  lines[index] = `${lines[index].trim()} ${defId}`;
+  const tokens = lines[index].trim().split(/\s+/);
+  const count = /^[0-9０-９]+$/.test(tokens[0]) ? tokens[0] : tokens[tokens.length - 1];
+  lines[index] = `${name} ${count} ${defId}`;
   $("decklist").value = lines.join("\n");
   importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
 }
@@ -454,16 +480,23 @@ function loadDeck() {
   }
   if (!Array.isArray(saved)) return [];
   return saved.filter(
-    (entry) => typeof entry?.defId === "string" && Number.isInteger(entry.count) && entry.count > 0,
+    (entry) =>
+      typeof entry?.defId === "string" &&
+      Number.isInteger(entry.count) &&
+      entry.count > 0 &&
+      entry.count <= DECK_SIZE,
   );
 }
 
 function setDeck(entries) {
   deckEntries = entries;
-  if (entries.length === 0) localStorage.removeItem(DECK_KEY);
-  else localStorage.setItem(DECK_KEY, JSON.stringify(entries));
   renderDeck();
   renderSearch();
+  // 残せなくても組むことはできる。投げると、画面と送る中身が食い違ったまま止まる。
+  try {
+    if (entries.length === 0) localStorage.removeItem(DECK_KEY);
+    else localStorage.setItem(DECK_KEY, JSON.stringify(entries));
+  } catch {}
 }
 
 function changeCount(defId, delta) {
@@ -483,11 +516,17 @@ function canAdd(defId) {
   if (card === undefined) return false;
   let total = 0;
   let sameName = 0;
+  let aceSpecs = 0;
   for (const entry of deckEntries) {
     total += entry.count;
     if (cards[entry.defId]?.name === card.name) sameName += entry.count;
+    if (cards[entry.defId]?.aceSpec === true) aceSpecs += entry.count;
   }
-  return total < DECK_SIZE && (card.basicEnergy === true || sameName < SAME_NAME_LIMIT);
+  return (
+    total < DECK_SIZE &&
+    (card.basicEnergy === true || sameName < SAME_NAME_LIMIT) &&
+    (card.aceSpec !== true || aceSpecs < ACE_SPEC_LIMIT)
+  );
 }
 
 function countInDeck(defId) {
@@ -542,19 +581,15 @@ function renderSearch() {
   if (words.length === 0) return;
   if (Object.keys(cards).length === 0) {
     box.append(noteLine("カードの一覧をまだ読めていません。"));
+    loadCardsThen(() => {
+      renderDeck();
+      renderSearch();
+    });
     return;
   }
   const first = words[0];
-  const found = Object.entries(cards)
-    .map(([defId, card]) => ({ defId, card, name: searchKey(card.name) }))
-    .filter(({ card }) => {
-      const text = searchKey(
-        [card.name, ...(card.attacks ?? []), ...(card.abilities ?? []), card.set, card.number].join(
-          " ",
-        ),
-      );
-      return words.every((word) => text.includes(word));
-    })
+  const found = searchRows()
+    .filter(({ text }) => words.every((word) => text.includes(word)))
     .sort(
       (a, b) =>
         Number(!a.name.startsWith(first)) - Number(!b.name.startsWith(first)) ||
@@ -581,6 +616,23 @@ function renderSearch() {
       ),
     );
   }
+}
+
+/** 検索で比べる形を、表ごとに 1 度だけ作る。打つたび、押すたびに全部を作り直さない。 */
+function searchRows() {
+  if (searchIndex?.from === cards) return searchIndex.rows;
+  const rows = Object.entries(cards).map(([defId, card]) => ({
+    defId,
+    card,
+    name: searchKey(card.name),
+    text: searchKey(
+      [card.name, ...(card.attacks ?? []), ...(card.abilities ?? []), card.set, card.number].join(
+        " ",
+      ),
+    ),
+  }));
+  searchIndex = { from: cards, rows };
+  return rows;
 }
 
 /**
@@ -1335,7 +1387,7 @@ async function showHistory() {
   // プレイヤーができるのを待つ。 初めて来た人はシークレットをまだ持たないので、
   // 待たずに送ると `secret: null` になり、「アカウントが見つからない」と断られる。
   await ensureAccount();
-  if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
+  if (Object.keys(cards).length === 0) await loadCards();
   const { matches } = await postJson("/api/matches", { secret: storedSecret() });
   const list = $("history-list");
   list.innerHTML = "";

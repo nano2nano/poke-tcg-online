@@ -10,7 +10,7 @@
  */
 
 import type { CardDef } from "./engine.js";
-import { loadGeneratedCards } from "./engine.js";
+import { isAceSpec, loadGeneratedCards } from "./engine.js";
 
 export interface CardBrief {
   name: string;
@@ -21,6 +21,8 @@ export interface CardBrief {
   abilities?: string[];
   /** 同じ名前の 4 枚制限の外にあるので、組む画面が上限を変える。 */
   basicEnergy?: true;
+  /** デッキに 1 枚まで。組む画面が、2 枚目を足せないようにする。 */
+  aceSpec?: true;
   /** いちばん新しい収録。再録の多いカードは、古い収録では見覚えが無い。 */
   set?: string;
   number?: string;
@@ -52,6 +54,7 @@ export function briefOf(def: CardDef): CardBrief {
         }
       : {}),
     ...(def.kind === "energy" && def.basic ? { basicEnergy: true } : {}),
+    ...(isAceSpec(def.defId) ? { aceSpec: true } : {}),
     ...(print === undefined || print.set === "" ? {} : { set: print.set }),
     ...(print?.number == null ? {} : { number: print.number }),
   };

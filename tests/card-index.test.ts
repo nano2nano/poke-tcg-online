@@ -23,4 +23,17 @@ describe("カードの表", () => {
     }
     expect(clashes).toEqual([]);
   });
+
+  // 上の検査は収録が違うだけでも通る。収録だけ並べられても、人は中身を思い出せない。
+  it("ポケモンは HP・進化段階・ワザの名前を持つ", () => {
+    ensureCards();
+    const missing = Object.entries(cardIndex())
+      .filter(([, brief]) => brief.kind === "pokemon")
+      .filter(
+        ([, brief]) =>
+          brief.hp === undefined || brief.stage === undefined || brief.attacks === undefined,
+      )
+      .map(([defId]) => defId);
+    expect(missing).toEqual([]);
+  });
 });

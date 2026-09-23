@@ -1027,7 +1027,8 @@ test("テキストの同じ名前の行は、候補を選ぶとデッキに入�
   const [name, defIds] = [...byName].find(([, ids]) => ids.length > 1) as [string, string[]];
 
   await page.click(".deck-text summary");
-  await page.fill("#decklist", `${name} 4`);
+  // 枚数を先に書いた行でも、選んだ defId が名前の一部として読まれないこと。
+  await page.fill("#decklist", `4 ${name}`);
   await page.click("#import-button");
   const choices = page.locator("#deck-status .choices button");
   await expect(choices).toHaveCount(defIds.length);
@@ -1066,4 +1067,42 @@ test("同じ名前のカードが並びきらなくても、ワザの名前を�
 
   await page.fill("#card-search", `${toHiragana(name)} ${attack}`);
   await expect(page.locator(`#card-results .card-row[data-def-id="${target}"]`)).toBeVisible();
+});
+
+test("ACE SPEC は 2 枚目を足せない", async ({ page }) => {
+  await page.goto("/");
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { name: string; aceSpec?: true }
+  >;
+  const [first, second] = Object.entries(cards).filter(([, card]) => card.aceSpec === true) as [
+    [string, { name: string }],
+    [string, { name: string }],
+  ];
+
+  await page.fill("#card-search", first[1].name);
+  await page.locator(`#card-results .card-row[data-def-id="${first[0]}"] button.add`).click();
+  await page.fill("#card-search", second[1].name);
+  await expect(
+    page.locator(`#card-results .card-row[data-def-id="${second[0]}"] button.add`),
+  ).toBeDisabled();
+});
+
+test("カードの一覧を 1 度取れなくても、検索すると取り直す", async ({ page }) => {
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { name: string }
+  >;
+  const name = (Object.values(cards)[0] as { name: string }).name;
+  let failed = false;
+  await page.route("**/api/cards", async (route) => {
+    if (failed) return route.continue();
+    failed = true;
+    return route.fulfill({ status: 503, body: "" });
+  });
+
+  await page.goto("/");
+  await expect.poll(() => failed).toBe(true);
+  await page.fill("#card-search", name);
+  await expect(page.locator("#card-results .card-row").first()).toBeVisible();
 });
