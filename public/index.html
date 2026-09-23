@@ -13,7 +13,7 @@
       <h1>ポケカ オンライン対戦</h1>
       <p class="note">
         盤面は卓と同じ配置で描き、指せる手はサーバが送ってきたものをそのまま並べます。
-        カードを押すと大きく出ます。
+        カードにマウスを載せる（タッチ端末では長押しする）と大きく出ます。押すと、進化前やついているカードもまとめて出ます。
       </p>
     </header>
 
@@ -157,6 +157,9 @@
         </form>
       </div>
     </dialog>
+
+    <!-- 同じ説明は各カードが読み上げ用に持っている。二重に読ませない。 -->
+    <div id="card-preview" class="card-preview" aria-hidden="true" hidden></div>
 
     <script type="module" src="app.js"></script>
   </body>

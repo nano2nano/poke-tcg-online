@@ -1330,13 +1330,14 @@ function cardFace(defId) {
   face.dataset.defId = defId;
   face.dataset.kind = card?.kind ?? "";
   if (card?.type !== undefined) face.dataset.type = card.type;
-  face.title = card === undefined ? defId : `${card.name}\n${describeCard(card)}`;
   face.append(el("span", "card-name", card?.name ?? defId));
   const sub =
     card?.hp !== undefined
       ? `HP ${card.hp}`
       : (TRAINER_KINDS[card?.trainerKind] ?? KINDS[card?.kind] ?? "");
   face.append(el("span", "card-sub", sub));
+  // 読み上げでは、マウスで出るプレビューの代わりにここを読む。
+  if (card !== undefined) face.append(el("span", "visually-hidden", describeCard(card)));
   const src = imageUrl(defId);
   if (src !== null) {
     const image = document.createElement("img");
@@ -1380,15 +1381,14 @@ function openZoom({ title, defIds }) {
   $("card-zoom-title").textContent = title;
   $("card-zoom-cards").replaceChildren(
     ...defIds.map((defId) =>
-      el(
-        "figure",
-        "",
-        cardFace(defId),
-        el("figcaption", "", el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])),
-      ),
+      el("figure", "", cardFace(defId), el("figcaption", "", ...cardCaption(defId))),
     ),
   );
   if (!$("card-zoom").open) $("card-zoom").showModal();
+}
+
+function cardCaption(defId) {
+  return [el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])];
 }
 
 // 枠の外（背景）を押しても閉じる。中身は内側の要素が覆っているので、dialog そのものに当たるのは背景だけである。
@@ -1407,6 +1407,163 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
   openZoom(zoomTargets.get(target));
 });
+
+/**
+ * マウスを載せている間（タッチ端末では長押しの間）、カードを大きく出す。印刷の小さな文字は
+ * 盤面の大きさでは読めない。押して開く拡大と違ってマウスの操作を受けないので、手を指す邪魔をしない。
+ */
+const LONG_PRESS_MS = 400;
+/** 長押しの途中で指がこれより動いたら、スクロールのつもりとみなしてやめる。 */
+const LONG_PRESS_SLOP_PX = 10;
+const PREVIEW_MARGIN_PX = 8;
+const PREVIEW_GAP_PX = 12;
+
+let previewTarget = null;
+let previewPointer = "mouse";
+let longPress = null;
+// 長押しで読んで指を離すと、そのクリックも届いて拡大が開いてしまう。
+let swallowClick = false;
+let lastMouse = null;
+// 盤面は相手の手でも描き直され、載せていたカードが消える。マウスなら下に来たカードへ移り、
+// 閉じてから開き直す一瞬のちらつきを出さない。指で押している最中なら、押したカードはもう無いので閉じる。
+const previewWatch = new MutationObserver(() => {
+  if (previewTarget === null || previewTarget.isConnected) return;
+  const under =
+    longPress === null && lastMouse !== null
+      ? document.elementFromPoint(lastMouse.x, lastMouse.y)
+      : null;
+  const card = previewable(under);
+  if (card === null) hidePreview();
+  else showPreview(card, "mouse");
+});
+
+function previewable(target) {
+  const card = target?.closest?.(".card[data-def-id]");
+  // 開いた拡大の中のカードは、もう大きい。
+  if (card == null || card.closest("dialog, #card-preview") !== null) return null;
+  return card;
+}
+
+function showPreview(card, pointerType) {
+  if (card === previewTarget) return;
+  const defId = card.dataset.defId;
+  const preview = $("card-preview");
+  const src = imageUrl(defId);
+  // 同じカードなら前に作った中身をそのまま使う。カードの一覧が届く前に作った中身や、
+  // 読めなくなった画像を残さないよう、その 2 つも鍵に入れる。
+  const key = `${defId}\n${cards[defId] !== undefined}\n${src}`;
+  if (preview.dataset.key !== key) {
+    preview.dataset.key = key;
+    // 画像があれば効果まで画像で読める。無いときだけ、名前の面に種類とワザを書き添える。
+    preview.replaceChildren(
+      cardFace(defId),
+      ...(src === null ? [el("p", "", ...cardCaption(defId))] : []),
+    );
+  }
+  previewTarget = card;
+  previewPointer = pointerType;
+  previewWatch.observe(document.body, { childList: true, subtree: true });
+  preview.hidden = false;
+  placePreview();
+}
+
+function hidePreview() {
+  previewTarget = null;
+  previewWatch.disconnect();
+  $("card-preview").hidden = true;
+}
+
+/**
+ * カードの横に出し、入らなければ上下、それも無理なら画面の中央に重ねる。
+ * 指で押しているときは、指と手のひらが下と横を隠すので上を先に試す。
+ * 画面の幅は `clientWidth` で測る。`innerWidth` はスクロールバーの下まで含む。
+ */
+function placePreview() {
+  const preview = $("card-preview");
+  const rect = previewTarget.getBoundingClientRect();
+  const { clientWidth, clientHeight } = document.documentElement;
+  const width = preview.offsetWidth;
+  const height = preview.offsetHeight;
+  const maxX = clientWidth - width - PREVIEW_MARGIN_PX;
+  const maxY = clientHeight - height - PREVIEW_MARGIN_PX;
+  const clamp = (value, max) => Math.max(PREVIEW_MARGIN_PX, Math.min(value, max));
+  const beside = clamp(rect.top + rect.height / 2 - height / 2, maxY);
+  const across = clamp(rect.left + rect.width / 2 - width / 2, maxX);
+  const right = { x: rect.right + PREVIEW_GAP_PX, y: beside };
+  const left = { x: rect.left - PREVIEW_GAP_PX - width, y: beside };
+  const above = { x: across, y: rect.top - PREVIEW_GAP_PX - height };
+  const below = { x: across, y: rect.bottom + PREVIEW_GAP_PX };
+  const order =
+    previewPointer === "touch" ? [above, right, left, below] : [right, left, above, below];
+  const spot = order.find(
+    ({ x, y }) => x >= PREVIEW_MARGIN_PX && x <= maxX && y >= PREVIEW_MARGIN_PX && y <= maxY,
+  ) ?? { x: clamp((clientWidth - width) / 2, maxX), y: clamp((clientHeight - height) / 2, maxY) };
+  preview.style.left = `${spot.x}px`;
+  preview.style.top = `${spot.y}px`;
+}
+
+document.addEventListener("pointerover", (event) => {
+  if (event.pointerType === "touch") return;
+  const card = previewable(event.target);
+  if (card !== null) showPreview(card, event.pointerType);
+});
+document.addEventListener("pointerout", (event) => {
+  if (event.pointerType === "touch" || previewTarget === null) return;
+  if (previewTarget.contains(event.relatedTarget)) return;
+  hidePreview();
+});
+document.addEventListener("pointerdown", (event) => {
+  swallowClick = false;
+  if (event.pointerType !== "touch") return;
+  if (longPress !== null) endLongPress();
+  const card = previewable(event.target);
+  if (card === null) return;
+  const timer = setTimeout(() => {
+    if (!card.isConnected) return;
+    showPreview(card, "touch");
+    swallowClick = true;
+  }, LONG_PRESS_MS);
+  longPress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer };
+});
+document.addEventListener("pointermove", (event) => {
+  if (event.pointerType !== "touch") lastMouse = { x: event.clientX, y: event.clientY };
+  if (longPress?.pointerId !== event.pointerId) return;
+  const moved = Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y);
+  if (moved > LONG_PRESS_SLOP_PX) endLongPress();
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  document.addEventListener(type, (event) => {
+    if (longPress?.pointerId === event.pointerId) endLongPress();
+  });
+}
+document.addEventListener(
+  "click",
+  (event) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+  },
+  { capture: true },
+);
+// 長押しで出る画像の保存や選択のメニューが、プレビューの上に重なる。
+document.addEventListener("contextmenu", (event) => {
+  if (longPress !== null) event.preventDefault();
+});
+// 一覧やページが送られるとカードは動くが、マウスの下が同じカードのままなら置き直す合図が来ない。
+document.addEventListener(
+  "scroll",
+  (event) => {
+    if (previewTarget !== null && event.target.contains?.(previewTarget)) placePreview();
+  },
+  { capture: true, passive: true },
+);
+
+function endLongPress() {
+  clearTimeout(longPress.timer);
+  longPress = null;
+  hidePreview();
+}
 
 /** 盤面のゾーン。`count` は山札やトラッシュのように、枚数を読むゾーンでだけ渡す。 */
 function zone(name, label, count, ...children) {
