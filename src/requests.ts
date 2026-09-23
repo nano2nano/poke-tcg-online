@@ -13,6 +13,7 @@
 import { z } from "zod";
 import type { DeckList } from "./engine.js";
 import type { JoinRequest } from "./lobby.js";
+import { SEED_SHARE_PATTERN } from "./fingerprint.js";
 
 /** `CardDefId` は文字列なので、形としてはこれで足りる。枚数と構築の規則は `deck.ts` が見る。 */
 export const deckListSchema = z.object({
@@ -30,12 +31,14 @@ export const joinRequestSchema = z
     deck: deckListSchema,
     displayName: z.string().optional(),
     roomCode: z.string().optional(),
+    seedShareCommit: z.string().regex(SEED_SHARE_PATTERN).optional(),
   })
   .transform((body): JoinRequest => ({
     secret: body.secret,
     deck: body.deck,
     ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
     ...(body.roomCode === undefined ? {} : { roomCode: body.roomCode }),
+    ...(body.seedShareCommit === undefined ? {} : { seedShareCommit: body.seedShareCommit }),
   }));
 
 /** 自分のものを読むだけの要求。シークレットを URL に載せないので本文で受ける（7.2 節）。 */

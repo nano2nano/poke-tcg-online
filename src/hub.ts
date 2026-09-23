@@ -30,7 +30,8 @@ import type {
   SpectatorSyncMessage,
   SyncMessage,
 } from "./protocol.js";
-import type { MatchRegistry } from "./registry.js";
+import type { MatchRegistry, PendingSeatRef } from "./registry.js";
+import { allRevealed, reveal, type PendingMatch } from "./pending.js";
 import type { MatchRecord } from "./log.js";
 
 /** 送り先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
@@ -71,7 +72,14 @@ export class MatchHub {
    * 座席トークンで座席に就く。再接続もこれ 1 つで、特別な復元の手順は要らない
    * （局面はサーバが持っている）。同じ座席に 2 本目が繋がったら古いほうを閉じる。
    */
-  attach(socket: SeatSocket, seatToken: string): boolean {
+  attach(socket: SeatSocket, seatToken: string, seedShare: string | null = null): boolean {
+    const pending = this.options.registry.pendingBySeatToken(seatToken);
+    if (pending !== undefined) {
+      this.seatSocket(pending.pending.matchId, pending.seat, socket);
+      send(socket, { t: "pending" });
+      this.acceptShare(socket, pending, seedShare);
+      return true;
+    }
     const ref = this.options.registry.bySeatToken(seatToken);
     if (ref === undefined) {
       send(socket, {
@@ -80,13 +88,50 @@ export class MatchHub {
       });
       return false;
     }
-    const perMatch = this.sockets.get(ref.match.matchId) ?? new Map<Player, SeatSocket>();
-    const previous = perMatch.get(ref.seat);
-    if (previous !== undefined && previous !== socket) previous.close();
-    perMatch.set(ref.seat, socket);
-    this.sockets.set(ref.match.matchId, perMatch);
+    this.seatSocket(ref.match.matchId, ref.seat, socket);
     send(socket, this.syncFor(ref.match, ref.seat));
     return true;
+  }
+
+  private seatSocket(matchId: string, seat: Player, socket: SeatSocket): void {
+    const perMatch = this.sockets.get(matchId) ?? new Map<Player, SeatSocket>();
+    const previous = perMatch.get(seat);
+    if (previous !== undefined && previous !== socket) previous.close();
+    perMatch.set(seat, socket);
+    this.sockets.set(matchId, perMatch);
+  }
+
+  private acceptShare(socket: SeatSocket, ref: PendingSeatRef, seedShare: string | null): void {
+    if (reveal(ref.pending, ref.seat, seedShare) === "mismatch") {
+      send(socket, { t: "error", message: "シェアが、参加のときに送ったコミットと合わない" });
+    }
+    if (allRevealed(ref.pending)) this.startPending(ref.pending);
+  }
+
+  /**
+   * **始められなかった対戦は捨てる。** ここは WebSocket の `connection` の中からも呼ばれるので、
+   * 投げるとプロセスごと落ちる。残すと、次のスイープでも同じ形で失敗し続け、両座席は
+   * 始まらない対戦を待ち続ける。
+   */
+  private startPending(pending: PendingMatch): void {
+    const perMatch = this.sockets.get(pending.matchId);
+    let match: Match;
+    try {
+      match = this.options.registry.start(pending, this.now());
+    } catch (error) {
+      console.error(`対戦を始められなかった（${pending.matchId}）:`, error);
+      this.options.registry.dropPending(pending);
+      this.sockets.delete(pending.matchId);
+      for (const socket of perMatch?.values() ?? []) {
+        send(socket, { t: "error", message: "対戦を始められなかった" });
+        socket.close();
+      }
+      return;
+    }
+    for (const seat of [0, 1] as Player[]) {
+      const socket = perMatch?.get(seat);
+      if (socket !== undefined) send(socket, this.syncFor(match, seat));
+    }
   }
 
   /** 溢れたら断る。座席と違い、観戦は断っても誰も負けない。 */
@@ -148,8 +193,28 @@ export class MatchHub {
     }
   }
 
+  /** 始まる前の対戦には局面が無い。答えられるのは生存確認と、まだ始まっていないことだけである。 */
+  private handlePending(socket: SeatSocket, message: ClientMessage): void {
+    switch (message.t) {
+      case "ping":
+        send(socket, { t: "pong" });
+        return;
+      case "hello":
+        send(socket, { t: "pending" });
+        return;
+      case "move":
+      case "concede":
+        send(socket, { t: "error", message: "対戦はまだ始まっていない" });
+        return;
+    }
+  }
+
   /** 1 通を処理する。`seatToken` は `attach` 済みのものを呼び出し側が持つ。 */
   handle(socket: SeatSocket, seatToken: string, message: ClientMessage): void {
+    if (this.options.registry.pendingBySeatToken(seatToken) !== undefined) {
+      this.handlePending(socket, message);
+      return;
+    }
     const ref = this.options.registry.bySeatToken(seatToken);
     if (ref === undefined) {
       send(socket, { t: "error", message: "座席が見つからない" });
@@ -207,6 +272,7 @@ export class MatchHub {
         outcome: engineOutcome(match),
         seed: match.seedCommitment.seed,
         seedNonce: match.seedCommitment.nonce,
+        seedShares: match.seedCommitment.shares,
         view: viewFor(match, seat),
       });
     }
@@ -244,12 +310,14 @@ export class MatchHub {
   }
 
   /**
-   * 持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
+   * シェアを開く期限を過ぎた対戦を始め、持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
    *
    * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じスイープで終わらせるはずだった
    * ほかの対戦が、時計を過ぎたまま残り続ける。
    */
   sweepTimeouts(): void {
+    // 始めた対戦では、来ない座席の時計が流れる（3.4 節）。
+    for (const pending of this.options.registry.overdue(this.now())) this.startPending(pending);
     for (const match of this.options.registry.sweepTimeouts(this.now())) {
       try {
         this.endMatch(match);

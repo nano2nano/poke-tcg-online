@@ -10,7 +10,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DeckList, GameOutcome, Player } from "./engine.js";
-import { engineFingerprint, type EngineFingerprint } from "./fingerprint.js";
+import { engineFingerprint, type EngineFingerprint, type SeedShares } from "./fingerprint.js";
 import {
   engineOutcome,
   type LoggedMove,
@@ -28,6 +28,12 @@ export interface MatchRecord {
   /** 公開された `nonce`。これと `seed` の対応が、シャッフルの公正さの検証になる（6.4 節）。 */
   seedNonce: string;
   seedCommit: string;
+  /**
+   * 座席のシェアと、そのシェアのコミット（6.4 節）。どちらの座席もシェアを出さなかった対戦では
+   * 欄ごと省く。省いた記録は、シェアを混ぜる前の記録と同じ読み方で検算できる。
+   */
+  seedShares?: SeedShares;
+  seedShareCommits?: SeedShares;
   /** 先攻。seed から決まる導出値で、再生の入力ではない。先攻の偏りを測るために残す。 */
   firstPlayer: Player;
   decks: [DeckList, DeckList];
@@ -51,6 +57,9 @@ export function toRecord(match: Match): MatchRecord {
     seed: match.seedCommitment.seed,
     seedNonce: match.seedCommitment.nonce,
     seedCommit: match.seedCommitment.commit,
+    ...(match.seedShareCommits.every((commit) => commit === null)
+      ? {}
+      : { seedShares: match.seedCommitment.shares, seedShareCommits: match.seedShareCommits }),
     firstPlayer: match.firstPlayer,
     decks: match.decks,
     seats: match.seats,

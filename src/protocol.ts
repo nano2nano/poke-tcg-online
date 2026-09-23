@@ -15,6 +15,7 @@ import type {
   SpectatorView,
 } from "./engine.js";
 import type { MatchResult, SeatInfo } from "./match.js";
+import type { SeedShares } from "./fingerprint.js";
 
 /** 手を受理しなかった理由（2.2 節の検査 1〜3 に対応する）。 */
 export type RejectReason = "not-your-turn" | "stale-version" | "illegal-move" | "match-over";
@@ -106,6 +107,8 @@ export interface EndedMessage {
   /** 16 進 32 桁。 */
   seed: string;
   seedNonce: string;
+  /** 両座席のシェア。参加のときに受け取ったコミットと突き合わせる（6.4 節）。 */
+  seedShares: SeedShares;
   view: PlayerView;
 }
 
@@ -153,4 +156,9 @@ export type ServerMessage =
   | SpectatorEndedMessage
   | { t: "reject"; reason: RejectReason; stateVersion: number }
   | { t: "error"; message: string }
+  /**
+   * 席は取れているが、シェアがそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
+   * `sync` の届かないまま切れた接続を、席を失ったのと見分けられない。
+   */
+  | { t: "pending" }
   | { t: "pong" };

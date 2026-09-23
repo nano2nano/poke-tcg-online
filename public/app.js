@@ -12,6 +12,8 @@ const $ = (id) => document.getElementById(id);
 let cards = {};
 let socket = null;
 let seat = null;
+/** 着いている座席。決着のあとにシャッフルを検算するため、シェアとコミットもここに持つ。 */
+let seatedNow = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
@@ -131,10 +133,12 @@ async function join() {
   }
 
   const room = $("room").value.trim();
+  const contribution = await newSeedShare();
   const request = {
     secret: storedSecret(),
     deck: { cards: deck.cards },
   };
+  if (contribution !== null) request.seedShareCommit = contribution.commit;
   // 表示名の変更は、その人が欄を触ったときだけ送る。 表示名の変更は対局ログにも残り、
   // 取り消せない。欄の中身がその人の意思だとは限らない以上、送る条件は「打ったこと」にする。
   if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
@@ -149,12 +153,105 @@ async function join() {
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
     return;
   }
+  const seedShare = contribution?.share ?? null;
   if (outcome.seat !== undefined) {
-    openMatch(outcome.seat);
+    openMatch({ ...outcome.seat, seedShare });
     return;
   }
   setStatus("相手を待っています");
-  await waitForOpponent(outcome.ticket);
+  await waitForOpponent(outcome.ticket, seedShare);
+}
+
+/**
+ * シャッフルへのシェアを作る（仕様 6.4 節）。送るのはコミットだけで、値は席に着いてから開く。
+ * `crypto.subtle` は https か localhost でしか使えない。無ければシェアを出さずに入る。
+ */
+async function newSeedShare() {
+  if (globalThis.crypto?.subtle === undefined) return null;
+  const share = toHex(crypto.getRandomValues(new Uint8Array(32)));
+  return { share, commit: await sha256Hex(`share:${share}`) };
+}
+
+async function sha256Hex(text) {
+  return toHex(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))),
+  );
+}
+
+function toHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * 決着のあとに開かれた値を、席に着く前に受け取ったコミットと突き合わせる（仕様 6.4 節）。
+ * 比べる相手はサーバが今送ってきた値ではなく、シェアを開く前に覚えた値である。
+ * サーバの言い分同士を比べても、あとから選び直した並びは見分けられない。
+ */
+async function showShuffleCheck(seated, ended) {
+  const [result, text] = await verifyShuffle(seated, ended).catch(() => [
+    "error",
+    "シャッフルを検算できませんでした。",
+  ]);
+  const shown = $("shuffle-check");
+  shown.dataset.result = result;
+  shown.textContent = text;
+  shown.hidden = false;
+}
+
+async function verifyShuffle(seated, ended) {
+  if (typeof seated?.seedCommit !== "string" || !Array.isArray(seated.seedShareCommits)) {
+    return ["unavailable", "この対戦の開始時の値を覚えていないので、シャッフルを検算できません。"];
+  }
+  if (globalThis.crypto?.subtle === undefined) {
+    return ["unavailable", "この接続（https でない）では、シャッフルを検算できません。"];
+  }
+  const shares = ended.seedShares;
+  const problems = [];
+  // 座席の割り当てに載ってきた自分のコミットが、送ったものと同じか。すり替えられていれば、
+  // サーバが選んだ値を自分のシェアとして開いても、下の突き合わせは全部通ってしまう。
+  if (
+    typeof seated.seedShare === "string" &&
+    seated.seedShareCommits[seated.seat] !== (await sha256Hex(`share:${seated.seedShare}`))
+  ) {
+    problems.push("自分のシェアのコミットがすり替えられています");
+  }
+  if ((await sha256Hex(`commit:${ended.seedNonce}`)) !== seated.seedCommit) {
+    problems.push("サーバのコミットと合いません");
+  }
+  for (const side of [0, 1]) {
+    const share = shares[side];
+    if (share === null) continue;
+    const commit = seated.seedShareCommits[side];
+    if (commit === null || (await sha256Hex(`share:${share}`)) !== commit) {
+      problems.push(`${side === seated.seat ? "自分" : "相手"}のシェアがコミットと合いません`);
+    }
+  }
+  const input =
+    shares[0] === null && shares[1] === null
+      ? `seed:${ended.seedNonce}`
+      : `seed:${ended.seedNonce}:${shares[0] ?? ""}:${shares[1] ?? ""}`;
+  if ((await sha256Hex(input)).slice(0, 32) !== ended.seed) {
+    problems.push("seed が開かれた値から導けません");
+  }
+  if (problems.length > 0) {
+    return ["mismatch", `シャッフルの検算が合いません: ${problems.join("、")}`];
+  }
+  if (typeof seated.seedShare === "string" && shares[seated.seat] !== seated.seedShare) {
+    return [
+      "share-unused",
+      "シャッフルに自分のシェアが使われていません。席に着くのが期限に間に合わなかったか、サーバがシェアを捨てています。",
+    ];
+  }
+  // 期限に遅れたことにしてシェアを捨てれば、サーバは並びを 2 通りから選べる。黙って「合う」とだけ出さない。
+  const opponent = 1 - seated.seat;
+  if (shares[opponent] === null && seated.seedShareCommits[opponent] !== null) {
+    return [
+      "opponent-share-unused",
+      "シャッフルの値を検算しました。ただし相手のシェアは期限までに開かれず、並びはサーバと自分の値で決まりました。",
+    ];
+  }
+  // 確かめたのは値の対応までである。その seed で対局したかは、記録を再生しないと分からない。
+  return ["ok", "シャッフルの値を検算しました。seed は、対戦の前にコミットされた値から導けます。"];
 }
 
 /** 書かれていれば解決した結果、空ならサンプルデッキ。通らなければ null。 */
@@ -239,7 +336,7 @@ function pickChoice(line, name, defId) {
  * チケットが降りていたら待つのをやめる。 同じプレイヤーが別のタブから入ると古いチケットは降りる。
  * それを「まだ待っている」と読むと、このタブは永久に問い合わせ続けることになる。
  */
-async function waitForOpponent(ticket) {
+async function waitForOpponent(ticket, seedShare) {
   for (;;) {
     let claimed = null;
     try {
@@ -254,7 +351,7 @@ async function waitForOpponent(ticket) {
       setStatus("相手を待っています（つながりが悪いので取り直しています）");
     }
     if (claimed?.kind === "seated") {
-      openMatch(claimed.seat);
+      openMatch({ ...claimed.seat, seedShare });
       return;
     }
     if (claimed?.kind === "finished") {
@@ -282,14 +379,20 @@ async function waitForOpponent(ticket) {
 
 function openMatch(seated) {
   seat = seated.seat;
+  seatedNow = seated;
   rememberSeat(seated);
   setStatus("");
   $("join").hidden = true;
   $("table").hidden = false;
+  // 両者がシェアを開くまで局面は届かない。
+  $("clock").textContent = "相手が席に着くのを待っています";
+  $("shuffle-check").hidden = true;
 
-  socket = new WebSocket(socketUrl(`seatToken=${encodeURIComponent(seated.seatToken)}`));
+  const query = [`seatToken=${encodeURIComponent(seated.seatToken)}`];
+  if (typeof seated.seedShare === "string") query.push(`seedShare=${seated.seedShare}`);
+  socket = new WebSocket(socketUrl(query.join("&")));
   /**
-   * 一度でも `sync` が届いたかどうか。閉じた理由を分けるのに使う。
+   * 一度でも `sync` か `pending` が届いたかどうか。閉じた理由を分けるのに使う。
    *
    * 届く前に閉じたなら、サーバはこの座席を知らない（対戦はもう終わっている）。
    * 覚えている座席を持ったままだと、開き直すたびに同じ座席へ繋ぎに行って同じ形で閉じ、
@@ -298,7 +401,7 @@ function openMatch(seated) {
   let synced = false;
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    if (message.t === "sync") synced = true;
+    if (message.t === "sync" || message.t === "pending") synced = true;
     receive(message);
   });
   socket.addEventListener("close", () => {
@@ -368,6 +471,7 @@ function receive(message) {
       renderMoves(null);
       addEvent(describeEnd(message));
       $("clock").textContent = "対戦は終わりました";
+      void showShuffleCheck(seatedNow, message);
       // 決着でレーティングが動く。開いた時点の値のまま置かない。
       refreshAccount().catch(() => {});
       return;
