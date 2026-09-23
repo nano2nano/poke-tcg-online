@@ -12,6 +12,7 @@ import {
   type Browser,
   type BrowserContext,
   type Page,
+  type WebSocketRoute,
 } from "@playwright/test";
 
 /**
@@ -540,6 +541,8 @@ test("同じ座席を別のタブで開いたら、前のタブは繋ぎ直さ�
   a.on("websocket", () => {
     sockets += 1;
   });
+  // サーバの合図だけで止まることを見るため、タブどうしの知らせ合いは使わせない。
+  await a.addInitScript(() => Reflect.deleteProperty(globalThis, "BroadcastChannel"));
   await seatPair(a, b, room);
 
   // 同じブラウザの別のタブは localStorage を共有するので、開くと同じ座席へ繋ぐ。
@@ -557,6 +560,37 @@ test("同じ座席を別のタブで開いたら、前のタブは繋ぎ直さ�
   await close();
 });
 
+/** 前のタブが繋ぎ直すと、いま指しているタブの接続がサーバに閉じられる。 */
+test("繋ぎ直しを待っているタブは、同じ座席を別のタブが開いたらやめる", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `まちぶせ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  // a の 2 本目は放さない。サーバに届かないので、あとから開いたタブは閉じられない。
+  const held = gate();
+  let opened = 0;
+  let first: WebSocketRoute | null = null;
+  await a.routeWebSocket(/\/ws\?/, async (client) => {
+    opened += 1;
+    if (opened > 1) return held.wait;
+    first = client;
+    client.connectToServer();
+  });
+  await seatPair(a, b, room);
+  (first as WebSocketRoute | null)?.close();
+  await expect(a.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
+
+  const other = watch(await a.context().newPage(), pageErrors);
+  await other.goto("/");
+  await expect(other.locator("#self .row").first()).toBeVisible();
+
+  await expect(a.locator("#connection")).toHaveAttribute("data-state", "replaced");
+  expect(await playEither(other, b)).toBe(true);
+
+  await close();
+});
+
 /** 繋がらない状態が続くあいだ、間を空けずに繋ぎに行くと、サーバが戻った瞬間に全員が押し寄せる。 */
 test("繋がらないあいだは、間隔を空けて繋ぎ直す", async ({ page }) => {
   await page.goto("/");
@@ -564,10 +598,11 @@ test("繋がらないあいだは、間隔を空けて繋ぎ直す", async ({ pa
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
   );
   let opened = 0;
-  // 1 本目はサーバが座席を知っている印を返してから切れ、以後は何も返さずに閉じる。
+  // 毎回、サーバが座席を知っている印を返してからすぐ切れる。繋がるたびに間隔を戻すと、
+  // この形では 1 秒おきに繋ぎに行き続ける。
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     opened += 1;
-    if (opened === 1) ws.send(JSON.stringify({ t: "pending" }));
+    ws.send(JSON.stringify({ t: "pending" }));
     ws.close();
   });
   await page.reload();
@@ -638,30 +673,69 @@ test("観戦のリンクが通らなければ、そう出して終わる", async
 });
 
 /**
- * 線が途中で切れると `close` はいつまでも来ない（3.5 節）。何も届かなくなった接続を
+ * 線が途中で切れると `close` はいつまでも来ない（3.5 節）。`ping` に答えない接続を
  * 切れたものと見なさないと、繋ぎ直しが始まらない。
  */
-test("何も届かなくなった接続は、閉じるのを待たずに繋ぎ直す", async ({ page }) => {
+test("`ping` に答えなくなった接続は、閉じるのを待たずに繋ぎ直す", async ({ page }) => {
   await page.clock.install();
   await page.goto("/");
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
   );
   let opened = 0;
-  // 1 本目は座席を知っている印を返したあと、閉じずに黙る。`ping` にも答えない。
+  // 1 本目は座席を知っている印を返したあと、閉じずに黙る。
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     opened += 1;
     if (opened === 1) ws.send(JSON.stringify({ t: "pending" }));
   });
   await page.reload();
   await expect.poll(() => opened).toBe(1);
+  // 印が画面に届くのを待つ。届く前に時計を進めると、印の無い接続として切られる。
+  await page.waitForTimeout(500);
 
-  // 隠れたタブでは `pong` が 1 分おきになるので、1 分黙っただけでは切らない。
-  await page.clock.runFor(60_000);
+  // 1 回目の `ping` を送るところまで。まだ答えを待っている。
+  await page.clock.runFor(30_000);
   expect(opened).toBe(1);
-  await page.clock.runFor(60_000);
+  // 次に送るときまでに答えが無いので、切れたものとして繋ぎ直す。
+  await page.clock.runFor(30_000);
   await expect.poll(() => opened).toBe(2);
   await expect(page.locator("#table")).toBeVisible();
+});
+
+/**
+ * タイマーは、隠れたタブでは間引かれ、眠っているあいだは止まる。黙っていた長さで決めると、
+ * 戻った直後に、答えている接続まで切る。
+ */
+test("タイマーが大きく遅れても、`ping` に答えている接続は切らない", async ({ page }) => {
+  await page.clock.install();
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
+  );
+  let opened = 0;
+  let pings = 0;
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    opened += 1;
+    ws.send(JSON.stringify({ t: "pending" }));
+    ws.onMessage((raw) => {
+      if (JSON.parse(String(raw)).t !== "ping") return;
+      pings += 1;
+      ws.send(JSON.stringify({ t: "pong" }));
+    });
+  });
+  await page.reload();
+  await expect.poll(() => opened).toBe(1);
+  await page.waitForTimeout(500);
+
+  // 10 分ずつ 2 回飛ぶ。飛んだあとのタイマーは 1 回だけ動く。
+  await page.clock.fastForward(600_000);
+  await expect.poll(() => pings).toBe(1);
+  await page.waitForTimeout(500);
+  await page.clock.fastForward(600_000);
+  await expect.poll(() => pings).toBe(2);
+  await page.clock.runFor(2_000);
+  expect(opened).toBe(1);
+  await expect(page.locator("#connection")).toBeHidden();
 });
 
 test("観戦中に切れたら、繋ぎ直して続きを映す", async ({ browser, pageErrors }) => {

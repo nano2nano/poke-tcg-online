@@ -94,22 +94,23 @@ function loadCardsThen(redraw) {
  * 開いている間、20 秒ごとに `ping` を送る。サーバは 150 秒何も届かない接続を切る（仕様 3.5 節）。
  * Cloudflare Workers にはサーバから ping を送る手段が無いので、生きていることは画面の側から伝える。
  *
- * 90 秒何も届かなければ、`close` を待たずに `onSilent` を呼ぶ（同じ節）。線が途中で切れると
- * `close` はいつまでも来ず、繋ぎ直しが始まらない。
+ * 開いてから、または `ping` を送ってから、次に送るときまでに何も届かなければ、接続を閉じて
+ * `onSilent` を呼ぶ（同じ節）。線が途中で切れると `close` はいつまでも来ず、繋ぎ直しが始まらない。
  */
 function keepAlive(ws, onSilent) {
-  let heard = Date.now();
+  let answered = false;
   ws.addEventListener("message", () => {
-    heard = Date.now();
+    answered = true;
   });
   const timer = setInterval(() => {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    if (Date.now() - heard > 90_000) {
+    if (!answered) {
       clearInterval(timer);
+      ws.close();
       onSilent();
       return;
     }
-    ws.send(JSON.stringify({ t: "ping" }));
+    answered = false;
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "ping" }));
   }, 20_000);
   ws.addEventListener("close", () => clearInterval(timer));
 }
@@ -148,6 +149,17 @@ $("check-button").addEventListener("click", () => {
 
 $("concede-button").addEventListener("click", () => {
   if (socket !== null && confirm("投了しますか。")) send({ t: "concede" });
+});
+
+/**
+ * 同じ座席を開いたタブどうしで、繋がったことを知らせ合う。繋ぎ直しを待っているタブが
+ * あとから繋ぐと、いま指しているタブがサーバに閉じられる（3.3 節）。
+ */
+const seatChannel =
+  typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel("poke-seat");
+seatChannel?.addEventListener("message", (event) => {
+  if (seatLink === null || event.data?.seatToken !== seatLink.seated.seatToken) return;
+  replaceSeatLink(seatLink);
 });
 
 async function join() {
@@ -427,6 +439,7 @@ function openMatch(seated) {
     /** 一度でも `sync` か `pending` が届いたか。届いていれば、サーバはこの座席を知っている。 */
     known: false,
     ended: false,
+    replaced: false,
     retry: null,
   };
   link.retry = reconnector(() => connectSeat(link));
@@ -442,17 +455,18 @@ function connectSeat(link) {
   socket = ws;
   let code = null;
   let lost = false;
-  keepAlive(ws, () => {
-    ws.close();
-    onLost();
-  });
+  /** この接続で `sync` か `pending` を受けたか。 */
+  let joined = false;
+  keepAlive(ws, onLost);
   ws.addEventListener("message", (event) => {
     if (lost || seatLink !== link) return;
     const message = JSON.parse(event.data);
-    if (message.t === "sync" || message.t === "pending") {
+    if ((message.t === "sync" || message.t === "pending") && !joined) {
+      joined = true;
       link.known = true;
-      link.retry.reset();
+      link.retry.connected();
       showConnection(null);
+      seatChannel?.postMessage({ seatToken: link.seated.seatToken });
     }
     if (message.t === "ended") link.ended = true;
     if (message.t === "error" && typeof message.code === "string") code = message.code;
@@ -461,7 +475,7 @@ function connectSeat(link) {
   ws.addEventListener("close", onLost);
 
   function onLost() {
-    if (lost || seatLink !== link) return;
+    if (lost || seatLink !== link || link.replaced) return;
     lost = true;
     if (link.ended) {
       link.retry.stop();
@@ -478,13 +492,8 @@ function connectSeat(link) {
       backToJoin("指していた対戦は、もう終わっています。");
       return;
     }
-    // 繋ぎ直すと、いま指している側の接続を追い出す。
     if (code === "seat-replaced") {
-      link.retry.stop();
-      showConnection(
-        "replaced",
-        "この対戦を別のタブで開いたので、ここでは止めました。読み込み直すと、こちらで続けられます。",
-      );
+      replaceSeatLink(link);
       return;
     }
     if (!link.known) {
@@ -497,6 +506,18 @@ function connectSeat(link) {
   }
 }
 
+/** この座席は別のタブが指している。繋ぎ直すと、そちらの接続を追い出す。 */
+function replaceSeatLink(link) {
+  link.replaced = true;
+  link.retry.stop();
+  socket?.close();
+  disableMoves();
+  showConnection(
+    "replaced",
+    "この対戦を別のタブで開いたので、ここでは止めました。読み込み直すと、こちらで続けられます。",
+  );
+}
+
 /**
  * 切れた接続を張り直す。間隔の決め方は仕様 3.3 節。
  * 回線が戻ったとブラウザが知らせたら、待たずに繋ぐ。
@@ -504,6 +525,7 @@ function connectSeat(link) {
 function reconnector(connect) {
   let retries = 0;
   let timer = null;
+  let connectedAt = null;
   const now = () => {
     if (timer === null) return;
     clearTimeout(timer);
@@ -513,6 +535,9 @@ function reconnector(connect) {
   window.addEventListener("online", now);
   return {
     schedule() {
+      // 繋がってすぐ切れる状態が続くときは、間隔を延ばし続ける。
+      if (connectedAt !== null && Date.now() - connectedAt >= 30_000) retries = 0;
+      connectedAt = null;
       const delay = Math.min(30_000, 1_000 * 2 ** retries) * (0.5 + Math.random() / 2);
       retries += 1;
       timer = setTimeout(() => {
@@ -521,8 +546,8 @@ function reconnector(connect) {
       }, delay);
       return retries;
     },
-    reset() {
-      retries = 0;
+    connected() {
+      connectedAt = Date.now();
     },
     stop() {
       clearTimeout(timer);
@@ -825,17 +850,16 @@ function openWatch(token) {
     /** 閉じる直前にサーバが言った理由。入れなかったときに、そのまま見せる。 */
     let refusal = null;
     let lost = false;
-    keepAlive(watching, () => {
-      watching.close();
-      onLost();
-    });
+    let joined = false;
+    keepAlive(watching, onLost);
     watching.addEventListener("message", (event) => {
       if (lost) return;
       const message = JSON.parse(event.data);
       switch (message.t) {
         case "spectator-sync":
           synced = true;
-          retry.reset();
+          if (!joined) retry.connected();
+          joined = true;
           $("watch-status").textContent = "";
           watchSeats = message.seats;
           renderWatch(message.view);
@@ -871,7 +895,9 @@ function openWatch(token) {
       if (!synced || refusal !== null) {
         retry.stop();
         $("watch-status").textContent =
-          `観戦できませんでした（${refusal ?? "対戦が見つからない"}）`;
+          refusal === null
+            ? "サーバへ繋がりませんでした。読み込み直すと、もう一度繋ぎます。"
+            : `観戦できませんでした（${refusal}）`;
         return;
       }
       const attempt = retry.schedule();
@@ -910,7 +936,12 @@ function describeWatchEnd(result) {
 }
 
 function send(message) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(message));
+    return;
+  }
+  // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。
+  addEvent("接続が切れているので送れませんでした。繋がってから、もう一度押してください。");
 }
 
 function setStatus(text) {
