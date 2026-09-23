@@ -168,3 +168,31 @@ describe("決着", () => {
     });
   });
 });
+
+/**
+ * 画面の案内（`public/app.js` の `promptText`）は、この順を前提に書いてある。
+ * エンジンが順を変えたら、案内も書き直す。
+ */
+describe("対戦準備", () => {
+  it("先攻、後攻の順にバトル場を選び終えてから、ベンチを選ぶ", () => {
+    ensureCards();
+    for (const nonce of ["setup-order-1", "setup-order-2", "setup-order-3"]) {
+      const match = newMatch(nonce);
+      const placements: string[] = [];
+      while (match.state.phase === "setup") {
+        const top = match.state.choices.at(-1);
+        if (top?.kind === "setup-place-active" || top?.kind === "setup-place-bench") {
+          const side = top.owner === match.state.turnPlayer ? "先攻" : "後攻";
+          placements.push(`${top.kind} ${side}`);
+        }
+        const mover = toMove(match) as Player;
+        expect(submitMove(match, mover, match.version, firstLegal(match), 0).ok).toBe(true);
+      }
+      expect(placements.slice(0, 2)).toEqual([
+        "setup-place-active 先攻",
+        "setup-place-active 後攻",
+      ]);
+      expect(placements.slice(2).every((each) => each.startsWith("setup-place-bench"))).toBe(true);
+    }
+  });
+});

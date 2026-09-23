@@ -21,6 +21,8 @@ let seatedNow = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
+/** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
+let lastMoves = { moves: null, playing: false };
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 /**
@@ -191,7 +193,10 @@ function redraw() {
   renderDeck();
   renderSearch();
   restore();
-  if (lastView !== null) renderView(lastView);
+  if (lastView !== null) {
+    renderView(lastView);
+    renderMoves(lastMoves.moves, lastMoves.playing);
+  }
   if (lastWatchView !== null) renderWatch(lastWatchView);
   if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
 }
@@ -1254,7 +1259,7 @@ function receive(message) {
       // 観戦トークンも終わった対戦では通らない。残すと、渡された人が開いても入れない。
       $("watch-link").value = "";
       renderView(message.view);
-      renderMoves(null);
+      renderMoves(null, false);
       addEvent(describeEnd(message));
       $("clock").textContent = "対戦は終わりました";
       void showShuffleCheck(seatedNow, message);
@@ -1511,11 +1516,17 @@ function renderClock(clock) {
   $("clock").textContent = `${turn}${remaining} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
 }
 
-function renderMoves(moves) {
+/** `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。 */
+function renderMoves(moves, playing = true) {
+  lastMoves = { moves, playing };
+  const prompt = $("move-prompt");
+  prompt.textContent = playing ? promptText(lastView, moves !== null) : "";
+  prompt.hidden = prompt.textContent === "";
   const container = $("moves");
   container.innerHTML = "";
   if (moves === null) {
-    container.innerHTML = '<p class="waiting">相手の番です</p>';
+    // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
+    if (playing && lastView?.phase !== "setup") container.append(waitingNote(lastView));
     return;
   }
   for (const move of moves) {
@@ -1527,6 +1538,59 @@ function renderMoves(moves) {
 }
 
 /**
+ * 手番のプレイヤーでなくても、選択を持てば手を持つ（きぜつしたあとにバトル場へ出すポケモンなど）。
+ * 自分の番の途中で相手が選んでいるのを「相手の番」と出すと、番が移ったと読まれる。
+ */
+function waitingNote(view) {
+  const ownTurn = view?.turnPlayer === view?.viewer;
+  const note = el(
+    "p",
+    "waiting",
+    ownTurn ? "相手が選んでいます。あなたの番は続きます" : "相手の番です",
+  );
+  note.dataset.state = ownTurn ? "their-choice" : "their-turn";
+  return note;
+}
+
+/**
+ * 対戦準備で、何を選んでいるのか。
+ *
+ * エンジンは両者同時の準備を「先攻のバトル場、後攻のバトル場、先攻のベンチ、後攻のベンチ」の
+ * 順に 1 人ずつ選ばせる。バトル場に 1 体出したところで相手の選ぶ番になるので、
+ * 何も書かないと、たねがまだ手札にあるのに番が移ったように見える。
+ */
+function promptText(view, mine) {
+  if (view?.phase !== "setup") return "";
+  if (!mine) {
+    return "相手が対戦の準備で選んでいます。準備は 1 人ずつ順に選ぶので、そのあいだは待ちになります。";
+  }
+  const choice = view.choices.at(-1);
+  switch (choice?.kind) {
+    case "setup-place-active":
+      // 選ばずに済むのは、候補が特性でバトル場に出られるカードだけのとき（出さなければ引き直し）。
+      return choice.optional
+        ? "バトル場に出すポケモンを選んでください。出さなければ手札を引き直します。"
+        : "バトル場に出すたねポケモンを選んでください。ベンチに出すのは、両者がバトル場を選んだあとです。";
+    case "setup-place-bench":
+      return "ベンチに出すたねポケモンを選んでください。出し終えたら「ベンチに出し終える」を押します。";
+    case "setup-bonus-draw":
+      return `相手が手札を引き直したので、追加で ${choice.prompt.count} 枚引けます。`;
+    default:
+      return "";
+  }
+}
+
+/**
+ * 対戦準備の選択への答えの見出し。答えはカードか「はい」「いいえ」だけなので、
+ * そのままではバトル場とベンチのどちらに出すのか、「いいえ」で何が起きるのかが読めない。
+ */
+const SETUP_ANSWERS = {
+  "setup-place-active": { card: "をバトル場に出す", decline: "出さずに手札を引き直す" },
+  "setup-place-bench": { card: "をベンチに出す", decline: "ベンチに出し終える" },
+  "setup-bonus-draw": { accept: "追加で引く", decline: "追加で引かない" },
+};
+
+/**
  * 手の見出し。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
  * ここが知らない型が来ても、型の名前だけは出す。
  *
@@ -1536,7 +1600,7 @@ function renderMoves(moves) {
 function describeMove(move, view = lastView) {
   switch (move.type) {
     case "PlayBasic":
-      return `${handCardName(move.cardInstanceId, view)} をだす`;
+      return `${handCardName(move.cardInstanceId, view)} をベンチに出す`;
     case "Evolve":
       return "進化させる";
     case "AttachEnergy":
@@ -1572,6 +1636,12 @@ function describeMove(move, view = lastView) {
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
 function describeAnswer(answer, view) {
+  const setup = SETUP_ANSWERS[view?.choices?.at(-1)?.kind];
+  if (setup?.[answer.kind] !== undefined) {
+    return answer.kind === "card"
+      ? `${handCardName(answer.card, view)} ${setup.card}`
+      : setup[answer.kind];
+  }
   switch (answer.kind) {
     case "accept":
       return "はい";
@@ -2013,7 +2083,11 @@ async function goToPly(ply) {
  */
 function readerBoard(views, seat) {
   if (!views) return null;
-  return { self: views[seat].self, opponent: views[seat === 0 ? 1 : 0].self };
+  return {
+    self: views[seat].self,
+    opponent: views[seat === 0 ? 1 : 0].self,
+    choices: views[seat].choices,
+  };
 }
 
 function renderReplayBoard({ views, seat }) {
