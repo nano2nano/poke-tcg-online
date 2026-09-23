@@ -37,7 +37,7 @@ let seatLink = null;
  */
 const SEAT_KEY = "poke-seat";
 
-/** 組んでいるデッキを置く鍵。開き直すたびに組み直させないよう、ブラウザに残す。 */
+/** 組んでいるデッキを置く localStorage のキー。開き直すたびに組み直させないよう、ブラウザに残す。 */
 const DECK_KEY = "poke-deck";
 
 /**
@@ -73,10 +73,7 @@ const HALVES = { left: "左", right: "右" };
 /** 検索で並べる上限。これより多ければ、語を打ち足して絞ってもらう。 */
 const SEARCH_LIMIT = 30;
 
-/**
- * 組んでいるデッキ。`defId` と枚数を、足した順に持つ。送るときもこの順に並べる。
- * インスタンス ID はデッキ配列の添字なので、並びも対局ログに残る（6.2 節）。
- */
+/** 組んでいるデッキ。`defId` と枚数を、足した順に持つ。送る並びも対局ログに残る（6.2 節）。 */
 let deckEntries = loadDeck();
 
 const nameOf = (defId) => cards[defId]?.name ?? defId;
@@ -391,7 +388,6 @@ async function verifyShuffle(seated, ended) {
   return ["ok", "シャッフルの値を検算しました。seed は、対戦の前にコミットされた値から導けます。"];
 }
 
-/** 組んであればそのデッキ、空ならサンプルデッキ。通らなければ null。 */
 async function deckToSubmit() {
   if (hasPendingText()) return null;
   if (deckEntries.length === 0) {
@@ -493,7 +489,6 @@ function showDeckStatus(messages, tone, failures = []) {
   }
 }
 
-/** 同じ名前の別のカードを見分けるための 1 行。 */
 function describeCard(card) {
   if (card === undefined) return "";
   const parts = [];

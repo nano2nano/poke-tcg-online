@@ -975,7 +975,7 @@ async function sampleDeckEntries(
   }[];
 }
 
-/** カタカナをひらがなへ。人がひらがなで打っても当たることを見るのに使う。 */
+/** 人がひらがなで打っても当たることを見るのに使う。 */
 function toHiragana(text: string): string {
   return text.replace(/[ァ-ヶ]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0x60));
 }

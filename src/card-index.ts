@@ -22,7 +22,7 @@ export interface CardBrief {
   attacks?: string[];
   abilities?: string[];
   trainerKind?: "item" | "supporter" | "tool" | "stadium";
-  /** 左右 2 枚で 1 つになるスタジアム。同じ名前の 2 枚は、ここしか違わない。 */
+  /** 左右 2 枚で 1 つになるスタジアム。同じ名前の左右は、ほかの値では見分けられない。 */
   stadiumHalf?: "right" | "left";
   /** 同じ名前の 4 枚制限の外にあるので、組む画面が上限を変える。 */
   basicEnergy?: true;
