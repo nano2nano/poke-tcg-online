@@ -6,7 +6,7 @@ import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { Lobby, type JoinOutcome, type JoinRequest } from "../src/lobby.js";
 import { AccountStore } from "../src/accounts.js";
 import { MatchRegistry } from "../src/registry.js";
-import { SEAT_NOT_FOUND, type ServerMessage } from "../src/protocol.js";
+import { SEAT_NOT_FOUND, SEAT_REPLACED, type ServerMessage } from "../src/protocol.js";
 import { ensureCards, legalDecks } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
@@ -474,6 +474,9 @@ describe("座席の接続", () => {
     hub.attach(fresh, seatA?.seatToken ?? "");
     expect(old.closed).toBe(true);
     expect(fresh.closed).toBe(false);
+    // 画面は切れた接続を繋ぎ直すので、合図が無いと古いほうが繋ぎ直して新しいほうを追い出す。
+    expect(old.sent.at(-1)).toMatchObject({ t: "error", code: SEAT_REPLACED });
+    expect(fresh.sent.some((message) => message.t === "error")).toBe(false);
   });
 
   it("知らない座席トークンでは繋がず、座席を捨ててよい合図を付けて断る", async () => {

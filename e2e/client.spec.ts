@@ -165,8 +165,8 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
 });
 
 /**
- * 1 局を 12 手だけ指して投了し、その対戦の読み返しを開いたページを返す。
- * 読み返しの試験はどれもここから始まるので、足場にしてある。
+ * 1 局を 12 手だけ指して投了し、その対戦のリプレイを開いたページを返す。
+ * リプレイのテストはどれもここから始めるので、1 つにまとめてある。
  */
 async function replayOfFinishedMatch(
   browser: Browser,
@@ -206,7 +206,7 @@ async function replayOfFinishedMatch(
    *
    * `#replay` が見えるのは最初のフレームを取りに行く**前**なので、見えたことだけを
    * 待って返すと、そのあとテストが差し込む細工が初回フレームに当たることがある。
-   * 初回フレームが落ちると読み返しは閉じ、以降の「1 手 ▶」は押せないまま固まる。
+   * 初回フレームが落ちるとリプレイは閉じ、以降の「1 手 ▶」は押せないまま固まる。
    */
   const firstFrame = a.waitForResponse((response) => response.url().endsWith("/api/replay"));
   await a.locator("#history-list button").first().click();
@@ -217,7 +217,7 @@ async function replayOfFinishedMatch(
   return [a, close];
 }
 
-test("読み返しで「1 手 ▶」を続けて押したぶんだけ進む", async ({ browser, pageErrors }) => {
+test("リプレイで「1 手 ▶」を続けて押したぶんだけ進む", async ({ browser, pageErrors }) => {
   test.slow(); // 1 局ぶん指してから読み返すので、ほかより時間が要る。
   const [a, close] = await replayOfFinishedMatch(browser, pageErrors, `よみかえし-${Date.now()}`);
 
@@ -398,7 +398,7 @@ test("終わった座席を捨てても、別のタブが置いた座席は残�
 /**
  * 終わった対戦の座席を覚えたままにしないこと。
  *
- * 覚えたままでも、次に開いたときは上の歯止めが働いてマッチングの画面へ戻る。
+ * 覚えたままでも、次に開いたときはサーバが座席を知らないと返すので、マッチングの画面へ戻る。
  * ただしそこまで往復が 1 つ増え、そのあいだ「もう終わっている」と言えない。
  */
 test("対戦が終わったら、座席を覚えておかない", async ({ browser, pageErrors }) => {
@@ -420,6 +420,164 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   expect(await a.evaluate(() => localStorage.getItem("poke-seat"))).toBeNull();
 
   await close();
+});
+
+async function seatPair(a: Page, b: Page, room: string): Promise<void> {
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#self .row").first()).toBeVisible();
+  await expect(b.locator("#self .row").first()).toBeVisible();
+}
+
+async function playEither(a: Page, b: Page): Promise<boolean> {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if ((await playOne(a)) || (await playOne(b))) return true;
+  }
+  return false;
+}
+
+/**
+ * 繋ぎ直しの接続を止めておき、テストが開けたときに通す。止めないと、繋ぎ直しのあいだの
+ * 画面は一瞬で過ぎて見られない。
+ */
+function gate(): { wait: Promise<void>; open: () => void } {
+  let open = (): void => {};
+  const wait = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { wait, open };
+}
+
+/**
+ * 切断中も時計は流れる（3.4 節）。読み込み直すまで戻れないと、気付かないうちに時間切れで負ける。
+ */
+test("対戦中に切れたら、読み込み直さずに同じ座席へ繋ぎ直す", async ({ browser, pageErrors }) => {
+  const room = `つなぎなおす-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const held = gate();
+  let opened = 0;
+  // a の最初の接続は盤面が届いたところで切り、2 本目はテストが見終わるまで止める。
+  await a.routeWebSocket(/\/ws\?/, async (client) => {
+    opened += 1;
+    const first = opened === 1;
+    if (!first) await held.wait;
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      client.send(raw);
+      if (first && JSON.parse(String(raw)).t === "sync") client.close();
+    });
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+
+  await expect(a.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
+  await expect(a.locator("#concede-button")).toBeDisabled();
+  await expect(a.locator("#table")).toBeVisible();
+  expect(await a.evaluate(() => localStorage.getItem("poke-seat"))).not.toBeNull();
+
+  held.open();
+  await expect(a.locator("#connection")).toBeHidden();
+  await expect(a.locator("#concede-button")).toBeEnabled();
+  expect(opened).toBe(2);
+  // 手が通るのは、サーバがこの接続を元の座席と認めたときだけである。
+  expect(await playEither(a, b)).toBe(true);
+
+  await close();
+});
+
+/** 切れているあいだに対戦が終わっていれば、サーバは座席を知らないと返す。そこで繋ぎ直すのをやめる。 */
+test("繋ぎ直すあいだに対戦が終わっていたら、マッチングの画面へ戻す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `もうおわった-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const held = gate();
+  let opened = 0;
+  await a.routeWebSocket(/\/ws\?/, async (client) => {
+    opened += 1;
+    const first = opened === 1;
+    if (!first) await held.wait;
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      client.send(raw);
+      if (first && JSON.parse(String(raw)).t === "sync") client.close();
+    });
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
+
+  const settled = b.waitForResponse((response) => response.url().endsWith("/api/account/me"));
+  b.once("dialog", (dialog) => void dialog.accept());
+  await b.click("#concede-button");
+  await settled;
+  held.open();
+
+  await expect(a.locator("#join")).toBeVisible();
+  await expect(a.locator("#table")).toBeHidden();
+  expect(await a.evaluate(() => localStorage.getItem("poke-seat"))).toBeNull();
+
+  await close();
+});
+
+/**
+ * 同じ座席に 2 本目が繋がると、サーバは古いほうを閉じる（3.3 節）。閉じられたタブが
+ * 繋ぎ直すと今度は新しいほうが閉じられ、2 つのタブが互いを追い出し続ける。
+ */
+test("同じ座席を別のタブで開いたら、前のタブは繋ぎ直さない", async ({ browser, pageErrors }) => {
+  const room = `ふたつめ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  let sockets = 0;
+  a.on("websocket", () => {
+    sockets += 1;
+  });
+  await seatPair(a, b, room);
+
+  // 同じブラウザの別のタブは localStorage を共有するので、開くと同じ座席へ繋ぐ。
+  const other = watch(await a.context().newPage(), pageErrors);
+  await other.goto("/");
+  await expect(other.locator("#self .row").first()).toBeVisible();
+
+  await expect(a.locator("#connection")).toHaveAttribute("data-state", "replaced");
+  // 繋ぎ直しの最初の間隔は 1 秒を超えない。それより長く待って、繋ぎに行かないことを見る。
+  await a.waitForTimeout(2_500);
+  expect(sockets).toBe(1);
+  await expect(other.locator("#connection")).toBeHidden();
+  expect(await playEither(other, b)).toBe(true);
+
+  await close();
+});
+
+/** 繋がらない状態が続くあいだ、間を空けずに繋ぎに行くと、サーバが戻った瞬間に全員が押し寄せる。 */
+test("繋がらないあいだは、間隔を空けて繋ぎ直す", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
+  );
+  let opened = 0;
+  // 1 本目はサーバが座席を知っている印を返してから切れ、以後は何も返さずに閉じる。
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    opened += 1;
+    if (opened === 1) ws.send(JSON.stringify({ t: "pending" }));
+    ws.close();
+  });
+  await page.reload();
+
+  await expect(page.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
+  await page.waitForTimeout(4_000);
+  // 間隔は 0.5〜1 秒、1〜2 秒、2〜4 秒と延びるので、4 秒で繋ぎに行くのは 1 本目のほかに 2〜3 回である。
+  expect(opened).toBeGreaterThanOrEqual(3);
+  expect(opened).toBeLessThanOrEqual(4);
+  await expect(page.locator("#table")).toBeVisible();
 });
 
 /**
@@ -477,6 +635,68 @@ test("観戦のリンクが通らなければ、そう出して終わる", async
   await page.goto("/?watch=もう無い対戦");
   await expect(page.locator("#watch")).toBeVisible();
   await expect(page.locator("#watch-status")).not.toBeEmpty();
+});
+
+/**
+ * 線が途中で切れると `close` はいつまでも来ない（3.5 節）。何も届かなくなった接続を
+ * 切れたものと見なさないと、繋ぎ直しが始まらない。
+ */
+test("何も届かなくなった接続は、閉じるのを待たずに繋ぎ直す", async ({ page }) => {
+  await page.clock.install();
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
+  );
+  let opened = 0;
+  // 1 本目は座席を知っている印を返したあと、閉じずに黙る。`ping` にも答えない。
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    opened += 1;
+    if (opened === 1) ws.send(JSON.stringify({ t: "pending" }));
+  });
+  await page.reload();
+  await expect.poll(() => opened).toBe(1);
+
+  // 隠れたタブでは `pong` が 1 分おきになるので、1 分黙っただけでは切らない。
+  await page.clock.runFor(60_000);
+  expect(opened).toBe(1);
+  await page.clock.runFor(60_000);
+  await expect.poll(() => opened).toBe(2);
+  await expect(page.locator("#table")).toBeVisible();
+});
+
+test("観戦中に切れたら、繋ぎ直して続きを映す", async ({ browser, pageErrors }) => {
+  const room = `かんせんもどる-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await seatPair(a, b, room);
+  await expect(a.locator("#watch-link")).not.toHaveValue("");
+  const link = await a.locator("#watch-link").inputValue();
+
+  const context = await browser.newContext();
+  const watcher = watch(await context.newPage(), pageErrors);
+  const held = gate();
+  let opened = 0;
+  await watcher.routeWebSocket(/\/ws\?/, async (client) => {
+    opened += 1;
+    const first = opened === 1;
+    if (!first) await held.wait;
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      client.send(raw);
+      if (first && JSON.parse(String(raw)).t === "spectator-sync") client.close();
+    });
+  });
+  await watcher.goto(link);
+
+  await expect(watcher.locator("#watch-status")).not.toBeEmpty();
+  held.open();
+  await expect(watcher.locator("#watch-status")).toBeEmpty();
+  expect(opened).toBe(2);
+
+  expect(await playEither(a, b)).toBe(true);
+  await expect(watcher.locator("#watch-events li")).not.toHaveCount(0);
+
+  await context.close();
+  await close();
 });
 
 /**

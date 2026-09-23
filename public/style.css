@@ -56,6 +56,12 @@ button.danger {
   font-variant-numeric: tabular-nums;
   padding: 6px 0;
 }
+.connection {
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border: 1px solid #b7791f;
+  border-radius: 8px;
+}
 .moves {
   display: flex;
   flex-wrap: wrap;

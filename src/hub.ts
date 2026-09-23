@@ -24,6 +24,7 @@ import {
 } from "./match.js";
 import {
   SEAT_NOT_FOUND,
+  SEAT_REPLACED,
   type ClientMessage,
   type DeltaMessage,
   type ServerMessage,
@@ -98,7 +99,14 @@ export class MatchHub {
   private seatSocket(matchId: string, seat: Player, socket: SeatSocket): void {
     const perMatch = this.sockets.get(matchId) ?? new Map<Player, SeatSocket>();
     const previous = perMatch.get(seat);
-    if (previous !== undefined && previous !== socket) previous.close();
+    if (previous !== undefined && previous !== socket) {
+      send(previous, {
+        t: "error",
+        message: "同じ座席に別の接続が繋がったので、この接続は閉じる",
+        code: SEAT_REPLACED,
+      });
+      previous.close();
+    }
     perMatch.set(seat, socket);
     this.sockets.set(matchId, perMatch);
   }

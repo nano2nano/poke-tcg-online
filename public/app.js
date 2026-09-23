@@ -19,6 +19,11 @@ let stateVersion = 0;
 let lastView = null;
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
+/**
+ * 着いている座席への接続。切れたら同じ座席トークンで繋ぎ直す（3.3 節）。
+ * 切断中も時計は流れる（3.4 節）ので、読み込み直すのを待っていると、そのあいだに負ける。
+ */
+let seatLink = null;
 
 /**
  * 指している座席を置く鍵。
@@ -88,10 +93,23 @@ function loadCardsThen(redraw) {
 /**
  * 開いている間、20 秒ごとに `ping` を送る。サーバは 150 秒何も届かない接続を切る（仕様 3.5 節）。
  * Cloudflare Workers にはサーバから ping を送る手段が無いので、生きていることは画面の側から伝える。
+ *
+ * 90 秒何も届かなければ、`close` を待たずに `onSilent` を呼ぶ（同じ節）。線が途中で切れると
+ * `close` はいつまでも来ず、繋ぎ直しが始まらない。
  */
-function keepAlive(ws) {
+function keepAlive(ws, onSilent) {
+  let heard = Date.now();
+  ws.addEventListener("message", () => {
+    heard = Date.now();
+  });
   const timer = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "ping" }));
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - heard > 90_000) {
+      clearInterval(timer);
+      onSilent();
+      return;
+    }
+    ws.send(JSON.stringify({ t: "ping" }));
   }, 20_000);
   ws.addEventListener("close", () => clearInterval(timer));
 }
@@ -389,52 +407,149 @@ async function waitForOpponent(ticket, seedShare) {
 }
 
 function openMatch(seated) {
+  if (seatLink !== null) {
+    seatLink.retry.stop();
+    socket?.close();
+  }
   seat = seated.seat;
   seatedNow = seated;
   rememberSeat(seated);
   setStatus("");
+  showConnection(null);
   $("join").hidden = true;
   $("table").hidden = false;
   // 両者がシェアを開くまで局面は届かない。
   $("clock").textContent = "相手が席に着くのを待っています";
   $("shuffle-check").hidden = true;
 
-  const query = [`seatToken=${encodeURIComponent(seated.seatToken)}`];
-  if (typeof seated.seedShare === "string") query.push(`seedShare=${seated.seedShare}`);
-  socket = new WebSocket(socketUrl(query.join("&")));
-  keepAlive(socket);
-  /** 一度でも `sync` か `pending` が届いたかどうか。閉じたときに出す文を分けるのに使う。 */
-  let synced = false;
-  /**
-   * 座席を捨てるのは、サーバが「この座席を知らない」と言ったときだけにする（仕様 3.3 節）。
-   * 何も届かずに閉じた接続は、回線が切れただけのこともある。
-   */
-  let unknownSeat = false;
-  socket.addEventListener("message", (event) => {
+  const link = {
+    seated,
+    /** 一度でも `sync` か `pending` が届いたか。届いていれば、サーバはこの座席を知っている。 */
+    known: false,
+    ended: false,
+    retry: null,
+  };
+  link.retry = reconnector(() => connectSeat(link));
+  seatLink = link;
+  connectSeat(link);
+}
+
+function connectSeat(link) {
+  const query = [`seatToken=${encodeURIComponent(link.seated.seatToken)}`];
+  // 繋ぎ直しでも付ける。シェアを開く前に切れていれば、ここで開くことになる。
+  if (typeof link.seated.seedShare === "string") query.push(`seedShare=${link.seated.seedShare}`);
+  const ws = new WebSocket(socketUrl(query.join("&")));
+  socket = ws;
+  let code = null;
+  let lost = false;
+  keepAlive(ws, () => {
+    ws.close();
+    onLost();
+  });
+  ws.addEventListener("message", (event) => {
+    if (lost || seatLink !== link) return;
     const message = JSON.parse(event.data);
-    if (message.t === "sync" || message.t === "pending") synced = true;
-    if (message.t === "error" && message.code === "seat-not-found") unknownSeat = true;
+    if (message.t === "sync" || message.t === "pending") {
+      link.known = true;
+      link.retry.reset();
+      showConnection(null);
+    }
+    if (message.t === "ended") link.ended = true;
+    if (message.t === "error" && typeof message.code === "string") code = message.code;
     receive(message);
   });
-  socket.addEventListener("close", () => {
-    if (storedSeat() === null) return;
-    if (unknownSeat) {
+  ws.addEventListener("close", onLost);
+
+  function onLost() {
+    if (lost || seatLink !== link) return;
+    lost = true;
+    if (link.ended) {
+      link.retry.stop();
+      return;
+    }
+    disableMoves();
+    /**
+     * 座席を捨てるのは、サーバが「この座席を知らない」と言ったときだけにする（仕様 3.3 節）。
+     * 何も届かずに閉じた接続は、回線が切れただけのこともある。
+     */
+    if (code === "seat-not-found") {
       // 別のタブが新しい対戦の座席を置いていれば、それは消さない。
-      if (storedSeat()?.seatToken === seated.seatToken) forgetSeat();
+      if (storedSeat()?.seatToken === link.seated.seatToken) forgetSeat();
       backToJoin("指していた対戦は、もう終わっています。");
       return;
     }
-    if (synced) {
-      addEvent("接続が切れました。読み込み直すと戻れます");
+    // 繋ぎ直すと、いま指している側の接続を追い出す。
+    if (code === "seat-replaced") {
+      link.retry.stop();
+      showConnection(
+        "replaced",
+        "この対戦を別のタブで開いたので、ここでは止めました。読み込み直すと、こちらで続けられます。",
+      );
       return;
     }
-    // 盤面の画面に留めると、繋がらない状態が続いたときに対戦を始める画面へ出られない。
-    backToJoin("サーバへ繋がりませんでした。読み込み直すと、指していた対戦へ繋ぎ直します。");
-  });
+    if (!link.known) {
+      // 盤面の画面に留めると、繋がらない状態が続いたときに対戦を始める画面へ出られない。
+      backToJoin("サーバへ繋がりませんでした。読み込み直すと、指していた対戦へ繋ぎ直します。");
+      return;
+    }
+    const attempt = link.retry.schedule();
+    showConnection("reconnecting", `接続が切れました。繋ぎ直しています（${attempt} 回目）`);
+  }
+}
+
+/**
+ * 切れた接続を張り直す。間隔の決め方は仕様 3.3 節。
+ * 回線が戻ったとブラウザが知らせたら、待たずに繋ぐ。
+ */
+function reconnector(connect) {
+  let retries = 0;
+  let timer = null;
+  const now = () => {
+    if (timer === null) return;
+    clearTimeout(timer);
+    timer = null;
+    connect();
+  };
+  window.addEventListener("online", now);
+  return {
+    schedule() {
+      const delay = Math.min(30_000, 1_000 * 2 ** retries) * (0.5 + Math.random() / 2);
+      retries += 1;
+      timer = setTimeout(() => {
+        timer = null;
+        connect();
+      }, delay);
+      return retries;
+    },
+    reset() {
+      retries = 0;
+    },
+    stop() {
+      clearTimeout(timer);
+      timer = null;
+      window.removeEventListener("online", now);
+    },
+  };
+}
+
+function showConnection(state, text = "") {
+  const shown = $("connection");
+  shown.hidden = state === null;
+  shown.dataset.state = state ?? "";
+  shown.textContent = text;
+  // 切れているあいだの投了は届かない。押せたように見せない。
+  $("concede-button").disabled = state !== null;
+}
+
+/** 切れているあいだの手は届かない。押せたように見せない。 */
+function disableMoves() {
+  for (const button of $("moves").querySelectorAll("button")) button.disabled = true;
 }
 
 /** マッチングの画面へ戻す。座席を失ったときと、座席へ繋がらなかったときに通る。 */
 function backToJoin(text) {
+  seatLink?.retry.stop();
+  seatLink = null;
   socket = null;
   seat = null;
   $("table").hidden = true;
@@ -688,7 +803,10 @@ let watchSeats = null;
 /** 直近の観戦の盤面。カードの名前の表が遅れて届いたときに描き直す。 */
 let lastWatchView = null;
 
-/** 観戦者が送るのは生きていることの `ping` だけである。 */
+/**
+ * 観戦者が送るのは生きていることの `ping` だけである。
+ * 切れたら座席と同じく繋ぎ直す。断られたら、観戦は断っても誰も負けないので、そこでやめる。
+ */
 function openWatch(token) {
   $("join").hidden = true;
   $("history").hidden = true;
@@ -697,45 +815,69 @@ function openWatch(token) {
     if (lastWatchView !== null) renderWatch(lastWatchView);
   });
 
-  const watching = new WebSocket(socketUrl(`spectatorToken=${encodeURIComponent(token)}`));
-  keepAlive(watching);
   let synced = false;
   let ended = false;
-  /** 閉じる直前にサーバが言った理由。入れなかったときに、そのまま見せる。 */
-  let refusal = null;
-  watching.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    switch (message.t) {
-      case "spectator-sync":
-        synced = true;
-        watchSeats = message.seats;
-        renderWatch(message.view);
-        renderWatchClock(message.clock);
+  const retry = reconnector(connect);
+  connect();
+
+  function connect() {
+    const watching = new WebSocket(socketUrl(`spectatorToken=${encodeURIComponent(token)}`));
+    /** 閉じる直前にサーバが言った理由。入れなかったときに、そのまま見せる。 */
+    let refusal = null;
+    let lost = false;
+    keepAlive(watching, () => {
+      watching.close();
+      onLost();
+    });
+    watching.addEventListener("message", (event) => {
+      if (lost) return;
+      const message = JSON.parse(event.data);
+      switch (message.t) {
+        case "spectator-sync":
+          synced = true;
+          retry.reset();
+          $("watch-status").textContent = "";
+          watchSeats = message.seats;
+          renderWatch(message.view);
+          renderWatchClock(message.clock);
+          return;
+        case "spectator-delta":
+          for (const played of message.events) addEvent(played.kind, "watch-events");
+          renderWatch(message.view);
+          renderWatchClock(message.clock);
+          return;
+        case "spectator-ended":
+          ended = true;
+          renderWatch(message.view);
+          $("watch-clock").textContent = describeWatchEnd(message.matchResult);
+          return;
+        case "error":
+          refusal = message.message;
+          if (synced) addEvent(message.message, "watch-events");
+          return;
+        default:
+          return;
+      }
+    });
+    watching.addEventListener("close", onLost);
+
+    function onLost() {
+      if (lost) return;
+      lost = true;
+      if (ended) {
+        retry.stop();
         return;
-      case "spectator-delta":
-        for (const played of message.events) addEvent(played.kind, "watch-events");
-        renderWatch(message.view);
-        renderWatchClock(message.clock);
+      }
+      if (!synced || refusal !== null) {
+        retry.stop();
+        $("watch-status").textContent =
+          `観戦できませんでした（${refusal ?? "対戦が見つからない"}）`;
         return;
-      case "spectator-ended":
-        ended = true;
-        renderWatch(message.view);
-        $("watch-clock").textContent = describeWatchEnd(message.matchResult);
-        return;
-      case "error":
-        refusal = message.message;
-        if (synced) addEvent(message.message, "watch-events");
-        return;
-      default:
-        return;
+      }
+      const attempt = retry.schedule();
+      $("watch-status").textContent = `接続が切れました。繋ぎ直しています（${attempt} 回目）`;
     }
-  });
-  watching.addEventListener("close", () => {
-    if (ended) return;
-    $("watch-status").textContent = synced
-      ? "接続が切れました。読み込み直すと戻れます"
-      : `観戦できませんでした（${refusal ?? "対戦が見つからない"}）`;
-  });
+  }
 }
 
 function renderWatch(view) {
@@ -768,7 +910,7 @@ function describeWatchEnd(result) {
 }
 
 function send(message) {
-  if (socket !== null) socket.send(JSON.stringify(message));
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
 function setStatus(text) {
