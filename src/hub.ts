@@ -4,8 +4,9 @@
  * **時刻を読むのはこの層だけである。** 下の層（`match.ts`、`clock.ts`）は現在時刻を
  * 引数で受け取るので、時計の進みをテストで書ける。
  *
- * 座席へ出る値は `syncFor` / `deltaFor` が組み立てるものに限る。`match.ts` の
- * `viewFor` / `eventsFor` / `legalMovesFor` を通さない経路をここに作らない（1 節の S-2）。
+ * 座席へ出る値は `syncFor` / `deltaFor` が、観戦者へ出る値は `spectatorSyncFor` /
+ * `spectatorDeltaFor` が組み立てるものに限る。`match.ts` の `viewFor` / `spectatorViewFor` /
+ * `eventsFor` / `legalMovesFor` を通さない経路をここに作らない（1 節の S-2）。
  */
 
 import type { DomainEvent, Move, Player } from "./engine.js";
@@ -15,12 +16,20 @@ import {
   engineOutcome,
   eventsFor,
   legalMovesFor,
+  spectatorViewFor,
   submitMove,
   toMove,
   viewFor,
   type Match,
 } from "./match.js";
-import type { ClientMessage, DeltaMessage, ServerMessage, SyncMessage } from "./protocol.js";
+import type {
+  ClientMessage,
+  DeltaMessage,
+  ServerMessage,
+  SpectatorDeltaMessage,
+  SpectatorSyncMessage,
+  SyncMessage,
+} from "./protocol.js";
 import type { MatchRegistry } from "./registry.js";
 import type { MatchRecord } from "./log.js";
 
@@ -29,6 +38,14 @@ export interface SeatSocket {
   send(data: string): void;
   close(): void;
 }
+
+/**
+ * 観戦者の上限（3.6 節）。観戦者 1 人ぶん、1 手ごとにフルの `view` を 1 通送るので、
+ * 観戦トークンを知る 1 人が接続を積むだけで送信がいくらでも膨らむ。
+ * 全体にも置くのは、自分で対戦を開いて積むことを対戦の数だけ繰り返せるからである。
+ */
+export const MAX_SPECTATORS_PER_MATCH = 32;
+export const MAX_SPECTATORS = 1_024;
 
 export interface HubOptions {
   registry: MatchRegistry;
@@ -40,6 +57,10 @@ export interface HubOptions {
 export class MatchHub {
   /** 対戦 ID → 座席 → 接続。1 座席に 1 本だけ持つ。 */
   private readonly sockets = new Map<string, Map<Player, SeatSocket>>();
+  /** 対戦 ID → 観戦者の接続。 */
+  private readonly spectators = new Map<string, Set<SeatSocket>>();
+  /** 観戦者の接続 → 対戦 ID。観戦者の数はこの大きさで数え、別の数え方を持たない。 */
+  private readonly spectatorOf = new Map<SeatSocket, string>();
   private readonly now: () => number;
 
   constructor(private readonly options: HubOptions) {
@@ -68,12 +89,62 @@ export class MatchHub {
     return true;
   }
 
+  /** 溢れたら断る。座席と違い、観戦は断っても誰も負けない。 */
+  attachSpectator(socket: SeatSocket, spectatorToken: string): boolean {
+    const match = this.options.registry.bySpectatorToken(spectatorToken);
+    if (match === undefined) {
+      send(socket, {
+        t: "error",
+        message: "対戦が見つからない（終わっているか、観戦トークンが違う）",
+      });
+      return false;
+    }
+    const watching = this.spectators.get(match.matchId) ?? new Set<SeatSocket>();
+    if (watching.size >= MAX_SPECTATORS_PER_MATCH || this.spectatorOf.size >= MAX_SPECTATORS) {
+      send(socket, { t: "error", message: "観戦している人が多すぎる" });
+      return false;
+    }
+    watching.add(socket);
+    this.spectators.set(match.matchId, watching);
+    this.spectatorOf.set(socket, match.matchId);
+    send(socket, this.spectatorSyncFor(match));
+    return true;
+  }
+
   detach(socket: SeatSocket): void {
+    const watched = this.spectatorOf.get(socket);
+    if (watched !== undefined) {
+      this.spectatorOf.delete(socket);
+      const watching = this.spectators.get(watched);
+      watching?.delete(socket);
+      if (watching?.size === 0) this.spectators.delete(watched);
+      return;
+    }
     for (const [matchId, perMatch] of this.sockets) {
       for (const [seat, held] of perMatch) {
         if (held === socket) perMatch.delete(seat);
       }
       if (perMatch.size === 0) this.sockets.delete(matchId);
+    }
+  }
+
+  handleSpectator(socket: SeatSocket, spectatorToken: string, message: ClientMessage): void {
+    const match = this.options.registry.bySpectatorToken(spectatorToken);
+    if (match === undefined) {
+      send(socket, { t: "error", message: "対戦が見つからない" });
+      return;
+    }
+    switch (message.t) {
+      case "hello":
+        send(socket, this.spectatorSyncFor(match));
+        return;
+      case "ping":
+        send(socket, { t: "pong" });
+        return;
+      case "move":
+      case "concede":
+        send(socket, { t: "error", message: "観戦している接続からは指せない" });
+        return;
     }
   }
 
@@ -123,7 +194,7 @@ export class MatchHub {
     }
   }
 
-  /** 決着を両座席へ伝え、ログへ落としてレジストリから外す。 */
+  /** 決着を両座席と観戦者へ伝え、ログへ落としてレジストリから外す。 */
   endMatch(match: Match): void {
     const perMatch = this.sockets.get(match.matchId);
     for (const seat of [0, 1] as Player[]) {
@@ -140,6 +211,27 @@ export class MatchHub {
       });
     }
     this.sockets.delete(match.matchId);
+    /**
+     * 観戦者の接続は、決着を伝えたら閉じる。数から外すだけで開いたままにすると、
+     * 対戦を開いて観戦者を積んでは終わらせることを繰り返すだけで、上限に数えられない
+     * 接続がいくらでも溜まる。座席と違い、終わった対戦へ観戦者が送るものは無い。
+     */
+    const watching = this.spectators.get(match.matchId) ?? new Set<SeatSocket>();
+    const ended =
+      match.result === null
+        ? null
+        : serialize({
+            t: "spectator-ended",
+            matchResult: match.result,
+            outcome: engineOutcome(match),
+            view: spectatorViewFor(match),
+          });
+    for (const socket of watching) {
+      this.spectatorOf.delete(socket);
+      if (ended !== null) socket.send(ended);
+      socket.close();
+    }
+    this.spectators.delete(match.matchId);
     // `retire` は同じ対戦を二度落とさないので、`onFinish` も 1 局につき 1 度である。
     const record = this.options.registry.retire(match);
     if (record === null) return;
@@ -169,11 +261,15 @@ export class MatchHub {
 
   private broadcastDelta(match: Match, events: DomainEvent[]): void {
     const perMatch = this.sockets.get(match.matchId);
-    if (perMatch === undefined) return;
     for (const seat of [0, 1] as Player[]) {
-      const socket = perMatch.get(seat);
+      const socket = perMatch?.get(seat);
       if (socket !== undefined) send(socket, this.deltaFor(match, seat, events));
     }
+    const watching = this.spectators.get(match.matchId);
+    if (watching === undefined) return;
+    // 観戦者はみな同じ値を受けるので、組み立ても JSON にするのも 1 度で足りる。
+    const delta = serialize(this.spectatorDeltaFor(match, events));
+    for (const socket of watching) socket.send(delta);
   }
 
   private syncFor(match: Match, seat: Player): SyncMessage {
@@ -186,6 +282,7 @@ export class MatchHub {
       legalMoves: legalMovesFor(match, seat),
       clock: clockView(match, this.now()),
       seedCommit: match.seedCommitment.commit,
+      spectatorToken: match.spectatorToken,
     };
   }
 
@@ -199,6 +296,30 @@ export class MatchHub {
       clock: clockView(match, this.now()),
     };
   }
+
+  private spectatorSyncFor(match: Match): SpectatorSyncMessage {
+    const [first, second] = match.seats;
+    return {
+      t: "spectator-sync",
+      stateVersion: match.version,
+      view: spectatorViewFor(match),
+      clock: clockView(match, this.now()),
+      seats: [
+        { displayName: first.displayName, rating: first.rating },
+        { displayName: second.displayName, rating: second.rating },
+      ],
+    };
+  }
+
+  private spectatorDeltaFor(match: Match, events: DomainEvent[]): SpectatorDeltaMessage {
+    return {
+      t: "spectator-delta",
+      stateVersion: match.version,
+      events: eventsFor(events, "spectator"),
+      view: spectatorViewFor(match),
+      clock: clockView(match, this.now()),
+    };
+  }
 }
 
 /** 手番側かどうか。テストと配信層が同じ判定を使う。 */
@@ -207,5 +328,9 @@ export function isToMove(match: Match, seat: Player): boolean {
 }
 
 function send(socket: SeatSocket, message: ServerMessage): void {
-  socket.send(JSON.stringify(message));
+  socket.send(serialize(message));
+}
+
+function serialize(message: ServerMessage): string {
+  return JSON.stringify(message);
 }

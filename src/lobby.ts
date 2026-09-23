@@ -329,6 +329,7 @@ export class Lobby {
       decks: [first.deck, second.deck],
       seats,
       seatTokens,
+      spectatorToken: newToken(),
       nowMs,
       startedAt: new Date(nowMs).toISOString(),
     });

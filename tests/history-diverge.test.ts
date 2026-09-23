@@ -14,13 +14,14 @@ import { concede } from "../src/match.js";
 import { toRecord } from "../src/log.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
 
-const control = vi.hoisted(() => ({ throwAt: null as number | null, seen: 0 }));
+const control = vi.hoisted(() => ({ throwAt: null as number | null, seen: 0, calls: 0 }));
 
 vi.mock("../src/engine.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/engine.js")>();
   return {
     ...actual,
     applyMove: (...args: Parameters<typeof actual.applyMove>) => {
+      control.calls += 1;
       if (control.throwAt !== null && control.seen++ === control.throwAt) {
         throw new Error("わざと落とす");
       }
@@ -29,7 +30,7 @@ vi.mock("../src/engine.js", async (importOriginal) => {
   };
 });
 
-const { frameAt } = await import("../src/history.js");
+const { frameAt, ReplayCache } = await import("../src/history.js");
 
 describe("指せなかった手で止まるとき", () => {
   /**
@@ -46,14 +47,18 @@ describe("指せなかった手で止まるとき", () => {
     expect(record.moves.length).toBeGreaterThan(4);
 
     const stopAt = 3;
-    const sound = frameAt(record, stopAt - 1);
+    /**
+     * 呼び出しごとに空のキャッシュを渡す。キャッシュがあると手前の局面から指し始めるので、
+     * 差し替えた `applyMove` が数える位置がずれる。
+     */
+    const sound = frameAt(record, stopAt - 1, undefined, new ReplayCache());
 
     control.throwAt = stopAt;
     control.seen = 0;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let stopped;
     try {
-      stopped = frameAt(record, record.moves.length);
+      stopped = frameAt(record, record.moves.length, undefined, new ReplayCache());
     } finally {
       warn.mockRestore();
       control.throwAt = null;
@@ -67,3 +72,36 @@ describe("指せなかった手で止まるとき", () => {
     expect(stopped.beforeViews).not.toEqual(stopped.views);
   });
 });
+
+/**
+ * キャッシュを置く理由そのもの（6.6 節）。時間では測らない（手元と CI で速さが違う）。
+ * 指した回数で数える。
+ */
+describe("リプレイのキャッシュ", () => {
+  it("1 手ずつ進むときも戻るときも、初手から指し直さない", () => {
+    ensureCards();
+    // ランダムな手では早く決着する対戦もあるので、40 手を越えるまで手の選び方を変えて指し直す。
+    let record = toRecord(finished(playToEnd(newMatch("cache-count"), 59).match));
+    for (let rngSeed = 60; record.moves.length <= 40; rngSeed++) {
+      record = toRecord(finished(playToEnd(newMatch("cache-count"), rngSeed).match));
+    }
+    const cache = new ReplayCache();
+    frameAt(record, 40, undefined, cache);
+
+    const appliedFor = (ply: number): number => {
+      control.calls = 0;
+      frameAt(record, ply, undefined, cache);
+      return control.calls;
+    };
+    // 最後に描いた 40 手目から 1 手。
+    expect(appliedFor(41)).toBe(1);
+    // 戻るときは、手前のチェックポイント（32 手目）から。
+    expect(appliedFor(33)).toBe(1);
+    expect(appliedFor(40)).toBe(7);
+  });
+});
+
+function finished<T extends Parameters<typeof concede>[0]>(match: T): T {
+  if (match.result === null) concede(match, 0, 1);
+  return match;
+}

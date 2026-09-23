@@ -18,6 +18,7 @@ export {
   opponent,
   playerView,
   projectEvents,
+  spectatorView,
   IllegalMoveError,
 } from "../engine/src/index.js";
 
@@ -43,6 +44,8 @@ export type {
   Player,
   PlayerEvent,
   PlayerView,
+  SpectatorView,
+  Viewer,
 } from "../engine/src/index.js";
 
 export { classifyDefId, listUnimplementedDefIds } from "../engine/src/coverage.js";

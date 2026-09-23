@@ -4,11 +4,13 @@
  * **読めるのは自分が指した対戦だけである。** 終わった対戦は当人どうしには全部見えてよいが、
  * 他人のデッキと引きが誰にでも見えると、それは対戦環境として成り立たない。
  *
- * 局面を持たないので、読み返すたびに `createGame` からやり直す。それで足りる速さの
- * 根拠は 6.6 節にある。**どの対戦がどこにあるかは索引に引く**（`src/match-index.ts`）。
- * 正本は JSONL のままで、索引はそこから作り直せる。
+ * 局面を保存しないので、盤面は `createGame` から指し直して作る。1 手ずつ辿るたびに初手から
+ * やり直さないよう、局面のキャッシュをメモリにだけ置く（`ReplayCache`）。
+ * **どの対戦がどこにあるかは索引に引く**（`src/match-index.ts`）。
+ * 唯一の情報源は JSONL のままで、索引もキャッシュもそこから作り直せる。
  */
 
+import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync } from "node:fs";
 import {
   applyMove,
@@ -18,7 +20,7 @@ import {
   playerView,
   projectEvents,
 } from "./engine.js";
-import type { GameState, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
+import type { DomainEvent, GameState, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
 import {
   engineFingerprint,
   OLDEST_REPLAYABLE_SCHEMA_VERSION,
@@ -198,6 +200,101 @@ export function isMatchId(value: string): boolean {
   return MATCH_ID.test(value);
 }
 
+/** 前へ戻るときは、手前のチェックポイントから指し直す。間隔はその手数の上限になる。 */
+const CHECKPOINT_EVERY = 16;
+
+const CACHED_REPLAYS = 32;
+
+interface Checkpoint {
+  applied: number;
+  state: GameState;
+  /** `applied` 手目で起きたこと。0 手目なら対戦の開始で起きたこと。 */
+  events: DomainEvent[];
+  /** `applied` 手目を指す直前の局面。0 手目なら null。 */
+  before: GameState | null;
+  playedMove: Move | null;
+}
+
+interface CachedReplay {
+  /** 手数がキー。0 手目は必ずある。 */
+  checkpoints: Map<number, Checkpoint>;
+  /** 最後に描いた局面。1 手ずつ進むときは、ここから 1 手だけ指せば済む。 */
+  latest: Checkpoint;
+  /** 記録された手が指せなかった地点。見つかるまでは null。 */
+  divergedAt: number | null;
+}
+
+/**
+ * リプレイの局面のキャッシュ（6.6 節）。直近に読まれた対戦から順に残す。
+ *
+ * 無いと、1 手進めるたびに初手から指し直すことになる。同期で走るので、そのあいだ
+ * 進行中の対戦の手も持ち時間のスイープも止まる。
+ *
+ * キーは対戦 ID ではなく、盤面を決める中身（seed、デッキ、手の列）のハッシュにする。
+ * 対戦 ID で引くと、同じ ID で中身の違う記録に、前に読んだ別の記録の盤面を返しうる。
+ */
+export class ReplayCache {
+  private readonly entries = new Map<string, CachedReplay>();
+
+  constructor(private readonly capacity = CACHED_REPLAYS) {}
+
+  entryFor(record: MatchRecord): CachedReplay {
+    const key = contentKey(record);
+    const found = this.entries.get(key);
+    if (found !== undefined) {
+      // `Map` は入れた順に並ぶ。読んだものを後ろへ回すと、先頭が最も長く読まれていないものになる。
+      this.entries.delete(key);
+      this.entries.set(key, found);
+      return found;
+    }
+    const created = createGame({ seed: record.seed, decks: record.decks });
+    const start: Checkpoint = {
+      applied: 0,
+      state: created.state,
+      events: created.events,
+      before: null,
+      playedMove: null,
+    };
+    const entry: CachedReplay = {
+      checkpoints: new Map([[0, start]]),
+      latest: start,
+      divergedAt: null,
+    };
+    this.entries.set(key, entry);
+    for (const oldest of this.entries.keys()) {
+      if (this.entries.size <= this.capacity) break;
+      this.entries.delete(oldest);
+    }
+    return entry;
+  }
+}
+
+function contentKey(record: MatchRecord): string {
+  const moves = record.moves.map((logged) => logged.move);
+  return createHash("sha256")
+    .update(JSON.stringify([record.seed, record.decks, moves]))
+    .digest("hex");
+}
+
+const sharedCache = new ReplayCache();
+
+function nearest(entry: CachedReplay, target: number): Checkpoint {
+  let best = entry.checkpoints.get(0)!;
+  for (
+    let at = Math.floor(target / CHECKPOINT_EVERY) * CHECKPOINT_EVERY;
+    at >= 0;
+    at -= CHECKPOINT_EVERY
+  ) {
+    const found = entry.checkpoints.get(at);
+    if (found !== undefined) {
+      best = found;
+      break;
+    }
+  }
+  const latest = entry.latest;
+  return latest.applied <= target && latest.applied > best.applied ? latest : best;
+}
+
 /**
  * `ply` 手まで進めた局面を返す。
  *
@@ -211,6 +308,7 @@ export function frameAt(
   record: MatchRecord,
   ply: number,
   fingerprint: EngineFingerprint = engineFingerprint(),
+  cache: ReplayCache = sharedCache,
 ): ReplayFrame {
   const readable = replayability(record, fingerprint);
   if (readable.kind !== "ok") {
@@ -220,15 +318,12 @@ export function frameAt(
   // 応答には 1.5 と返る。数でないものだけ 0 にし、大きすぎるものは下の丸めに任せる。
   const asked = Number.isNaN(ply) ? 0 : Math.floor(ply);
   const target = Math.max(0, Math.min(asked, record.moves.length));
-  let result = createGame({ seed: record.seed, decks: record.decks });
-  let events = result.events;
-  let playedMove: Move | null = null;
-  let beforeState: GameState | null = null;
+  const entry = cache.entryFor(record);
+  // 指せない地点が分かっていれば、その先は指さずに、見つけたときと同じ答えを返す。
+  const reachable = entry.divergedAt === null ? target : Math.min(target, entry.divergedAt);
+  let at = nearest(entry, reachable);
 
-  let applied = 0;
-  let divergedAt: number | null = null;
-
-  for (let index = 0; index < target; index++) {
+  for (let index = at.applied; index < reachable; index++) {
     const logged = record.moves[index];
     if (logged === undefined) break;
     /**
@@ -237,41 +332,46 @@ export function frameAt(
      * エンドポイントはその例外メッセージをそのまま 400 で外へ出す。読む人に意味が無く、その対戦はここから先へ進めなくなる。
      * §6.3 は版の違いを警告にとどめると決めているので、止めるのはこの 1 局のこの地点だけにする。
      */
-    if (!legalMoves(result.state).some((candidate) => movesEqual(candidate, logged.move))) {
-      divergedAt = index;
+    if (!legalMoves(at.state).some((candidate) => movesEqual(candidate, logged.move))) {
+      entry.divergedAt = index;
       break;
     }
-    /**
-     * 指せてから `beforeState` を進める。先に進めると、**止まったときだけ 1 手ずれる。**
-     * `playedMove` は 1 つ前の手のままなので、クライアントはその手で使ったカードを
-     * 1 手あとの手札から探すことになり、名前が引けずにインスタンス ID がそのまま出る。
-     */
-    const before = result.state;
     let next: ReturnType<typeof applyMove>;
     try {
-      next = applyMove(before, logged.move);
+      next = applyMove(at.state, logged.move);
     } catch (error) {
       // 合法手に在ったのに通らないのはエンジン側の話である。外へ例外メッセージは出さず、ここで止める。
       console.warn(`${record.matchId} の ${index} 手目を指せなかった:`, error);
-      divergedAt = index;
+      entry.divergedAt = index;
       break;
     }
-    beforeState = before;
-    result = next;
-    events = result.events;
-    playedMove = logged.move;
-    applied = index + 1;
+    /**
+     * 指せてから「直前の局面」を進める。先に進めると、**止まったときだけ 1 手ずれる。**
+     * `playedMove` は 1 つ前の手のままなので、クライアントはその手で使ったカードを
+     * 1 手あとの手札から探すことになり、名前が引けずにインスタンス ID がそのまま出る。
+     */
+    at = {
+      applied: index + 1,
+      state: next.state,
+      events: next.events,
+      before: at.state,
+      playedMove: logged.move,
+    };
+    if (at.applied % CHECKPOINT_EVERY === 0) entry.checkpoints.set(at.applied, at);
   }
+  entry.latest = at;
+  // 指せない地点は、頼まれた手数がそこを越えたときだけ知らせる。キャッシュの有無で答えを変えないため。
+  const divergedAt =
+    entry.divergedAt !== null && target > entry.divergedAt ? entry.divergedAt : null;
 
   return {
     matchId: record.matchId,
-    ply: applied,
+    ply: at.applied,
     moveCount: record.moves.length,
-    views: [playerView(result.state, 0), playerView(result.state, 1)],
-    playedMove,
-    beforeViews:
-      beforeState === null ? null : [playerView(beforeState, 0), playerView(beforeState, 1)],
-    events: [projectEvents(events, 0), projectEvents(events, 1)],
+    views: [playerView(at.state, 0), playerView(at.state, 1)],
+    playedMove: at.playedMove,
+    beforeViews: at.before === null ? null : [playerView(at.before, 0), playerView(at.before, 1)],
+    events: [projectEvents(at.events, 0), projectEvents(at.events, 1)],
     engineCommitDiffers: record.engine.commit !== fingerprint.commit,
     divergedAt,
   };
