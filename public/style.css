@@ -474,8 +474,11 @@ button.secondary {
   z-index: 10;
   width: var(--w);
   pointer-events: none;
-  /* 縦に収まらない画面では、カードの縦から逆算して幅を詰める。 */
-  --w: min(420px, 90vw, calc((100vh - 96px) * 63 / 88));
+  /*
+   * 縦に収まらない画面では、カードの縦から逆算して幅を詰める。差し引くのは余白と、画像が無いときの説明の行。
+   * `dvh` はスマートフォンのアドレスバーを除いた高さで、`vh` だと下が画面の外に出る。
+   */
+  --w: min(420px, 90vw, calc((100dvh - 96px) * 63 / 88));
   padding: 6px;
   border-radius: 10px;
   background: Canvas;
@@ -485,11 +488,21 @@ button.secondary {
   margin: 4px 0 0;
   font-size: 0.8rem;
 }
-/* 長押しで文字の選択や画像のメニューが始まると、プレビューに重なる。 */
-.card {
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
+/* 長押しで文字の選択や画像のメニューが始まると、プレビューに重なる。マウスでは選べるままにする。 */
+@media (pointer: coarse) {
+  .card {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .card-row .card.thumb {

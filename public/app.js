@@ -1325,6 +1325,8 @@ function cardFace(defId) {
       ? `HP ${card.hp}`
       : (TRAINER_KINDS[card?.trainerKind] ?? KINDS[card?.kind] ?? "");
   face.append(el("span", "card-sub", sub));
+  // 読み上げでは、マウスで出るプレビューの代わりにここを読む。
+  if (card !== undefined) face.append(el("span", "visually-hidden", describeCard(card)));
   const src = imageUrl(defId);
   if (src !== null) {
     const image = document.createElement("img");
@@ -1368,15 +1370,14 @@ function openZoom({ title, defIds }) {
   $("card-zoom-title").textContent = title;
   $("card-zoom-cards").replaceChildren(
     ...defIds.map((defId) =>
-      el(
-        "figure",
-        "",
-        cardFace(defId),
-        el("figcaption", "", el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])),
-      ),
+      el("figure", "", cardFace(defId), el("figcaption", "", ...cardCaption(defId))),
     ),
   );
   if (!$("card-zoom").open) $("card-zoom").showModal();
+}
+
+function cardCaption(defId) {
+  return [el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])];
 }
 
 // 枠の外（背景）を押しても閉じる。中身は内側の要素が覆っているので、dialog そのものに当たるのは背景だけである。
@@ -1407,10 +1408,13 @@ const PREVIEW_MARGIN_PX = 8;
 const PREVIEW_GAP_PX = 12;
 
 let previewTarget = null;
+let previewPointer = "mouse";
 let longPress = null;
+// 長押しで読んだあと指を離すと、ブラウザによってはクリックも届き、拡大が開いてしまう。
+let swallowClick = false;
 let lastMouse = null;
-// 盤面は相手の手でも描き直され、載せていたカードが消える。マウスなら下に来たカードを出し直す。
-// 指で押している最中に消えたなら、指の下のカードは押したものと別なので閉じる。
+// 盤面は相手の手でも描き直され、載せていたカードが消える。マウスなら下に来たカードへ移り、
+// 閉じてから開き直す一瞬のちらつきを出さない。指で押している最中なら、押したカードはもう無いので閉じる。
 const previewWatch = new MutationObserver(() => {
   if (previewTarget === null || previewTarget.isConnected) return;
   const under =
@@ -1430,19 +1434,25 @@ function previewable(target) {
 }
 
 function showPreview(card, pointerType) {
+  if (card === previewTarget) return;
   const defId = card.dataset.defId;
   const preview = $("card-preview");
-  if (previewTarget === null || preview.dataset.defId !== defId) {
-    preview.dataset.defId = defId;
+  const src = imageUrl(defId);
+  // カードの表と画像の有無が同じなら、前に作った中身を使い回す。画像を頼み直させない。
+  const key = `${defId}\n${cards[defId] !== undefined}\n${src}`;
+  if (preview.dataset.key !== key) {
+    preview.dataset.key = key;
+    // 画像があれば効果まで画像で読める。無いときだけ、名前の面に種類とワザを書き添える。
     preview.replaceChildren(
       cardFace(defId),
-      el("p", "", el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])),
+      ...(src === null ? [el("p", "", ...cardCaption(defId))] : []),
     );
   }
   previewTarget = card;
+  previewPointer = pointerType;
   previewWatch.observe(document.body, { childList: true, subtree: true });
   preview.hidden = false;
-  placePreview(preview, card.getBoundingClientRect(), pointerType);
+  placePreview();
 }
 
 function hidePreview() {
@@ -1454,12 +1464,16 @@ function hidePreview() {
 /**
  * カードの横に出し、入らなければ上下、それも無理なら画面の中央に重ねる。
  * 指で押しているときは、指と手のひらが下と横を隠すので上を先に試す。
+ * 画面の幅は `clientWidth` で測る。`innerWidth` はスクロールバーの下まで含む。
  */
-function placePreview(preview, rect, pointerType) {
+function placePreview() {
+  const preview = $("card-preview");
+  const rect = previewTarget.getBoundingClientRect();
+  const { clientWidth, clientHeight } = document.documentElement;
   const width = preview.offsetWidth;
   const height = preview.offsetHeight;
-  const maxX = window.innerWidth - width - PREVIEW_MARGIN_PX;
-  const maxY = window.innerHeight - height - PREVIEW_MARGIN_PX;
+  const maxX = clientWidth - width - PREVIEW_MARGIN_PX;
+  const maxY = clientHeight - height - PREVIEW_MARGIN_PX;
   const clamp = (value, max) => Math.max(PREVIEW_MARGIN_PX, Math.min(value, max));
   const beside = clamp(rect.top + rect.height / 2 - height / 2, maxY);
   const across = clamp(rect.left + rect.width / 2 - width / 2, maxX);
@@ -1467,13 +1481,11 @@ function placePreview(preview, rect, pointerType) {
   const left = { x: rect.left - PREVIEW_GAP_PX - width, y: beside };
   const above = { x: across, y: rect.top - PREVIEW_GAP_PX - height };
   const below = { x: across, y: rect.bottom + PREVIEW_GAP_PX };
-  const order = pointerType === "touch" ? [above, right, left, below] : [right, left, above, below];
+  const order =
+    previewPointer === "touch" ? [above, right, left, below] : [right, left, above, below];
   const spot = order.find(
     ({ x, y }) => x >= PREVIEW_MARGIN_PX && x <= maxX && y >= PREVIEW_MARGIN_PX && y <= maxY,
-  ) ?? {
-    x: clamp((window.innerWidth - width) / 2, maxX),
-    y: clamp((window.innerHeight - height) / 2, maxY),
-  };
+  ) ?? { x: clamp((clientWidth - width) / 2, maxX), y: clamp((clientHeight - height) / 2, maxY) };
   preview.style.left = `${spot.x}px`;
   preview.style.top = `${spot.y}px`;
 }
@@ -1489,16 +1501,15 @@ document.addEventListener("pointerout", (event) => {
   hidePreview();
 });
 document.addEventListener("pointerdown", (event) => {
-  // クリックで拡大が開くか盤面が変わるので、出したままだと邪魔になる。
-  if (event.pointerType !== "touch") {
-    hidePreview();
-    return;
-  }
+  swallowClick = false;
+  if (event.pointerType !== "touch") return;
   if (longPress !== null) endLongPress();
   const card = previewable(event.target);
   if (card === null) return;
   const timer = setTimeout(() => {
-    if (card.isConnected) showPreview(card, "touch");
+    if (!card.isConnected) return;
+    showPreview(card, "touch");
+    swallowClick = true;
   }, LONG_PRESS_MS);
   longPress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer };
 });
@@ -1513,10 +1524,28 @@ for (const type of ["pointerup", "pointercancel"]) {
     if (longPress?.pointerId === event.pointerId) endLongPress();
   });
 }
+document.addEventListener(
+  "click",
+  (event) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+  },
+  { capture: true },
+);
 // 長押しで出る画像の保存や選択のメニューが、プレビューの上に重なる。
 document.addEventListener("contextmenu", (event) => {
   if (longPress !== null) event.preventDefault();
 });
+// マウスを動かさずにホイールで送ると、カードは動くのにプレビューを作り直す合図が来ない。
+document.addEventListener(
+  "scroll",
+  (event) => {
+    if (previewTarget !== null && event.target.contains?.(previewTarget)) placePreview();
+  },
+  { capture: true, passive: true },
+);
 
 function endLongPress() {
   clearTimeout(longPress.timer);
