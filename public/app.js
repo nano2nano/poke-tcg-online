@@ -403,27 +403,36 @@ function openMatch(seated) {
   if (typeof seated.seedShare === "string") query.push(`seedShare=${seated.seedShare}`);
   socket = new WebSocket(socketUrl(query.join("&")));
   keepAlive(socket);
-  /**
-   * 一度でも `sync` か `pending` が届いたかどうか。閉じた理由を分けるのに使う。
-   *
-   * 届く前に閉じたなら、サーバはこの座席を知らない（対戦はもう終わっている）。
-   * 覚えている座席を持ったままだと、開き直すたびに同じ座席へ繋ぎに行って同じ形で閉じ、
-   * マッチングの画面に戻れなくなる。
-   */
+  /** 一度でも `sync` か `pending` が届いたかどうか。閉じたときに出す文を分けるのに使う。 */
   let synced = false;
+  /**
+   * サーバが「この座席を知らない」と言ったかどうか。
+   *
+   * **座席を捨てるのは、この合図を受け取ったときだけである。** 何も届かずに閉じたことからは
+   * 判断しない。回線が一瞬切れたときも、Upgrade を通さない中継を挟んでいるときも、
+   * サーバが接続の受け付けで落ちたときも同じ形で閉じる。そこで捨てると、まだ続いている
+   * 対戦へ二度と戻れず、そのまま時間切れで負ける。逆に知らない座席を持ったままだと、
+   * 開き直すたびに同じ形で閉じてマッチングの画面に戻れなくなるので、合図を受けたら必ず捨てる。
+   */
+  let unknownSeat = false;
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (message.t === "sync" || message.t === "pending") synced = true;
+    if (message.t === "error" && message.code === "seat-not-found") unknownSeat = true;
     receive(message);
   });
   socket.addEventListener("close", () => {
     if (storedSeat() === null) return;
+    if (unknownSeat) {
+      forgetSeat();
+      backToJoin("指していた対戦は、もう終わっています。");
+      return;
+    }
     if (synced) {
       addEvent("接続が切れました。読み込み直すと戻れます");
       return;
     }
-    forgetSeat();
-    backToJoin("指していた対戦は、もう終わっています。");
+    $("clock").textContent = "サーバへ繋がりませんでした。読み込み直すと繋ぎ直します";
   });
 }
 

@@ -6,7 +6,7 @@ import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { Lobby, type JoinOutcome, type JoinRequest } from "../src/lobby.js";
 import { AccountStore } from "../src/accounts.js";
 import { MatchRegistry } from "../src/registry.js";
-import type { ServerMessage } from "../src/protocol.js";
+import { SEAT_NOT_FOUND, type ServerMessage } from "../src/protocol.js";
 import { ensureCards, legalDecks } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
@@ -476,13 +476,14 @@ describe("座席の接続", () => {
     expect(fresh.closed).toBe(false);
   });
 
-  it("知らない座席トークンでは繋がない", async () => {
+  it("知らない座席トークンでは繋がず、座席を捨ててよい合図を付けて断る", async () => {
     ensureCards();
     const arena = newArena();
     const { hub } = arena;
     const socket = recorder();
     expect(hub.attach(socket, "でたらめ")).toBe(false);
-    expect(socket.sent[0]?.t).toBe("error");
+    // 画面が座席を捨てるのはこの合図を受けたときだけなので、無いと終わった座席へ繋ぎ続ける。
+    expect(socket.sent[0]).toMatchObject({ t: "error", code: SEAT_NOT_FOUND });
   });
 
   it("投了すると両座席へ決着が届き、そこで初めて seed が出る", async () => {

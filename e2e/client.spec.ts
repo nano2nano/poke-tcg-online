@@ -347,6 +347,27 @@ test("サーバが知らない座席を覚えていたら、マッチングの�
 });
 
 /**
+ * 繋がらなかっただけでは、覚えている座席を捨てないこと。
+ *
+ * Upgrade を通さない中継を挟むと、繋ぐ段階で断られ、何も受け取らずに閉じる。
+ * これを「サーバが座席を知らない」と読んで捨てると、続いている対戦へ戻れず時間切れで負ける。
+ */
+test("繋がらずに閉じただけなら、座席を覚えたまま盤面の画面に留まる", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
+  );
+  // サーバへ繋がずに閉じる。何も届かないまま閉じる形を作る。
+  await page.routeWebSocket(/\/ws\?/, (ws) => ws.close());
+  await page.reload();
+
+  await expect(page.locator("#clock")).not.toBeEmpty();
+  await expect(page.locator("#table")).toBeVisible();
+  await expect(page.locator("#join")).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem("poke-seat"))).not.toBeNull();
+});
+
+/**
  * 終わった対戦の座席を覚えたままにしないこと。
  *
  * 覚えたままでも、次に開いたときは上の歯止めが働いてマッチングの画面へ戻る。

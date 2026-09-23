@@ -17,6 +17,12 @@ import type {
 import type { MatchResult, SeatInfo } from "./match.js";
 import type { SeedShares } from "./fingerprint.js";
 
+/**
+ * サーバがその座席を知らないことを、画面の文言に頼らずに伝える合図（3.3 節）。
+ * 画面は、これを受け取ったときだけ覚えている座席を捨てる。
+ */
+export const SEAT_NOT_FOUND = "seat-not-found";
+
 /** 手を受理しなかった理由（2.2 節の検査 1〜3 に対応する）。 */
 export type RejectReason = "not-your-turn" | "stale-version" | "illegal-move" | "match-over";
 
@@ -154,7 +160,7 @@ export type ServerMessage =
   | SpectatorDeltaMessage
   | SpectatorEndedMessage
   | { t: "reject"; reason: RejectReason; stateVersion: number }
-  | { t: "error"; message: string }
+  | { t: "error"; message: string; code?: typeof SEAT_NOT_FOUND }
   /**
    * 席は取れているが、シェアがそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
    * `sync` の届かないまま切れた接続を、席を失ったのと見分けられない。
