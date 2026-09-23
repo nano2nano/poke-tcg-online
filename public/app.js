@@ -1399,7 +1399,7 @@ document.addEventListener("keydown", (event) => {
 
 /**
  * マウスを載せている間（タッチ端末では長押しの間）、カードを大きく出す。印刷の小さな文字は
- * 盤面の大きさでは読めない。押して開く拡大と違い、指す操作の邪魔をしないよう、読むだけの窓にする。
+ * 盤面の大きさでは読めない。押して開く拡大と違ってマウスの操作を受けないので、手を指す邪魔をしない。
  */
 const LONG_PRESS_MS = 400;
 /** 長押しの途中で指がこれより動いたら、スクロールのつもりとみなしてやめる。 */
@@ -1410,7 +1410,7 @@ const PREVIEW_GAP_PX = 12;
 let previewTarget = null;
 let previewPointer = "mouse";
 let longPress = null;
-// 長押しで読んだあと指を離すと、ブラウザによってはクリックも届き、拡大が開いてしまう。
+// 長押しで読んで指を離すと、そのクリックも届いて拡大が開いてしまう。
 let swallowClick = false;
 let lastMouse = null;
 // 盤面は相手の手でも描き直され、載せていたカードが消える。マウスなら下に来たカードへ移り、
@@ -1438,7 +1438,8 @@ function showPreview(card, pointerType) {
   const defId = card.dataset.defId;
   const preview = $("card-preview");
   const src = imageUrl(defId);
-  // カードの表と画像の有無が同じなら、前に作った中身を使い回す。画像を頼み直させない。
+  // 同じカードなら前に作った中身をそのまま使う。カードの一覧が届く前に作った中身や、
+  // 読めなくなった画像を残さないよう、その 2 つも鍵に入れる。
   const key = `${defId}\n${cards[defId] !== undefined}\n${src}`;
   if (preview.dataset.key !== key) {
     preview.dataset.key = key;
@@ -1538,7 +1539,7 @@ document.addEventListener(
 document.addEventListener("contextmenu", (event) => {
   if (longPress !== null) event.preventDefault();
 });
-// マウスを動かさずにホイールで送ると、カードは動くのにプレビューを作り直す合図が来ない。
+// 一覧やページが送られるとカードは動くが、マウスの下が同じカードのままなら置き直す合図が来ない。
 document.addEventListener(
   "scroll",
   (event) => {

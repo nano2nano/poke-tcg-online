@@ -1579,12 +1579,11 @@ test("公式のカード ID で定義が決まらないカードは、枚数に�
   await expect(page.locator("#deck-status")).toHaveClass(/ng/);
 });
 
-/** 要素の枠が重なっているか。 */
+type Box = { x: number; y: number; width: number; height: number };
+
 function overlaps(a: Box, b: Box): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
-
-type Box = { x: number; y: number; width: number; height: number };
 
 test("カードにマウスを載せると横に大きく出て、外すと消える", async ({ browser, pageErrors }) => {
   const room = `のせる-${Date.now()}`;
@@ -1658,7 +1657,7 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   await close();
 });
 
-test("ホイールで一覧を送ると、プレビューもカードに付いていく", async ({ page }) => {
+test("一覧を送ると、プレビューもカードに付いていく", async ({ page }) => {
   // プレビューが画面の上下の端で止まらない高さにして、カードとの位置の関係だけを見る。
   await page.setViewportSize({ width: 1280, height: 1600 });
   await withCardImages(page, (route) =>
@@ -1724,7 +1723,7 @@ test.describe("タッチ端末", () => {
       );
       return prevented;
     });
-    // 画面より後に付けた capture の受け手は画面が止めても呼ばれ、bubble の受け手は呼ばれない。
+    // 画面より後に付けた capture のリスナーは画面が止めても呼ばれ、bubble のリスナーは呼ばれない。
     const clicks = await thumb.evaluateHandle((node) => {
       const counts = { sent: 0, reached: 0 };
       node.ownerDocument.addEventListener("click", () => (counts.sent += 1), { capture: true });
@@ -1743,10 +1742,10 @@ test.describe("タッチ端末", () => {
     await thumb.dispatchEvent("contextmenu");
     await pressed.lift();
     await expect(preview).toBeHidden();
-    // 離したあとのクリックは読むための長押しの続きで、拡大を開かせない。Chromium がクリックを送るかは
-    // 押していた長さで変わるので、送ってこなかったときは届いた場合を作る。次に押したときのクリックは通す。
-    if ((await clicks.evaluate((counts) => counts.sent)) === 0) await thumb.dispatchEvent("click");
-    expect(await clicks.evaluate((counts) => ({ ...counts }))).toEqual({ sent: 1, reached: 0 });
+    // 離したときに届くクリックは長押しの続きなので、拡大を開かせない。次に押したときのクリックは通す。
+    await expect
+      .poll(() => clicks.evaluate((counts) => ({ ...counts })))
+      .toEqual({ sent: 1, reached: 0 });
     await thumb.tap();
     expect(await clicks.evaluate((counts) => counts.reached)).toBe(1);
 
