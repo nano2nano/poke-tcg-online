@@ -24,4 +24,6 @@
   "d1_databases": [{ "binding": "DB", "database_name": "poke-tcg-online" }],
   "r2_buckets": [{ "binding": "ARCHIVE", "bucket_name": "poke-tcg-online-matches" }],
   "observability": { "enabled": true },
+  // 公式のカード画像を出す（仕様 3.7 節）。`off` にすると、画面は名前と種類の面で描く。
+  "vars": { "CARD_IMAGES": "official" },
 }

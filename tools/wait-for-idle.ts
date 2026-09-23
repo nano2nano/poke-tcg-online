@@ -5,6 +5,10 @@
  * デプロイすると Durable Object が入れ替わり、指している最中の対戦は消える（仕様 10 節）。
  *
  * 使い方: `npx tsx tools/wait-for-idle.ts <本番の URL> [待つ上限の分]`
+ *
+ * 本番を Cloudflare Access の内側に置いたときは、サービストークンを環境変数
+ * `CF_ACCESS_CLIENT_ID` と `CF_ACCESS_CLIENT_SECRET` で渡す（`docs/deploy.md`）。
+ * 渡さないとログインの画面が返り、数を読めないまま上限まで待って失敗する。
  */
 
 import { setTimeout as sleep } from "node:timers/promises";
@@ -23,6 +27,13 @@ if (!Number.isFinite(limitMinutes) || limitMinutes < 0) {
   process.exit(2);
 }
 const statusUrl = new URL("/api/status", base);
+const accessHeaders: Record<string, string> =
+  process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+    ? {
+        "cf-access-client-id": process.env.CF_ACCESS_CLIENT_ID,
+        "cf-access-client-secret": process.env.CF_ACCESS_CLIENT_SECRET,
+      }
+    : {};
 const deadline = Date.now() + limitMinutes * 60_000;
 
 type Reading =
@@ -33,7 +44,10 @@ type Reading =
 async function read(): Promise<Reading> {
   let response: Response;
   try {
-    response = await fetch(statusUrl, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    response = await fetch(statusUrl, {
+      headers: accessHeaders,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
   } catch (error) {
     return { kind: "unreadable", reason: String(error) };
   }

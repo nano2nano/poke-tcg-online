@@ -428,8 +428,8 @@ async function seatPair(a: Page, b: Page, room: string): Promise<void> {
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await expect(a.locator("#self .row").first()).toBeVisible();
-  await expect(b.locator("#self .row").first()).toBeVisible();
+  await expect(a.locator("#self .mat").first()).toBeVisible();
+  await expect(b.locator("#self .mat").first()).toBeVisible();
 }
 
 async function playEither(a: Page, b: Page): Promise<boolean> {
@@ -548,7 +548,7 @@ test("同じ座席を別のタブで開いたら、前のタブは繋ぎ直さ�
   // 同じブラウザの別のタブは localStorage を共有するので、開くと同じ座席へ繋ぐ。
   const other = watch(await a.context().newPage(), pageErrors);
   await other.goto("/");
-  await expect(other.locator("#self .row").first()).toBeVisible();
+  await expect(other.locator("#self .mat").first()).toBeVisible();
 
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "replaced");
   // 繋ぎ直しの最初の間隔は 1 秒を超えない。それより長く待って、繋ぎに行かないことを見る。
@@ -583,7 +583,7 @@ test("繋ぎ直しを待っているタブは、同じ座席を別のタブが�
 
   const other = watch(await a.context().newPage(), pageErrors);
   await other.goto("/");
-  await expect(other.locator("#self .row").first()).toBeVisible();
+  await expect(other.locator("#self .mat").first()).toBeVisible();
 
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "replaced");
   expect(await playEither(other, b)).toBe(true);
@@ -786,7 +786,7 @@ test("決着のあと、両座席がシャッフルを検算して合う", async
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await expect(a.locator("#self .row").first()).toBeVisible();
+  await expect(a.locator("#self .mat").first()).toBeVisible();
 
   a.once("dialog", (dialog) => void dialog.accept());
   await a.click("#concede-button");
@@ -817,7 +817,7 @@ test("決着で開かれたシェアが差し替えられていたら、合わ�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await expect(a.locator("#self .row").first()).toBeVisible();
+  await expect(a.locator("#self .mat").first()).toBeVisible();
 
   a.once("dialog", (dialog) => void dialog.accept());
   await a.click("#concede-button");
@@ -903,7 +903,7 @@ test("自分のシェアのコミットがすり替えられていたら、合�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await expect(a.locator("#self .row").first()).toBeVisible();
+  await expect(a.locator("#self .mat").first()).toBeVisible();
 
   a.once("dialog", (dialog) => void dialog.accept());
   await a.click("#concede-button");
@@ -941,7 +941,7 @@ test("相手のシェアが使われていなければ、そう出す", async ({
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await expect(a.locator("#self .row").first()).toBeVisible();
+  await expect(a.locator("#self .mat").first()).toBeVisible();
 
   a.once("dialog", (dialog) => void dialog.accept());
   await a.click("#concede-button");
@@ -1177,4 +1177,102 @@ test("キーボードで「追加」を続けて押せて、押せなくなっ�
   ).toHaveText("4");
   // 4 枚目で押せなくなったら、フォーカスは検索欄へ移る。ページの先頭へ落ちると、打ち直しから始まる。
   await expect(page.locator("#card-search")).toBeFocused();
+});
+
+/** 1 ピクセルの PNG。公式の画像の代わりに返す。 */
+const PIXEL = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/**
+ * 画像を出す設定にして、画像の応答を `respond` で返させる。
+ * テストのサーバは画像を切ってあるので、設定の応答ごと差し替える。
+ */
+async function withCardImages(
+  page: Page,
+  respond: (route: Parameters<Parameters<Page["route"]>[1]>[0]) => Promise<void>,
+): Promise<void> {
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  await page.route("**/api/card-image/*", respond);
+}
+
+test("画像を出す設定なら、盤面の見えるカードに画像が載る", async ({ browser, pageErrors }) => {
+  const room = `がぞう-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const asked: string[] = [];
+  await withCardImages(a, async (route) => {
+    asked.push(new URL(route.request().url()).pathname);
+    await route.fulfill({ status: 200, contentType: "image/png", body: PIXEL });
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+
+  const hand = a.locator('#self [data-zone="hand"] .card');
+  await expect(hand.first()).toBeVisible();
+  await expect(a.locator('#self [data-zone="hand"] .card img').first()).toBeVisible();
+  // 頼むのは cardID で、`defId` ではない。
+  expect(asked.length).toBeGreaterThan(0);
+  expect(asked.every((path) => /^\/api\/card-image\/[0-9]+$/.test(path))).toBe(true);
+  // 相手の手札は裏のままで、画像を頼まない。
+  await expect(a.locator('#opponent [data-zone="hand"] .card img')).toHaveCount(0);
+
+  // 押すと大きく出る。
+  await hand.first().click();
+  await expect(a.locator("#card-zoom")).toBeVisible();
+  await expect(a.locator("#card-zoom-cards .card")).toHaveCount(1);
+  await a.click("#card-zoom-close");
+  await expect(a.locator("#card-zoom")).toBeHidden();
+
+  await close();
+});
+
+test("画像を読めなかったカードは、名前の面で残る", async ({ browser, pageErrors }) => {
+  const room = `がぞうなし-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await withCardImages(a, (route) => route.fulfill({ status: 502, body: "" }));
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+
+  const hand = a.locator('#self [data-zone="hand"] .card');
+  await expect(hand.first()).toBeVisible();
+  await expect(a.locator('#self [data-zone="hand"] .card img')).toHaveCount(0);
+  await expect(hand.first().locator(".card-name")).not.toBeEmpty();
+
+  await close();
+});
+
+test("画像を切ってある設定では、画像を頼まない", async ({ browser, pageErrors }) => {
+  const room = `きってある-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const asked: string[] = [];
+  a.on("request", (request) => {
+    if (request.url().includes("/api/card-image/")) asked.push(request.url());
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator('#self [data-zone="hand"] .card').first()).toBeVisible();
+  await expect(a.locator('#self [data-zone="deck"]')).toHaveAttribute("data-count", /^[0-9]+$/);
+  expect(asked).toEqual([]);
+
+  await close();
+});
+
+test("画像を出す設定なら、デッキを組む画面の候補にも画像が載る", async ({ page }) => {
+  await withCardImages(page, (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
+  );
+  await page.goto("/");
+  await page.fill("#card-search", "エネルギー");
+  await expect(page.locator("#card-results .card-row").first()).toBeVisible();
+  await expect(page.locator("#card-results .card-row .card.thumb img").first()).toBeVisible();
 });

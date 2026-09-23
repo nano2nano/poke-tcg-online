@@ -117,6 +117,9 @@ jobs:
 
       - name: 指している対戦が終わるのを待つ
         if: github.event_name != 'workflow_dispatch' || inputs.wait_for_idle
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: npx tsx tools/wait-for-idle.ts "$PRODUCTION_URL" 60
 
       - name: 出す

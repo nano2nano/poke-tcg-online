@@ -12,7 +12,8 @@
     <header>
       <h1>ポケカ オンライン対戦</h1>
       <p class="note">
-        プロトコルの確認用の画面です。盤面は文字で出し、指せる手をそのまま並べます。
+        盤面は卓と同じ配置で描き、指せる手はサーバが送ってきたものをそのまま並べます。
+        カードを押すと大きく出ます。
       </p>
     </header>
 
@@ -55,12 +56,13 @@
       <div id="clock" class="clock"></div>
       <p id="connection" class="connection" role="status" hidden></p>
       <p id="shuffle-check" class="note" hidden></p>
-      <div class="sides">
-        <div class="side">
+      <div class="board">
+        <div class="board-side">
           <h2>相手</h2>
           <div id="opponent"></div>
         </div>
-        <div class="side">
+        <div id="stadium" class="board-center"></div>
+        <div class="board-side">
           <h2>自分</h2>
           <div id="self"></div>
         </div>
@@ -84,14 +86,15 @@
       <p class="note">両者とも、相手から見えるのと同じだけが見えます。手札の中身は出ません。</p>
       <div id="watch-clock" class="clock"></div>
       <p id="watch-status" role="status"></p>
-      <div class="sides">
-        <div class="side">
-          <h2 id="watch-name-0"></h2>
-          <div id="watch-side-0"></div>
-        </div>
-        <div class="side">
+      <div class="board">
+        <div class="board-side">
           <h2 id="watch-name-1"></h2>
           <div id="watch-side-1"></div>
+        </div>
+        <div id="watch-stadium" class="board-center"></div>
+        <div class="board-side">
+          <h2 id="watch-name-0"></h2>
+          <div id="watch-side-0"></div>
         </div>
       </div>
 
@@ -119,17 +122,26 @@
         <button id="replay-close" class="secondary">閉じる</button>
       </div>
       <p id="replay-status" class="note"></p>
-      <div class="sides">
-        <div class="side">
+      <div class="board">
+        <div class="board-side">
           <h2>相手</h2>
           <div id="replay-opponent"></div>
         </div>
-        <div class="side">
+        <div id="replay-stadium" class="board-center"></div>
+        <div class="board-side">
           <h2>自分</h2>
           <div id="replay-self"></div>
         </div>
       </div>
     </section>
+
+    <dialog id="card-zoom" class="card-zoom">
+      <h2 id="card-zoom-title"></h2>
+      <div id="card-zoom-cards" class="card-zoom-cards"></div>
+      <form method="dialog">
+        <button id="card-zoom-close" class="secondary">閉じる</button>
+      </form>
+    </dialog>
 
     <script type="module" src="app.js"></script>
   </body>

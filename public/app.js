@@ -1,8 +1,9 @@
 /**
  * 参照クライアント（`docs/spec/battle-server.md` 0 節「スコープ外」）。
  *
- * 見た目は仕様の対象外なので、この画面はプロトコルが運ぶ値をそのまま映すだけにする。
+ * 見た目は仕様の対象外なので、この画面はプロトコルが運ぶ値を卓の配置に並べるだけにする。
  * **盤面の判断を一切持たない。** サーバが送ってきた合法手を並べ、押された 1 つを送り返す。
+ * 残りの HP のような、射影に無い値も計算しない。どうぐや効果で最大 HP が変わると、画面だけが嘘をつく。
  * 権威はサーバの局面にあり、こちらは描くだけである（1 節の S-1）。
  */
 
@@ -69,6 +70,19 @@ const TRAINER_KINDS = {
   stadium: "スタジアム",
 };
 const HALVES = { left: "左", right: "右" };
+const CONDITIONS = {
+  poisoned: "どく",
+  burned: "やけど",
+  asleep: "ねむり",
+  paralyzed: "マヒ",
+  confused: "こんらん",
+};
+
+/**
+ * 公式のカード画像を出すか。出すかどうかはサーバの設定で決まる（仕様 3.7 節）。
+ * 取れなければ出さない。カードは画像が無くても、名前と種類の面で描ける。
+ */
+let cardImages = false;
 
 /** 検索で並べる上限。これより多ければ、語を打ち足して絞ってもらう。 */
 const SEARCH_LIMIT = 30;
@@ -100,6 +114,8 @@ const watchToken = new URLSearchParams(location.search).get("watch");
  * リンクを開いただけの人のぶんが残り続ける。覚えている座席へも繋ぎに行かない。
  * 繋ぐと観戦の画面の裏で対戦が開き、どちらを見ているのか分からなくなる。
  */
+loadDisplayConfig();
+
 if (watchToken !== null) {
   openWatch(watchToken);
 } else {
@@ -143,14 +159,28 @@ function loadCards() {
  * 繋ぎ直した盤面の名前も出ない。取り直すのは取れなかったときだけで、描く側の例外は拾わない。
  */
 function loadCardsForJoin(delayMs = 5_000) {
-  loadCards().then(
-    () => {
-      renderDeck();
-      renderSearch();
-      if (lastView !== null) renderView(lastView);
-    },
-    () => setTimeout(() => loadCardsForJoin(Math.min(delayMs * 2, 60_000)), delayMs),
+  loadCards().then(redraw, () =>
+    setTimeout(() => loadCardsForJoin(Math.min(delayMs * 2, 60_000)), delayMs),
   );
+}
+
+function loadDisplayConfig() {
+  getJson("/api/config").then(
+    (config) => {
+      cardImages = config.cardImages === true;
+      if (cardImages) redraw();
+    },
+    () => {},
+  );
+}
+
+/** 名前の表や画像の設定が遅れて届いたときに、出ている画面を描き直す。 */
+function redraw() {
+  renderDeck();
+  renderSearch();
+  if (lastView !== null) renderView(lastView);
+  if (lastWatchView !== null) renderWatch(lastWatchView);
+  if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
 }
 
 /** 名前の表を待たずに描き始める画面向け。届いたら `redraw` で描き直す。 */
@@ -751,6 +781,12 @@ function cardRow(defId) {
   detail.className = "card-detail";
   detail.textContent = describeCard(card);
   label.append(name, " ", detail);
+  // 画像が無いときの小さな面は名前も読めないので、画像を出すときだけ並べる。
+  if (imageUrl(defId) !== null) {
+    const thumbnail = cardFace(defId);
+    thumbnail.classList.add("thumb");
+    row.append(thumbnail);
+  }
   row.append(label);
   return row;
 }
@@ -1056,41 +1092,220 @@ function describeEnd(message) {
 
 function renderView(view) {
   lastView = view;
-  $("opponent").innerHTML = sideHtml(view.opponent, false);
-  $("self").innerHTML = sideHtml(view.self, true);
+  renderSide($("opponent"), view.opponent, true);
+  renderStadium($("stadium"), view.stadium);
+  renderSide($("self"), view.self, false);
 }
 
-function sideHtml(side, own) {
-  const rows = [
-    row("サイド", side.prizeCount),
-    row("山札", side.deckCount),
-    row("手札", own ? side.hand.length : side.handCount),
-    row("バトル場", pokemonText(side.active)),
-    row(
-      "ベンチ",
-      side.bench
-        .map(pokemonText)
-        .filter((text) => text !== "なし")
-        .join(" / ") || "なし",
+/** 要素を 1 つ作る。子に文字列を渡すと文字として入る。HTML としては読まない。 */
+function el(tag, className, ...children) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.append(...children);
+  return node;
+}
+
+function imageUrl(defId) {
+  const cardID = cards[defId]?.cardID;
+  return cardImages && typeof cardID === "string" ? `/api/card-image/${cardID}` : null;
+}
+
+/**
+ * カード 1 枚。名前と種類の面を敷き、画像を出すときはその上に重ねる。
+ * 画像が読めなければ外して、下の面をそのまま見せる。
+ */
+function cardFace(defId) {
+  const card = cards[defId];
+  const face = el("div", "card");
+  face.dataset.defId = defId;
+  face.dataset.kind = card?.kind ?? "";
+  if (card?.type !== undefined) face.dataset.type = card.type;
+  face.title = card === undefined ? defId : `${card.name}\n${describeCard(card)}`;
+  face.append(el("span", "card-name", card?.name ?? defId));
+  const sub =
+    card?.hp !== undefined
+      ? `HP ${card.hp}`
+      : (TRAINER_KINDS[card?.trainerKind] ?? KINDS[card?.kind] ?? "");
+  face.append(el("span", "card-sub", sub));
+  const src = imageUrl(defId);
+  if (src !== null) {
+    const image = document.createElement("img");
+    // 名前は下の面が持っている。読み上げで二重にしない。
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.addEventListener("error", () => image.remove());
+    image.src = src;
+    face.append(image);
+  }
+  return face;
+}
+
+function cardBack() {
+  return el("div", "card back");
+}
+
+function emptySlot() {
+  return el("div", "card empty");
+}
+
+/**
+ * 押すと大きく出す。場のポケモンなら、進化の下のカードとついているカードもまとめて出す。
+ * 盤面は描き直しで作り直されるので、出す中身は要素ごとに持たせる。
+ */
+const zoomTargets = new WeakMap();
+
+function zoomable(element, title, defIds) {
+  zoomTargets.set(element, { title, defIds });
+  element.classList.add("zoomable");
+  element.tabIndex = 0;
+  element.setAttribute("role", "button");
+  return element;
+}
+
+function openZoom({ title, defIds }) {
+  $("card-zoom-title").textContent = title;
+  $("card-zoom-cards").replaceChildren(
+    ...defIds.map((defId) =>
+      el(
+        "figure",
+        "",
+        cardFace(defId),
+        el("figcaption", "", el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])),
+      ),
     ),
-    row("トラッシュ", side.discard.length),
-  ];
-  const hand = own
-    ? `<div class="hand">${side.hand.map((card) => `<span>${escape(nameOf(card.defId))}</span>`).join("")}</div>`
-    : "";
-  return rows.join("") + hand;
+  );
+  if (!$("card-zoom").open) $("card-zoom").showModal();
 }
 
-function pokemonText(pokemon) {
-  if (pokemon === null) return "なし";
-  if (pokemon.concealed === true) return "ウラ";
+// 枠の外（背景）を押しても閉じる。
+$("card-zoom").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) $("card-zoom").close();
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target.closest?.(".zoomable");
+  if (target != null && zoomTargets.has(target)) openZoom(zoomTargets.get(target));
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const target = event.target;
+  if (!target.classList?.contains("zoomable") || !zoomTargets.has(target)) return;
+  event.preventDefault();
+  openZoom(zoomTargets.get(target));
+});
+
+/** 盤面の区画。`count` は山札やトラッシュのように、枚数を読む区画でだけ渡す。 */
+function zone(name, label, count, ...children) {
+  const caption = count === null ? label : `${label} ${count}`;
+  const box = el("div", `zone ${name}`, ...children, el("span", "zone-label", caption));
+  box.dataset.zone = name;
+  if (count !== null) box.dataset.count = String(count);
+  return box;
+}
+
+/**
+ * 1 人ぶんの場。`mirrored` は向かいに座る側で、卓を挟んで見たとおりに上下と左右を返す。
+ * 手札の中身が見えない側は、射影が `hand` の代わりに `handCount` を持っている。
+ */
+function renderSide(container, side, mirrored) {
+  const faceUp = new Map(side.faceUpPrizes.map((prize) => [prize.index, prize.defId]));
+  const prizes = Array.from({ length: side.prizeCount }, (_, index) => {
+    const defId = faceUp.get(index);
+    return defId === undefined ? cardBack() : zoomable(cardFace(defId), "サイド", [defId]);
+  });
+
+  // ベンチの枠の数はスタジアムで変わり、射影には載っていない。空いた枠は描かない。
+  const benched = side.bench.filter((pokemon) => pokemon !== null);
+  const bench = benched.length === 0 ? [emptySlot()] : benched.map(pokemonSlot);
+  const field = el(
+    "div",
+    "field",
+    zone("active", "バトル場", null, pokemonSlot(side.active)),
+    zone("bench", "ベンチ", null, ...bench),
+  );
+
+  const piles = el(
+    "div",
+    "piles",
+    zone("deck", "山札", side.deckCount, side.deckCount > 0 ? cardBack() : emptySlot()),
+    pileZone("discard", "トラッシュ", side.discard),
+  );
+  if (side.lostZone.length > 0) piles.append(pileZone("lost", "ロストゾーン", side.lostZone));
+
+  const mat = el(
+    "div",
+    mirrored ? "mat mirrored" : "mat",
+    zone("prizes", "サイド", side.prizeCount, el("div", "prize-grid", ...prizes)),
+    field,
+    piles,
+  );
+
+  const hand =
+    side.hand === undefined
+      ? zone("hand", "手札", side.handCount, ...Array.from({ length: side.handCount }, cardBack))
+      : zone(
+          "hand",
+          "手札",
+          side.hand.length,
+          ...side.hand.map((card) => zoomable(cardFace(card.defId), "手札", [card.defId])),
+        );
+  container.replaceChildren(...(mirrored ? [hand, mat] : [mat, hand]));
+}
+
+/** トラッシュとロストゾーン。いちばん上だけを見せ、押すと新しいものから全部を出す。 */
+function pileZone(name, label, pile) {
+  if (pile.length === 0) return zone(name, label, 0, emptySlot());
+  const top = cardFace(pile[pile.length - 1].defId);
+  const box = zone(name, label, pile.length, top);
+  return zoomable(box, label, pile.map((card) => card.defId).reverse());
+}
+
+/**
+ * 場のポケモン 1 匹。ついているカードは下からのぞかせ、ダメージと特殊状態は印で出す。
+ * ねむり・マヒ・こんらんは、卓で向きを変えて示すのに合わせてカードを傾ける。
+ */
+function pokemonSlot(pokemon) {
+  if (pokemon === null) return emptySlot();
+  if (pokemon.concealed === true) return cardBack();
   const top = pokemon.stack[pokemon.stack.length - 1];
-  const damage = pokemon.damage > 0 ? `（${pokemon.damage} ダメージ）` : "";
-  return `${escape(nameOf(top.defId))}${damage}`;
+  const face = cardFace(top.defId);
+  const posture = pokemon.conditions.find((condition) =>
+    ["asleep", "paralyzed", "confused"].includes(condition.kind),
+  );
+  if (posture !== undefined) face.dataset.posture = posture.kind;
+
+  const marks = el("div", "marks");
+  if (pokemon.damage > 0) marks.append(el("span", "damage", String(pokemon.damage)));
+  for (const condition of pokemon.conditions) {
+    marks.append(el("span", "condition", CONDITIONS[condition.kind] ?? condition.kind));
+  }
+
+  const body = el("div", "pokemon", face, marks);
+  if (pokemon.attached.length > 0) {
+    body.append(el("div", "attached", ...pokemon.attached.map((card) => cardFace(card.defId))));
+  }
+  body.dataset.inPlayId = pokemon.inPlayId;
+  body.dataset.damage = String(pokemon.damage);
+  const name = cards[top.defId]?.name ?? top.defId;
+  return zoomable(body, name, [
+    ...pokemon.stack.map((card) => card.defId).reverse(),
+    ...pokemon.attached.map((card) => card.defId),
+  ]);
 }
 
-function row(label, value) {
-  return `<div class="row"><span>${label}</span><span>${escape(String(value))}</span></div>`;
+/** 2 枚で 1 つのスタジアムは、左右に並べて出す。 */
+function renderStadium(container, stadium) {
+  const shown =
+    stadium === null
+      ? [emptySlot()]
+      : "instanceId" in stadium
+        ? [zoomable(cardFace(stadium.defId), "スタジアム", [stadium.defId])]
+        : [stadium.left, stadium.right].map((card) =>
+            zoomable(cardFace(card.defId), "スタジアム", [card.defId]),
+          );
+  const box = zone("stadium", "スタジアム", null, ...shown);
+  container.replaceChildren(box);
 }
 
 function renderClock(clock) {
@@ -1236,9 +1451,7 @@ function openWatch(token) {
   $("join").hidden = true;
   $("history").hidden = true;
   $("watch").hidden = false;
-  loadCardsThen(() => {
-    if (lastWatchView !== null) renderWatch(lastWatchView);
-  });
+  loadCardsThen(redraw);
 
   let synced = false;
   let ended = false;
@@ -1312,8 +1525,9 @@ function renderWatch(view) {
     const info = watchSeats?.[seat];
     $(`watch-name-${seat}`).textContent =
       info === undefined ? `座席 ${seat}` : `${info.displayName}（${info.rating}）`;
-    $(`watch-side-${seat}`).innerHTML = sideHtml(view.players[seat], false);
+    renderSide($(`watch-side-${seat}`), view.players[seat], seat === 1);
   }
+  renderStadium($("watch-stadium"), view.stadium);
 }
 
 function watchName(seat) {
@@ -1450,6 +1664,8 @@ async function postJson(path, body) {
 
 /** リプレイ中の対戦。開いていなければ null。 */
 let replaying = null;
+/** 直近に描いたリプレイの局面。名前の表や画像の設定が遅れて届いたときに描き直す。 */
+let lastReplayFrame = null;
 
 $("history-button").addEventListener("click", () => {
   showHistory().catch((error) => setStatus(`一覧を出せませんでした: ${error.message}`));
@@ -1457,6 +1673,7 @@ $("history-button").addEventListener("click", () => {
 
 $("replay-close").addEventListener("click", () => {
   replaying = null;
+  lastReplayFrame = null;
   $("replay").hidden = true;
 });
 
@@ -1531,6 +1748,7 @@ async function openReplay(summary) {
     if (replaying === opened) {
       $("replay").hidden = true;
       replaying = null;
+      lastReplayFrame = null;
     }
     throw error;
   }
@@ -1574,9 +1792,8 @@ async function goToPly(ply) {
     opened.wanted = frame.ply;
   }
 
-  const board = readerBoard(frame.views, replaying.seat);
-  $("replay-self").innerHTML = sideHtml(board.self, true);
-  $("replay-opponent").innerHTML = sideHtml(board.opponent, true);
+  lastReplayFrame = { views: frame.views, seat: replaying.seat };
+  renderReplayBoard(lastReplayFrame);
 
   const before = readerBoard(frame.beforeViews, replaying.seat);
   const move = frame.playedMove === null ? "対戦の開始時" : describeMove(frame.playedMove, before);
@@ -1604,10 +1821,9 @@ function readerBoard(views, seat) {
   return { self: views[seat].self, opponent: views[seat === 0 ? 1 : 0].self };
 }
 
-function escape(text) {
-  return text.replace(
-    /[&<>"']/g,
-    (character) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character],
-  );
+function renderReplayBoard({ views, seat }) {
+  const board = readerBoard(views, seat);
+  renderSide($("replay-opponent"), board.opponent, true);
+  renderStadium($("replay-stadium"), views[seat].stadium);
+  renderSide($("replay-self"), board.self, false);
 }

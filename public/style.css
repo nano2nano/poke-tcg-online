@@ -5,7 +5,7 @@
 body {
   margin: 0 auto;
   padding: 16px;
-  max-width: 900px;
+  max-width: 1100px;
   font-family: system-ui, "Hiragino Kaku Gothic ProN", sans-serif;
   line-height: 1.6;
 }
@@ -37,21 +37,6 @@ button {
 button.danger {
   margin-top: 12px;
 }
-.sides {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 1fr;
-}
-@media (min-width: 720px) {
-  .sides {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-.side {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px;
-}
 .clock {
   font-variant-numeric: tabular-nums;
   padding: 6px 0;
@@ -75,25 +60,6 @@ button.danger {
   overflow-y: auto;
   font-size: 0.85rem;
   padding-left: 1.4em;
-}
-.row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  border-bottom: 1px solid var(--line);
-  padding: 2px 0;
-}
-.hand {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-}
-.hand span {
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 0.85rem;
 }
 .waiting {
   opacity: 0.6;
@@ -217,4 +183,302 @@ button.secondary {
 #card-results {
   max-height: 360px;
   overflow-y: auto;
+}
+
+/* 盤面。カードの幅だけを --w で決め、高さは実物の縦横比から出す。 */
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  --mat: color-mix(in srgb, #2f7d4f 14%, Canvas);
+}
+.board h2 {
+  margin: 4px 0;
+}
+.board-center {
+  display: flex;
+  justify-content: center;
+  --w: 64px;
+}
+.mat {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "prizes field piles";
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--mat);
+}
+.mat.mirrored {
+  grid-template-areas: "piles field prizes";
+}
+.mat > .prizes {
+  grid-area: prizes;
+  --w: 40px;
+}
+.mat > .field {
+  grid-area: field;
+}
+.mat > .piles {
+  grid-area: piles;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  --w: 56px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.mat.mirrored .field {
+  flex-direction: column-reverse;
+}
+.zone {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 8px;
+  position: relative;
+}
+.zone-label {
+  flex-basis: 100%;
+  text-align: center;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+.zone.active {
+  --w: 104px;
+}
+.zone.bench {
+  --w: 76px;
+}
+.prize-grid {
+  display: grid;
+  grid-template-columns: repeat(2, var(--w));
+  gap: 4px;
+}
+.zone.hand {
+  --w: 64px;
+  gap: 4px;
+  margin: 6px 0;
+}
+/* 見えない手札は重ねて、枚数を伝えるだけにする。 */
+.zone.hand > .card.back + .card.back {
+  margin-left: calc(var(--w) * -0.55);
+}
+
+.card {
+  position: relative;
+  box-sizing: border-box;
+  width: var(--w, 64px);
+  aspect-ratio: 63 / 88;
+  border-radius: calc(var(--w, 64px) * 0.06);
+  border: 1px solid #8a8f98;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 3px;
+  background: #f5f2e8;
+  color: #1c2530;
+  font-size: max(9px, calc(var(--w, 64px) * 0.13));
+  line-height: 1.2;
+  flex: none;
+}
+.card-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.card-sub {
+  opacity: 0.75;
+}
+.card img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* 画像の無いときだけ、タイプの色を上の縁に出す。 */
+.card[data-kind="pokemon"]:not(:has(img)) {
+  border-top: calc(var(--w, 64px) * 0.08) solid var(--type, #b8b8ae);
+}
+.card[data-kind="trainer"] {
+  background: #e3e9f1;
+}
+.card[data-kind="energy"] {
+  background: #efe7cc;
+}
+.card[data-type="grass"] {
+  --type: #6aa84f;
+}
+.card[data-type="fire"] {
+  --type: #d9622b;
+}
+.card[data-type="water"] {
+  --type: #3d85c6;
+}
+.card[data-type="lightning"] {
+  --type: #e8b923;
+}
+.card[data-type="psychic"] {
+  --type: #9b59b6;
+}
+.card[data-type="fighting"] {
+  --type: #a0522d;
+}
+.card[data-type="darkness"] {
+  --type: #34495e;
+}
+.card[data-type="metal"] {
+  --type: #7f8c8d;
+}
+.card[data-type="dragon"] {
+  --type: #b7950b;
+}
+.card.back {
+  background: repeating-linear-gradient(45deg, #2c4a8a 0 6px, #24407a 6px 12px);
+  border-color: #1b2f5c;
+}
+.card.empty {
+  background: transparent;
+  border: 1px dashed var(--line);
+}
+
+/* 卓では、ねむりは左へ、マヒは右へ倒し、こんらんは逆さにして示す。 */
+.card[data-posture="asleep"] {
+  transform: rotate(-90deg);
+}
+.card[data-posture="paralyzed"] {
+  transform: rotate(90deg);
+}
+.card[data-posture="confused"] {
+  transform: rotate(180deg);
+}
+
+.pokemon {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+/* 倒したカードが隣へはみ出さないよう、縦と横の差のぶんを空けておく。 */
+.zone.active .pokemon {
+  padding: 0 calc(var(--w) * 0.2);
+}
+.attached {
+  display: flex;
+  justify-content: center;
+  --w: 30px;
+  margin-top: calc(var(--w) * -0.6);
+  position: relative;
+  z-index: 1;
+}
+.attached > .card + .card {
+  margin-left: calc(var(--w) * -0.35);
+}
+.marks {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  z-index: 2;
+  pointer-events: none;
+}
+.marks .damage {
+  min-width: 1.8em;
+  padding: 2px 4px;
+  border-radius: 999px;
+  background: #c0392b;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.marks .condition {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #5b2c6f;
+  color: #fff;
+  font-size: 0.7rem;
+}
+
+.zoomable {
+  cursor: zoom-in;
+}
+.zoomable:focus-visible {
+  outline: 2px solid #3d85c6;
+  outline-offset: 2px;
+}
+
+.card-zoom {
+  max-width: min(92vw, 960px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.card-zoom::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+.card-zoom h2 {
+  margin-top: 0;
+}
+.card-zoom-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  --w: min(240px, 70vw);
+}
+.card-zoom-cards figure {
+  margin: 0;
+  width: var(--w);
+}
+.card-zoom-cards figcaption {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.card-row .card.thumb {
+  --w: 36px;
+  padding: 1px;
+}
+
+@media (max-width: 640px) {
+  .mat {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "field field"
+      "prizes piles";
+    padding: 8px;
+  }
+  .mat.mirrored {
+    grid-template-areas:
+      "piles prizes"
+      "field field";
+  }
+  .mat > .piles {
+    flex-direction: row;
+    justify-content: center;
+    --w: 44px;
+  }
+  .mat > .prizes {
+    --w: 30px;
+  }
+  .zone.active {
+    --w: 84px;
+  }
+  .zone.bench {
+    --w: 52px;
+    gap: 4px;
+  }
+  .zone.hand {
+    --w: 52px;
+  }
 }

@@ -81,6 +81,22 @@ main へ入れると、GitHub Actions が検査のあとに出す（`.github/wor
 
 エンジンを取る鍵は、検査と同じ `ENGINE_DEPLOY_KEY` を使う。
 
+### 見られる人を Cloudflare Access で絞るとき
+
+Workers & Pages でこの Worker を開き、Settings > Domains & Routes の `workers.dev` で Access を有効にして、
+許可するメールアドレスをポリシーに書く。
+
+絞ると、deploy の job も `/api/status` を読めなくなる。Zero Trust の Access > Service Auth で
+サービストークンを作り、同じアプリケーションに Service Auth のポリシーで許可する。
+そのうえで `production` の Environment secrets に 2 つ足す。
+
+| 名前                      | 値                               |
+| ------------------------- | -------------------------------- |
+| `CF_ACCESS_CLIENT_ID`     | サービストークンの Client ID     |
+| `CF_ACCESS_CLIENT_SECRET` | サービストークンの Client Secret |
+
+登録していなければ、`tools/wait-for-idle.ts` はトークンを付けずに読む。
+
 ### 手元から出す
 
 ```sh
@@ -99,6 +115,7 @@ npm run dev      # http://localhost:8787
 ```
 
 D1 と R2 は手元の偽物で動き、中身は `.wrangler/` に残る。Cloudflare のアカウントは要らない。
+カードの画像を切って動かすなら `npx wrangler dev --var CARD_IMAGES:off` にする。
 
 ## 対局ログを取ってくる
 
@@ -134,6 +151,8 @@ R2 のバケットをそのまま落とせば、`npm run replay:verify` が読�
   画面は 20 秒ごとに `ping` を送る。対戦がある間は 1 分ごとにアラームも鳴り、これも 1 リクエストに数えられる。
 - Durable Object の書き込み行数。 アラームを置くたびに 1 行と数えられる。
 - R2 の容量。 1 局の大きさは仕様 6.5 節にある。
+- Worker へのリクエスト。 カードの画像は 1 種類ごとに 1 リクエストに数えられる（仕様 3.7 節）。
+  ブラウザが転送先を覚えている間は、描き直しても数えられない。
 
 Workers、Durable Objects、D1 は、無料プランのまま超えた日はその日の残りが断られる。課金には切り替わらない。
 **R2 だけは、超えたぶんが登録した支払い方法へ課金される。** ダッシュボードの R2 で使っている量を見られる。
