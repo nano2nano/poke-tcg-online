@@ -1,5 +1,6 @@
 /**
- * 生きている対戦のレジストリ。座席トークンから対戦と座席を引く（`docs/spec/battle-server.md` 3.3 節）。
+ * 生きている対戦のレジストリ。座席トークンから対戦と座席を、観戦トークンから対戦を引く
+ * （`docs/spec/battle-server.md` 3.3 節、3.6 節）。
  *
  * 索引が要る問い合わせはここにしか無く、すべてメモリにある（6.5 節）。
  * 終わった対戦はログへ落としてからレジストリを離れる。
@@ -22,6 +23,7 @@ export function newToken(): string {
 export class MatchRegistry {
   private readonly matches = new Map<string, Match>();
   private readonly seats = new Map<string, SeatRef>();
+  private readonly spectators = new Map<string, Match>();
 
   constructor(private readonly logDir?: string) {}
 
@@ -30,10 +32,15 @@ export class MatchRegistry {
     for (const seat of [0, 1] as Player[]) {
       this.seats.set(match.seatTokens[seat], { match, seat });
     }
+    this.spectators.set(match.spectatorToken, match);
   }
 
   bySeatToken(token: string): SeatRef | undefined {
     return this.seats.get(token);
+  }
+
+  bySpectatorToken(token: string): Match | undefined {
+    return this.spectators.get(token);
   }
 
   live(): Match[] {
@@ -51,6 +58,7 @@ export class MatchRegistry {
     if (!this.matches.has(match.matchId)) return null;
     this.matches.delete(match.matchId);
     for (const token of match.seatTokens) this.seats.delete(token);
+    this.spectators.delete(match.spectatorToken);
     const record = toRecord(match);
     try {
       appendRecord(record, this.logDir);

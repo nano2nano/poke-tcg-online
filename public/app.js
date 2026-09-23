@@ -44,9 +44,20 @@ $("name").addEventListener("input", () => {
   nameTouched = true;
 });
 
-ensureAccount().catch((error) => setStatus(`アカウントを読めませんでした: ${error.message}`));
+/** 観戦のリンクで開かれたときの観戦トークン（3.6 節）。 */
+const watchToken = new URLSearchParams(location.search).get("watch");
 
-resumeSeat();
+/**
+ * **観戦で開いたときは、プレイヤーを作らない。** プレイヤーを消す道は無いので、
+ * リンクを開いただけの人のぶんが残り続ける。覚えている座席へも繋ぎに行かない。
+ * 繋ぐと観戦の画面の裏で対戦が開き、どちらを見ているのか分からなくなる。
+ */
+if (watchToken !== null) {
+  openWatch(watchToken);
+} else {
+  ensureAccount().catch((error) => setStatus(`アカウントを読めませんでした: ${error.message}`));
+  resumeSeat();
+}
 
 /**
  * 覚えている座席があれば、そこへ繋ぎ直す。
@@ -327,6 +338,7 @@ function receive(message) {
   switch (message.t) {
     case "sync":
     case "delta":
+      if (message.t === "sync") $("watch-link").value = watchUrl(message.spectatorToken);
       stateVersion = message.stateVersion;
       if (message.events !== undefined) for (const event of message.events) addEvent(event.kind);
       renderView(message.view);
@@ -527,10 +539,108 @@ function handCardName(instanceId, view) {
   return instanceId;
 }
 
-function addEvent(text) {
+function addEvent(text, list = "events") {
   const item = document.createElement("li");
   item.textContent = text;
-  $("events").prepend(item);
+  $(list).prepend(item);
+}
+
+function watchUrl(spectatorToken) {
+  return `${location.origin}/?watch=${encodeURIComponent(spectatorToken)}`;
+}
+
+/** 観戦している対戦の、座席ごとの名前。`spectator-sync` で届く。 */
+let watchSeats = null;
+/** 直近の観戦の盤面。カードの名前の表が遅れて届いたときに描き直す。 */
+let lastWatchView = null;
+
+/**
+ * 観戦する。座席とは別の接続で、こちらから送るものは無い。
+ * 生存確認はサーバの ping にブラウザが自分で答えるので、ここでは何もしない。
+ */
+function openWatch(token) {
+  $("join").hidden = true;
+  $("history").hidden = true;
+  $("watch").hidden = false;
+  getJson("/api/cards")
+    .then((loaded) => {
+      cards = loaded;
+      if (lastWatchView !== null) renderWatch(lastWatchView);
+    })
+    .catch(() => {});
+
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const watching = new WebSocket(
+    `${scheme}://${location.host}/ws?spectatorToken=${encodeURIComponent(token)}`,
+  );
+  let synced = false;
+  let ended = false;
+  /** 閉じる直前にサーバが言った理由。入れなかったときに、そのまま見せる。 */
+  let refusal = null;
+  watching.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    switch (message.t) {
+      case "spectator-sync":
+        synced = true;
+        watchSeats = message.seats;
+        renderWatch(message.view);
+        renderWatchClock(message.clock);
+        return;
+      case "spectator-delta":
+        for (const played of message.events) addEvent(played.kind, "watch-events");
+        renderWatch(message.view);
+        renderWatchClock(message.clock);
+        return;
+      case "spectator-ended":
+        ended = true;
+        renderWatch(message.view);
+        $("watch-clock").textContent = describeWatchEnd(message.matchResult);
+        return;
+      case "error":
+        refusal = message.message;
+        return;
+      default:
+        return;
+    }
+  });
+  watching.addEventListener("close", () => {
+    if (ended) return;
+    $("watch-status").textContent = synced
+      ? "接続が切れました。読み込み直すと戻れます"
+      : `観戦できませんでした（${refusal ?? "対戦が見つからない"}）`;
+  });
+}
+
+function renderWatch(view) {
+  lastWatchView = view;
+  for (const seat of [0, 1]) {
+    const info = watchSeats?.[seat];
+    $(`watch-name-${seat}`).textContent =
+      info === undefined ? `座席 ${seat}` : `${info.displayName}（${info.rating}）`;
+    $(`watch-side-${seat}`).innerHTML = sideHtml(view.players[seat], false);
+  }
+}
+
+function watchName(seat) {
+  return watchSeats?.[seat]?.displayName ?? `座席 ${seat}`;
+}
+
+function renderWatchClock(clock) {
+  const turn = clock.toMove === null ? "" : `${watchName(clock.toMove)} が考えています`;
+  const remaining =
+    clock.moveRemainingMs === null
+      ? ""
+      : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
+  const banks = [0, 1]
+    .map((seat) => `${watchName(seat)} ${Math.round(clock.bankMs[seat] / 1000)} 秒`)
+    .join("・");
+  $("watch-clock").textContent = `${turn}${remaining} ／ 持ち時間 ${banks}`;
+}
+
+function describeWatchEnd(result) {
+  if (result.winner === null) return "引き分けで終わりました";
+  const how = { normal: "", concede: "（投了）", timeout: "（時間切れ）" }[result.kind] ?? "";
+  return `${watchName(result.winner)} の勝ちで終わりました${how}`;
 }
 
 function send(message) {

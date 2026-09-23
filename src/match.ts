@@ -4,7 +4,8 @@
  * 権威の `GameState` を持ち、座席から来た手を検査して `applyMove` へ通す。
  * 現在時刻は必ず引数で受け取る。時刻を読むのは配信層（`src/hub.ts`）1 箇所だけである。
  *
- * 座席へ出る値の組み立て（`viewFor` / `legalMovesFor`）もここに置く。
+ * 座席と観戦者へ出る値の組み立て（`viewFor` / `spectatorViewFor` / `eventsFor` /
+ * `legalMovesFor`）もここに置く。
  * **`state` と生の `events` を外へ返す関数をこのモジュールに作らないこと。** 射影を
  * 迂回する経路ができると、1 節の S-2 が守れなくなる。
  */
@@ -17,6 +18,7 @@ import {
   opponent,
   playerView,
   projectEvents,
+  spectatorView,
 } from "./engine.js";
 import type {
   DeckList,
@@ -27,6 +29,8 @@ import type {
   Player,
   PlayerEvent,
   PlayerView,
+  SpectatorView,
+  Viewer,
 } from "./engine.js";
 import { consume, createClock, isTimedOut, moveRemainingMs, type Clock } from "./clock.js";
 import { commitSeed, type SeedCommitment } from "./fingerprint.js";
@@ -83,6 +87,12 @@ export interface Match {
   readonly decks: [DeckList, DeckList];
   readonly seats: [SeatInfo, SeatInfo];
   readonly seatTokens: [string, string];
+  /**
+   * 観戦に使う鍵（3.6 節）。座席ごとではなく対戦に 1 つで、両座席へ渡す。
+   * 観戦者に見えるものは、どちらの座席も相手について見えているものに収まるので、
+   * どちらが配っても相手に不利は生じない。
+   */
+  readonly spectatorToken: string;
   readonly startedAt: string;
   /** 先攻。seed から決まる導出値で、再生の入力ではない。先攻の偏りを測るために残す。 */
   readonly firstPlayer: Player;
@@ -102,6 +112,7 @@ export interface CreateMatchOptions {
   decks: [DeckList, DeckList];
   seats: [SeatInfo, SeatInfo];
   seatTokens: [string, string];
+  spectatorToken: string;
   nowMs: number;
   startedAt: string;
   /** テストのために固定したいときだけ渡す。既定は 256 ビットの乱数。 */
@@ -118,6 +129,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     decks: options.decks,
     seats: options.seats,
     seatTokens: options.seatTokens,
+    spectatorToken: options.spectatorToken,
     startedAt: options.startedAt,
     firstPlayer: firstPlayerOf(created.events),
     state: created.state,
@@ -231,8 +243,12 @@ export function viewFor(match: Match, seat: Player): PlayerView {
   return playerView(match.state, seat);
 }
 
-export function eventsFor(events: DomainEvent[], seat: Player): PlayerEvent[] {
-  return projectEvents(events, seat);
+export function spectatorViewFor(match: Match): SpectatorView {
+  return spectatorView(match.state);
+}
+
+export function eventsFor(events: DomainEvent[], viewer: Viewer): PlayerEvent[] {
+  return projectEvents(events, viewer);
 }
 
 /**

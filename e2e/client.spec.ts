@@ -371,3 +371,60 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
 
   await close();
 });
+
+/**
+ * 観戦（仕様 3.6 節）。座席に渡った観戦のリンクを、3 人目が開く。
+ *
+ * **リンクを開いただけの人にプレイヤーを作らない。** プレイヤーを消す道は無いので、
+ * 観戦のたびに 1 人ずつ残り続ける。
+ */
+test("観戦のリンクを開くと、プレイヤーを作らずに両者の盤面が映り、手が進むと描き直す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `かんせん-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#table")).toBeVisible();
+  await expect(a.locator("#watch-link")).not.toHaveValue("");
+  const link = await a.locator("#watch-link").inputValue();
+
+  const context = await browser.newContext();
+  const watcher = watch(await context.newPage(), pageErrors);
+  const created: string[] = [];
+  watcher.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/api/account")) {
+      created.push(request.url());
+    }
+  });
+  await watcher.goto(link);
+
+  await expect(watcher.locator("#watch")).toBeVisible();
+  await expect(watcher.locator("#join")).toBeHidden();
+  await expect(watcher.locator("#table")).toBeHidden();
+  await expect(watcher.locator("#watch-side-0")).not.toBeEmpty();
+  await expect(watcher.locator("#watch-side-1")).not.toBeEmpty();
+  await expect(watcher.locator("#watch-events li")).toHaveCount(0);
+
+  let played = false;
+  for (let attempt = 0; attempt < 6 && !played; attempt += 1) {
+    played = (await playOne(a)) || (await playOne(b));
+  }
+  expect(played).toBe(true);
+  // 座席の 1 手が観戦者へも届いた印は、できごとの行が増えることである。
+  await expect(watcher.locator("#watch-events li")).not.toHaveCount(0);
+
+  expect(created).toEqual([]);
+  await context.close();
+  await close();
+});
+
+test("観戦のリンクが通らなければ、そう出して終わる", async ({ page }) => {
+  await page.goto("/?watch=もう無い対戦");
+  await expect(page.locator("#watch")).toBeVisible();
+  await expect(page.locator("#watch-status")).not.toBeEmpty();
+});

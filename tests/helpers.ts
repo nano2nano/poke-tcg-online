@@ -5,7 +5,16 @@
  * `engine/` の内部を直に読むと、エンジンの取り込み方を変えたときに直す場所が増える。
  */
 
-import type { CardDef, CardDefId, DeckList, GameState, Move, Player } from "../src/engine.js";
+import type {
+  CardDef,
+  CardDefId,
+  DeckList,
+  DomainEvent,
+  GameState,
+  Move,
+  Player,
+  Viewer,
+} from "../src/engine.js";
 import {
   createRng,
   legalMoves,
@@ -55,6 +64,7 @@ export function newMatch(seedNonce: string, nowMs = 0): Match {
       { playerId: "player-b", displayName: "い", rating: 1500 },
     ],
     seatTokens: [`token-a-${seedNonce}`, `token-b-${seedNonce}`],
+    spectatorToken: `token-watch-${seedNonce}`,
     nowMs,
     startedAt: new Date(nowMs).toISOString(),
     seedCommitment: commitSeed(seedNonce),
@@ -68,6 +78,8 @@ export interface PlayOptions {
   maxMoves?: number;
   /** 手番側が 1 手に掛ける時間。持ち時間のテストで使う。 */
   thinkMs?: number;
+  /** 1 手を適用するたびに、適用前の局面と出たイベントを添えて呼ぶ。イベントの漏洩の検査に使う。 */
+  applied?: (before: GameState, match: Match, events: DomainEvent[]) => void;
 }
 
 export interface PlayedMatch {
@@ -95,14 +107,19 @@ export function playToEnd(match: Match, rngSeed: number, options: PlayOptions = 
     const [index, next] = nextInt(rng, legal.length);
     rng = next;
     nowMs += thinkMs;
+    const before = match.state;
     const outcome = submitMove(match, mover, match.version, legal[index] as Move, nowMs);
     if (!outcome.ok) throw new Error(`合法手が拒否された: ${outcome.reason}`);
+    options.applied?.(before, match, outcome.events);
     moves += 1;
   }
 }
 
-/** ある座席から見て中身が隠れているカードのインスタンス ID （4.2 節の「隠れているカード」）。 */
-export function hiddenInstanceIds(state: GameState, viewer: Player): Set<string> {
+/**
+ * ある宛先から見て中身が隠れているカードのインスタンス ID （4.2 節の「隠れているカード」）。
+ * 観戦者はどちらの手札の持ち主でもないので、両者の手札が入る。
+ */
+export function hiddenInstanceIds(state: GameState, viewer: Viewer): Set<string> {
   const hidden = new Set<string>();
   for (const player of [0, 1] as Player[]) {
     const side = state.players[player];
@@ -113,4 +130,23 @@ export function hiddenInstanceIds(state: GameState, viewer: Player): Set<string>
     if (player !== viewer) for (const card of side.hand) hidden.add(card.instanceId);
   }
   return hidden;
+}
+
+/**
+ * ある宛先から見て正体の分からないカード。`hiddenInstanceIds` と違い、オモテのサイドを除く。
+ *
+ * イベントの検査に使う。オモテのサイドは位置も正体も両者へ公開されている（コア SPEC §9.3）ので、
+ * それを取った `prize-taken` がカードを運ぶのは漏洩ではない。
+ */
+export function concealedInstanceIds(state: GameState, viewer: Viewer): Set<string> {
+  const concealed = new Set<string>();
+  for (const player of [0, 1] as Player[]) {
+    const side = state.players[player];
+    const faceUp = new Set(side.revealedPrizes);
+    for (const card of side.deck) concealed.add(card.instanceId);
+    for (const card of side.prizes)
+      if (!faceUp.has(card.instanceId)) concealed.add(card.instanceId);
+    if (player !== viewer) for (const card of side.hand) concealed.add(card.instanceId);
+  }
+  return concealed;
 }

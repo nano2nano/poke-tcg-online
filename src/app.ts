@@ -169,8 +169,14 @@ export function createApp(options: AppOptions = {}): App {
     socket.on("error", (error: Error) => {
       console.warn("接続で落ちた:", error.message);
     });
-    const seatToken = new URL(request.url ?? "/", "http://localhost").searchParams.get("seatToken");
-    if (seatToken === null || !hub.attach(socket, seatToken)) {
+    const connection = connectionOf(request);
+    const attached =
+      connection === null
+        ? false
+        : connection.kind === "seat"
+          ? hub.attach(socket, connection.token)
+          : hub.attachSpectator(socket, connection.token);
+    if (connection === null || !attached) {
       socket.close();
       return;
     }
@@ -195,7 +201,8 @@ export function createApp(options: AppOptions = {}): App {
         socket.send(JSON.stringify({ t: "error", message: MALFORMED }));
         return;
       }
-      hub.handle(socket, seatToken, message.data);
+      if (connection.kind === "seat") hub.handle(socket, connection.token, message.data);
+      else hub.handleSpectator(socket, connection.token, message.data);
     });
     socket.on("close", () => hub.detach(socket));
   });
@@ -223,6 +230,24 @@ export function createApp(options: AppOptions = {}): App {
       closeIndex(logDir);
     },
   };
+}
+
+/**
+ * 接続が座席か観戦か（3.6 節）。**両方を名乗る接続は断る。**
+ * どちらかを優先すると、観戦のつもりで開いた画面が座席の鍵を持っていたときに、
+ * 黙って手を指せる接続になる。
+ */
+function connectionOf(
+  request: IncomingMessage,
+): { kind: "seat" | "spectator"; token: string } | null {
+  const params = new URL(request.url ?? "/", "http://localhost").searchParams;
+  const seatToken = params.get("seatToken");
+  const spectatorToken = params.get("spectatorToken");
+  if (seatToken !== null && spectatorToken === null) return { kind: "seat", token: seatToken };
+  if (spectatorToken !== null && seatToken === null) {
+    return { kind: "spectator", token: spectatorToken };
+  }
+  return null;
 }
 
 /** 死活確認の向き先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
