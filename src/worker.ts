@@ -41,8 +41,7 @@ export interface Env extends AppVars {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    // 画像は盤面を描くたびにカードの枚数ぶん頼まれる。対戦の状態に触れないので、
-    // すべての対戦が載っている Durable Object へは回さない。
+    // カードの画像は Durable Object へ回さない（3.7 節）。
     const image = await cardImageRoute(request, env.CARD_IMAGES === "official");
     if (image !== null) return image;
     // 対戦サーバは 1 つだけ置く。同じ部屋の 2 人が別の場所に着くと出会えない。

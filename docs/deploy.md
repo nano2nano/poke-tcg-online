@@ -83,11 +83,12 @@ main へ入れると、GitHub Actions が検査のあとに出す（`.github/wor
 
 ### 見られる人を Cloudflare Access で絞るとき
 
-Workers & Pages でこの Worker を開き、Settings > Domains & Routes の `workers.dev` で Access を有効にして、
-許可するメールアドレスをポリシーに書く。
+Zero Trust の Access で、本番のホスト名（`<名前>.<サブドメイン>.workers.dev`）を対象にした self-hosted の
+アプリケーションを作り、許可するメールアドレスをポリシーに書く。Workers & Pages の Worker の画面にある
+Access（Worker 単位の保護）は使わない。WebSocket の接続を `403` で断るので、対戦に繋がらなくなる。
 
-絞ると、deploy の job も `/api/status` を読めなくなる。Zero Trust の Access > Service Auth で
-サービストークンを作り、同じアプリケーションに Service Auth のポリシーで許可する。
+絞ると、deploy の job も `/api/status` を読めなくなる。Zero Trust の Access controls > Service credentials >
+Service Tokens でサービストークンを作り、同じアプリケーションに Service Auth のポリシーで許可する。
 そのうえで `production` の Environment secrets に 2 つ足す。
 
 | 名前                      | 値                               |

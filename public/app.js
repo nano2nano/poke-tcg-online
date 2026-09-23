@@ -83,6 +83,11 @@ const CONDITIONS = {
  * 取れなければ出さない。カードは画像が無くても、名前と種類の面で描ける。
  */
 let cardImages = false;
+/**
+ * 読めなかった画像。盤面は 1 手ごとに描き直すので、覚えておかないと公式が落ちているあいだ
+ * 1 手ごとに全部のカードを頼み直す。開き直せば、もう一度頼む。
+ */
+const failedImages = new Set();
 
 /** 検索で並べる上限。これより多ければ、語を打ち足して絞ってもらう。 */
 const SEARCH_LIMIT = 30;
@@ -176,8 +181,10 @@ function loadDisplayConfig() {
 
 /** 名前の表や画像の設定が遅れて届いたときに、出ている画面を描き直す。 */
 function redraw() {
+  const restore = focusedRowButton();
   renderDeck();
   renderSearch();
+  restore();
   if (lastView !== null) renderView(lastView);
   if (lastWatchView !== null) renderWatch(lastWatchView);
   if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
@@ -1097,7 +1104,7 @@ function renderView(view) {
   renderSide($("self"), view.self, false);
 }
 
-/** 要素を 1 つ作る。子に文字列を渡すと文字として入る。HTML としては読まない。 */
+/** 子に渡した文字列は文字として入り、HTML としては読まない。 */
 function el(tag, className, ...children) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -1107,7 +1114,9 @@ function el(tag, className, ...children) {
 
 function imageUrl(defId) {
   const cardID = cards[defId]?.cardID;
-  return cardImages && typeof cardID === "string" ? `/api/card-image/${cardID}` : null;
+  if (!cardImages || typeof cardID !== "string") return null;
+  const url = `/api/card-image/${cardID}`;
+  return failedImages.has(url) ? null : url;
 }
 
 /**
@@ -1134,7 +1143,10 @@ function cardFace(defId) {
     image.alt = "";
     image.loading = "lazy";
     image.decoding = "async";
-    image.addEventListener("error", () => image.remove());
+    image.addEventListener("error", () => {
+      failedImages.add(src);
+      image.remove();
+    });
     image.src = src;
     face.append(image);
   }
@@ -1178,7 +1190,7 @@ function openZoom({ title, defIds }) {
   if (!$("card-zoom").open) $("card-zoom").showModal();
 }
 
-// 枠の外（背景）を押しても閉じる。
+// 枠の外（背景）を押しても閉じる。中身は内側の要素が覆っているので、dialog そのものに当たるのは背景だけである。
 $("card-zoom").addEventListener("click", (event) => {
   if (event.target === event.currentTarget) $("card-zoom").close();
 });
@@ -1195,7 +1207,7 @@ document.addEventListener("keydown", (event) => {
   openZoom(zoomTargets.get(target));
 });
 
-/** 盤面の区画。`count` は山札やトラッシュのように、枚数を読む区画でだけ渡す。 */
+/** 盤面のゾーン。`count` は山札やトラッシュのように、枚数を読むゾーンでだけ渡す。 */
 function zone(name, label, count, ...children) {
   const caption = count === null ? label : `${label} ${count}`;
   const box = el("div", `zone ${name}`, ...children, el("span", "zone-label", caption));
@@ -1253,7 +1265,6 @@ function renderSide(container, side, mirrored) {
   container.replaceChildren(...(mirrored ? [hand, mat] : [mat, hand]));
 }
 
-/** トラッシュとロストゾーン。いちばん上だけを見せ、押すと新しいものから全部を出す。 */
 function pileZone(name, label, pile) {
   if (pile.length === 0) return zone(name, label, 0, emptySlot());
   const top = cardFace(pile[pile.length - 1].defId);
@@ -1294,7 +1305,6 @@ function pokemonSlot(pokemon) {
   ]);
 }
 
-/** 2 枚で 1 つのスタジアムは、左右に並べて出す。 */
 function renderStadium(container, stadium) {
   const shown =
     stadium === null

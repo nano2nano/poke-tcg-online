@@ -8,7 +8,7 @@
  *
  * 本番を Cloudflare Access の内側に置いたときは、サービストークンを環境変数
  * `CF_ACCESS_CLIENT_ID` と `CF_ACCESS_CLIENT_SECRET` で渡す（`docs/deploy.md`）。
- * 渡さないとログインの画面が返り、数を読めないまま上限まで待って失敗する。
+ * 渡さないと Access に止められ、数を読めないまま上限まで待って失敗する。
  */
 
 import { setTimeout as sleep } from "node:timers/promises";

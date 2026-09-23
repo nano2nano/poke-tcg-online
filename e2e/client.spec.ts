@@ -1220,7 +1220,6 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
   // 相手の手札は裏のままで、画像を頼まない。
   await expect(a.locator('#opponent [data-zone="hand"] .card img')).toHaveCount(0);
 
-  // 押すと大きく出る。
   await hand.first().click();
   await expect(a.locator("#card-zoom")).toBeVisible();
   await expect(a.locator("#card-zoom-cards .card")).toHaveCount(1);
@@ -1233,7 +1232,11 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
 test("画像を読めなかったカードは、名前の面で残る", async ({ browser, pageErrors }) => {
   const room = `がぞうなし-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  await withCardImages(a, (route) => route.fulfill({ status: 502, body: "" }));
+  let asked = 0;
+  await withCardImages(a, (route) => {
+    asked += 1;
+    return route.fulfill({ status: 502, body: "" });
+  });
 
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
@@ -1244,6 +1247,17 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
   await expect(hand.first()).toBeVisible();
   await expect(a.locator('#self [data-zone="hand"] .card img')).toHaveCount(0);
   await expect(hand.first().locator(".card-name")).not.toBeEmpty();
+
+  /**
+   * 盤面は 1 手ごとに描き直す。読めなかった画像を覚えていないと、公式が落ちているあいだ
+   * 1 手ごとに全部のカードを頼み直す。
+   */
+  const before = asked;
+  const events = a.locator("#events li");
+  const seen = await events.count();
+  while (!(await playOne(a)) && !(await playOne(b)));
+  await expect(events).not.toHaveCount(seen);
+  expect(asked).toBe(before);
 
   await close();
 });

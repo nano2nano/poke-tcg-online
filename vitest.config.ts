@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { engineIdentity } from "./tools/engine-identity.js";
+import { cardIdsOf, engineIdentity } from "./tools/engine-identity.js";
 
 const identity = engineIdentity();
 
@@ -8,6 +8,7 @@ export default defineConfig({
   define: {
     __ENGINE_COMMIT__: JSON.stringify(identity.commit),
     __CARD_DATA_SHA256__: JSON.stringify(identity.cardDataSha256),
+    __CARD_IDS__: JSON.stringify(cardIdsOf(identity.cardDataText)),
   },
   test: {
     include: ["tests/**/*.test.ts"],
