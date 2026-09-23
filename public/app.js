@@ -347,6 +347,8 @@ function receive(message) {
     case "ended":
       // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
       forgetSeat();
+      // 観戦トークンも終わった対戦では通らない。残すと、渡された人が開いても入れない。
+      $("watch-link").value = "";
       renderView(message.view);
       renderMoves(null);
       addEvent(describeEnd(message));
@@ -595,6 +597,7 @@ function openWatch(token) {
         return;
       case "error":
         refusal = message.message;
+        if (synced) addEvent(message.message, "watch-events");
         return;
       default:
         return;

@@ -111,11 +111,11 @@ export interface EndedMessage {
 
 /**
  * 観戦者へ出す局面一式（3.6 節）。`seedCommit` を持たないのは、seed を明かす `ended` を
- * 観戦者へは送らず、照合のしようがないからである。
+ * 観戦者へは送らず、照合のしようがないからである。`matchId` も持たない。対局ログを引くキーで、
+ * 観戦トークンと一緒に座席の外へ出す理由が無い。
  */
 export interface SpectatorSyncMessage {
   t: "spectator-sync";
-  matchId: string;
   stateVersion: number;
   view: SpectatorView;
   clock: ClockView;

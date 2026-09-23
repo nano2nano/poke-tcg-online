@@ -59,7 +59,8 @@ export class MatchHub {
   private readonly sockets = new Map<string, Map<Player, SeatSocket>>();
   /** 対戦 ID → 観戦者の接続。 */
   private readonly spectators = new Map<string, Set<SeatSocket>>();
-  private spectatorCount = 0;
+  /** 観戦者の接続 → 対戦 ID。観戦者の数はこの大きさで数え、別の数え方を持たない。 */
+  private readonly spectatorOf = new Map<SeatSocket, string>();
   private readonly now: () => number;
 
   constructor(private readonly options: HubOptions) {
@@ -99,13 +100,13 @@ export class MatchHub {
       return false;
     }
     const watching = this.spectators.get(match.matchId) ?? new Set<SeatSocket>();
-    if (watching.size >= MAX_SPECTATORS_PER_MATCH || this.spectatorCount >= MAX_SPECTATORS) {
+    if (watching.size >= MAX_SPECTATORS_PER_MATCH || this.spectatorOf.size >= MAX_SPECTATORS) {
       send(socket, { t: "error", message: "観戦している人が多すぎる" });
       return false;
     }
     watching.add(socket);
     this.spectators.set(match.matchId, watching);
-    this.spectatorCount += 1;
+    this.spectatorOf.set(socket, match.matchId);
     send(socket, this.spectatorSyncFor(match));
     return true;
   }
@@ -117,10 +118,12 @@ export class MatchHub {
       }
       if (perMatch.size === 0) this.sockets.delete(matchId);
     }
-    for (const [matchId, watching] of this.spectators) {
-      if (watching.delete(socket)) this.spectatorCount -= 1;
-      if (watching.size === 0) this.spectators.delete(matchId);
-    }
+    const watched = this.spectatorOf.get(socket);
+    if (watched === undefined) return;
+    this.spectatorOf.delete(socket);
+    const watching = this.spectators.get(watched);
+    watching?.delete(socket);
+    if (watching?.size === 0) this.spectators.delete(watched);
   }
 
   handleSpectator(socket: SeatSocket, spectatorToken: string, message: ClientMessage): void {
@@ -206,17 +209,26 @@ export class MatchHub {
       });
     }
     this.sockets.delete(match.matchId);
-    const watching = this.spectators.get(match.matchId);
-    if (watching !== undefined && match.result !== null) {
-      const ended: ServerMessage = {
-        t: "spectator-ended",
-        matchResult: match.result,
-        outcome: engineOutcome(match),
-        view: spectatorViewFor(match),
-      };
-      for (const socket of watching) send(socket, ended);
+    /**
+     * 観戦者の接続は、決着を伝えたら閉じる。数から外すだけで開いたままにすると、
+     * 対戦を開いて観戦者を積んでは終わらせることを繰り返すだけで、上限に数えられない
+     * 接続がいくらでも溜まる。座席と違い、終わった対戦へ観戦者が送るものは無い。
+     */
+    const watching = this.spectators.get(match.matchId) ?? new Set<SeatSocket>();
+    const ended =
+      match.result === null
+        ? null
+        : serialize({
+            t: "spectator-ended",
+            matchResult: match.result,
+            outcome: engineOutcome(match),
+            view: spectatorViewFor(match),
+          });
+    for (const socket of watching) {
+      this.spectatorOf.delete(socket);
+      if (ended !== null) socket.send(ended);
+      socket.close();
     }
-    if (watching !== undefined) this.spectatorCount -= watching.size;
     this.spectators.delete(match.matchId);
     // `retire` は同じ対戦を二度落とさないので、`onFinish` も 1 局につき 1 度である。
     const record = this.options.registry.retire(match);
@@ -253,9 +265,9 @@ export class MatchHub {
     }
     const watching = this.spectators.get(match.matchId);
     if (watching === undefined) return;
-    // 観戦者はみな同じ射影を受けるので、組み立ては 1 度で足りる。
-    const delta = this.spectatorDeltaFor(match, events);
-    for (const socket of watching) send(socket, delta);
+    // 観戦者はみな同じ値を受けるので、組み立ても JSON にするのも 1 度で足りる。
+    const delta = serialize(this.spectatorDeltaFor(match, events));
+    for (const socket of watching) socket.send(delta);
   }
 
   private syncFor(match: Match, seat: Player): SyncMessage {
@@ -287,7 +299,6 @@ export class MatchHub {
     const [first, second] = match.seats;
     return {
       t: "spectator-sync",
-      matchId: match.matchId,
       stateVersion: match.version,
       view: spectatorViewFor(match),
       clock: clockView(match, this.now()),
@@ -315,5 +326,9 @@ export function isToMove(match: Match, seat: Player): boolean {
 }
 
 function send(socket: SeatSocket, message: ServerMessage): void {
-  socket.send(JSON.stringify(message));
+  socket.send(serialize(message));
+}
+
+function serialize(message: ServerMessage): string {
+  return JSON.stringify(message);
 }

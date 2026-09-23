@@ -123,6 +123,7 @@ describe("観戦の配線", () => {
     expect(sync).not.toHaveProperty("legalMoves");
     expect(sync).not.toHaveProperty("seat");
     expect(sync).not.toHaveProperty("seedCommit");
+    expect(sync).not.toHaveProperty("matchId");
     // 名前は出すが、対局ログと人を結び付ける公開 id は出さない。
     expect(sync.seats.map((seat: Json) => seat.displayName)).toEqual(["さき", "あと"]);
     for (const seat of sync.seats as Json[]) expect(seat).not.toHaveProperty("playerId");
@@ -201,6 +202,8 @@ describe("観戦の配線", () => {
     expect(ended).not.toHaveProperty("seed");
     expect(ended).not.toHaveProperty("seedNonce");
     expect(ended.view.viewer).toBe("spectator");
+    // 伝えたらサーバが閉じる。開いたままだと、上限に数えられない接続が溜まる。
+    await watcher.closed;
 
     // 終わった対戦はレジストリを離れるので、同じ観戦トークンでは入れない。
     const late = await connect(watchQuery(spectatorToken));
@@ -243,13 +246,20 @@ describe("観戦の配線", () => {
 });
 
 /** 送った文字列を溜めるだけの接続。 */
-function fakeSocket(): SeatSocket & { sent: Json[] } {
-  const sent: Json[] = [];
-  return { sent, send: (data) => sent.push(JSON.parse(data) as Json), close: () => {} };
+function fakeSocket(): SeatSocket & { sent: Json[]; closed: boolean } {
+  const socket = {
+    sent: [] as Json[],
+    closed: false,
+    send: (data: string) => socket.sent.push(JSON.parse(data) as Json),
+    close: () => {
+      socket.closed = true;
+    },
+  };
+  return socket;
 }
 
 describe("サーバ全体の観戦者の上限", () => {
-  it("溢れたら断り、終わった対戦の観戦者はその場で数から外す", () => {
+  it("溢れたら断り、終わった対戦の観戦者は閉じて数から外す", () => {
     ensureCards();
     const registry = new MatchRegistry(mkdtempSync(join(tmpdir(), "poke-online-spectator-hub-")));
     const hub = new MatchHub({ registry, now: () => 0 });
@@ -259,10 +269,13 @@ describe("サーバ全体の観戦者の上限", () => {
     );
     for (const match of matches) registry.add(match);
 
+    const firstWatchers: ReturnType<typeof fakeSocket>[] = [];
     let attached = 0;
     for (const match of matches) {
       for (let index = 0; index < MAX_SPECTATORS_PER_MATCH && attached < MAX_SPECTATORS; index++) {
-        expect(hub.attachSpectator(fakeSocket(), match.spectatorToken)).toBe(true);
+        const socket = fakeSocket();
+        expect(hub.attachSpectator(socket, match.spectatorToken)).toBe(true);
+        if (match === matches[0]) firstWatchers.push(socket);
         attached += 1;
       }
     }
@@ -271,13 +284,17 @@ describe("サーバ全体の観戦者の上限", () => {
     expect(hub.attachSpectator(over, spare.spectatorToken)).toBe(false);
     expect(over.sent.map((message) => message.t)).toEqual(["error"]);
 
-    /**
-     * 決着した対戦の観戦者は、接続が閉じるのを待たずに数から外す。外し忘れると、
-     * 観戦者のいた対戦が終わるたびに枠が減り、やがて誰も観戦できなくなる。
-     */
+    // 抜けた観戦者のぶんは、ほかの対戦の観戦者が使える。
+    hub.detach(firstWatchers.pop()!);
+    expect(hub.attachSpectator(fakeSocket(), spare.spectatorToken)).toBe(true);
+    expect(hub.attachSpectator(fakeSocket(), spare.spectatorToken)).toBe(false);
+
+    // 数から外し忘れると、観戦者のいた対戦が終わるたびに枠が減り、やがて誰も観戦できなくなる。
     const first = matches[0]!;
     expect(concede(first, 0, 0)).toBe(true);
     hub.endMatch(first);
+    expect(firstWatchers.every((socket) => socket.closed)).toBe(true);
+    expect(firstWatchers.every((socket) => socket.sent.at(-1)?.t === "spectator-ended")).toBe(true);
     expect(hub.attachSpectator(fakeSocket(), spare.spectatorToken)).toBe(true);
   });
 });
