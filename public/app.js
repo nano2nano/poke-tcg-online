@@ -34,6 +34,28 @@ let seatLink = null;
  */
 const SEAT_KEY = "poke-seat";
 
+/** 組んでいるデッキを置く鍵。開き直すたびに組み直させないよう、ブラウザに残す。 */
+const DECK_KEY = "poke-deck";
+
+/**
+ * 画面が「追加」を止める枚数。デッキとして通るかを決めるのはサーバの検査（5.1 節）で、
+ * ここは押し過ぎを先に止めるだけである。
+ */
+const DECK_SIZE = 60;
+const SAME_NAME_LIMIT = 4;
+
+const STAGES = { basic: "たね", stage1: "1 進化", stage2: "2 進化" };
+const KINDS = { pokemon: "ポケモン", trainer: "トレーナーズ", energy: "エネルギー" };
+
+/** 検索で並べる上限。これより多ければ、語を打ち足して絞ってもらう。 */
+const SEARCH_LIMIT = 30;
+
+/**
+ * 組んでいるデッキ。`defId` と枚数を、足した順に持つ。送るときもこの順に並べる。
+ * インスタンス ID はデッキ配列の添字なので、並びも対局ログに残る（6.2 節）。
+ */
+let deckEntries = loadDeck();
+
 const nameOf = (defId) => cards[defId]?.name ?? defId;
 
 $("join-button").addEventListener("click", () => {
@@ -63,6 +85,12 @@ if (watchToken !== null) {
 } else {
   ensureAccount().catch((error) => setStatus(`アカウントを読めませんでした: ${error.message}`));
   resumeSeat();
+  renderDeck();
+  loadCardsThen(() => {
+    renderDeck();
+    renderSearch();
+    if (lastView !== null) renderView(lastView);
+  });
 }
 
 /**
@@ -75,9 +103,6 @@ function resumeSeat() {
   const seated = storedSeat();
   if (seated === null) return;
   openMatch(seated);
-  loadCardsThen(() => {
-    if (lastView !== null) renderView(lastView);
-  });
 }
 
 /** 名前の表を待たずに描き始める画面向け。届いたら `redraw` で描き直す。 */
@@ -145,6 +170,25 @@ $("check-button").addEventListener("click", () => {
         showDeckStatus([`デッキは ${deck.cards.length} 枚で、規則を通ります。`], "ok");
     })
     .catch((error) => showDeckStatus([`確かめられませんでした: ${error.message}`], "ng"));
+});
+
+$("card-search").addEventListener("input", renderSearch);
+
+$("import-button").addEventListener("click", () => {
+  importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
+});
+
+$("clear-button").addEventListener("click", () => {
+  if (deckEntries.length === 0 || !confirm("デッキを空にしますか。")) return;
+  setDeck([]);
+});
+
+/** 別のタブで組み替えたら、こちらも合わせる。合わせないと、次に押したときに古い中身で上書きする。 */
+window.addEventListener("storage", (event) => {
+  if (event.key !== DECK_KEY) return;
+  deckEntries = loadDeck();
+  renderDeck();
+  renderSearch();
 });
 
 $("concede-button").addEventListener("click", () => {
@@ -295,30 +339,56 @@ async function verifyShuffle(seated, ended) {
   return ["ok", "シャッフルの値を検算しました。seed は、対戦の前にコミットされた値から導けます。"];
 }
 
-/** 書かれていれば解決した結果、空ならサンプルデッキ。通らなければ null。 */
+/** 組んであればそのデッキ、空ならサンプルデッキ。通らなければ null。 */
 async function deckToSubmit() {
-  if ($("decklist").value.trim() === "") {
+  if (deckEntries.length === 0) {
     showDeckStatus(["サンプルデッキで対戦します。"], "ok");
     return getJson("/api/sample-deck");
   }
   return checkDeck();
 }
 
-/**
- * 書いたデッキをサーバに解決させる。名前から defId は一意に決まらないので、
- * 選べなかった行には候補をそのまま並べる。こちらでは推測しない。
- */
 async function checkDeck() {
-  if (Object.keys(cards).length === 0) cards = await getJson("/api/cards");
-  const text = $("decklist").value;
-  if (text.trim() === "") {
-    showDeckStatus(["デッキが書かれていません。"], "ng");
+  if (deckEntries.length === 0) {
+    showDeckStatus(["デッキにカードがありません。"], "ng");
     return null;
   }
-  const outcome = await postJson("/api/deck/resolve", { text });
-  if (outcome.ok) return outcome.deck;
-  showDeckStatus(outcome.errors ?? ["デッキが通りませんでした。"], "ng", outcome.failures ?? []);
+  const deck = { cards: deckCards() };
+  const outcome = await postJson("/api/deck/validate", deck);
+  if (outcome.ok) return deck;
+  showDeckStatus(outcome.errors ?? ["デッキが通りませんでした。"], "ng");
   return null;
+}
+
+function deckCards() {
+  return deckEntries.flatMap((entry) => Array(entry.count).fill(entry.defId));
+}
+
+/**
+ * 書いたテキストをサーバに解決させて、デッキと置き換える。名前から defId は一意に
+ * 決まらないので、選べなかった行には候補をそのまま並べる。こちらでは推測しない。
+ */
+async function importText() {
+  const text = $("decklist").value;
+  if (text.trim() === "") {
+    showDeckStatus(["テキストが空です。"], "ng");
+    return;
+  }
+  const outcome = await postJson("/api/deck/resolve", { text });
+  if (outcome.entries === undefined) {
+    showDeckStatus(outcome.errors ?? ["読み込めませんでした。"], "ng", outcome.failures ?? []);
+    return;
+  }
+  // 名前がすべて決まれば、枚数や構築の規則に通らなくても読み込む。足りない分は検索から足せばよい。
+  const merged = [];
+  for (const { defId, count } of outcome.entries) {
+    const same = merged.find((entry) => entry.defId === defId);
+    if (same === undefined) merged.push({ defId, count });
+    else same.count += count;
+  }
+  setDeck(merged);
+  if (outcome.ok) showDeckStatus([`デッキは ${deckCards().length} 枚で、規則を通ります。`], "ok");
+  else showDeckStatus(outcome.errors, "ng");
 }
 
 /** 違反の一覧。曖昧な行だけは、選べる候補を押せる形で出す。 */
@@ -338,37 +408,222 @@ function showDeckStatus(messages, tone, failures = []) {
     for (const choice of failure.choices) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = describeChoice(failure.name, choice);
-      button.addEventListener("click", () => pickChoice(failure.line, failure.name, choice.defId));
+      button.textContent = `${failure.name}（${describeCard(choice) || choice.defId}）`;
+      button.addEventListener("click", () => pickChoice(failure.line, choice.defId));
       list.append(button);
     }
     box.append(list);
   }
 }
 
-const STAGES = { basic: "たね", stage1: "1 進化", stage2: "2 進化" };
-
-function describeChoice(name, choice) {
+/** 同じ名前の別のカードを見分けるための 1 行。 */
+function describeCard(card) {
+  if (card === undefined) return "";
   const parts = [];
-  if (choice.hp !== undefined) parts.push(`HP ${choice.hp}`);
-  if (choice.stage !== undefined) parts.push(STAGES[choice.stage] ?? choice.stage);
-  if (choice.set !== undefined) parts.push(`${choice.set} ${choice.number ?? ""}`.trim());
-  return parts.length === 0 ? `${name}（${choice.defId}）` : `${name}（${parts.join(" ")}）`;
+  if (card.kind === "pokemon") {
+    parts.push(
+      [STAGES[card.stage] ?? card.stage, card.hp === undefined ? "" : `HP ${card.hp}`]
+        .filter(Boolean)
+        .join(" "),
+    );
+    if (card.abilities?.length > 0) parts.push(`特性 ${card.abilities.join("・")}`);
+    if (card.attacks?.length > 0) parts.push(`ワザ ${card.attacks.join("・")}`);
+  } else {
+    parts.push(card.basicEnergy ? "基本エネルギー" : (KINDS[card.kind] ?? card.kind));
+  }
+  if (card.set !== undefined) parts.push(`${card.set} ${card.number ?? ""}`.trim());
+  return parts.filter(Boolean).join(" / ");
 }
 
-/** 選んだ候補を、その行のうしろへ書き足す。 */
-function pickChoice(line, name, defId) {
+function pickChoice(line, defId) {
   const lines = $("decklist").value.split("\n");
   const index = line - 1;
   if (lines[index] === undefined) return;
   lines[index] = `${lines[index].trim()} ${defId}`;
   $("decklist").value = lines.join("\n");
-  checkDeck()
-    .then((deck) => {
-      if (deck !== null)
-        showDeckStatus([`デッキは ${deck.cards.length} 枚で、規則を通ります。`], "ok");
+  importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
+}
+
+/** 残したデッキを読む。形の崩れた値は捨てる。手で書き換えられることもある場所なので。 */
+function loadDeck() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem(DECK_KEY) ?? "[]");
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(saved)) return [];
+  return saved.filter(
+    (entry) => typeof entry?.defId === "string" && Number.isInteger(entry.count) && entry.count > 0,
+  );
+}
+
+function setDeck(entries) {
+  deckEntries = entries;
+  if (entries.length === 0) localStorage.removeItem(DECK_KEY);
+  else localStorage.setItem(DECK_KEY, JSON.stringify(entries));
+  renderDeck();
+  renderSearch();
+}
+
+function changeCount(defId, delta) {
+  const next = deckEntries
+    .map((entry) => (entry.defId === defId ? { defId, count: entry.count + delta } : entry))
+    .filter((entry) => entry.count > 0);
+  if (delta > 0 && !deckEntries.some((entry) => entry.defId === defId)) {
+    next.push({ defId, count: delta });
+  }
+  setDeck(next);
+  // 前に出した検査の結果は、組み替えた時点で古くなる。
+  showDeckStatus([], "");
+}
+
+function canAdd(defId) {
+  const card = cards[defId];
+  if (card === undefined) return false;
+  let total = 0;
+  let sameName = 0;
+  for (const entry of deckEntries) {
+    total += entry.count;
+    if (cards[entry.defId]?.name === card.name) sameName += entry.count;
+  }
+  return total < DECK_SIZE && (card.basicEnergy === true || sameName < SAME_NAME_LIMIT);
+}
+
+function countInDeck(defId) {
+  return deckEntries.find((entry) => entry.defId === defId)?.count ?? 0;
+}
+
+function renderDeck() {
+  const total = deckEntries.reduce((sum, entry) => sum + entry.count, 0);
+  const count = $("deck-count");
+  count.textContent = total === 0 ? "デッキは空です。" : `${total} / ${DECK_SIZE} 枚`;
+  count.classList.toggle("full", total === DECK_SIZE);
+
+  const box = $("deck-cards");
+  box.innerHTML = "";
+  // 名前の表が届くまでは、defId しか出せないので並べない。
+  if (Object.keys(cards).length === 0) return;
+  for (const kind of [...Object.keys(KINDS), null]) {
+    const entries = deckEntries.filter((entry) =>
+      kind === null ? !(cards[entry.defId]?.kind in KINDS) : cards[entry.defId]?.kind === kind,
+    );
+    if (entries.length === 0) continue;
+    const heading = document.createElement("h3");
+    const sum = entries.reduce((acc, entry) => acc + entry.count, 0);
+    heading.textContent = `${kind === null ? "そのほか" : KINDS[kind]} ${sum} 枚`;
+    box.append(heading);
+    for (const entry of entries) {
+      const row = cardRow(entry.defId);
+      const minus = rowButton("−", () => changeCount(entry.defId, -1));
+      minus.classList.add("remove");
+      const plus = rowButton("＋", () => changeCount(entry.defId, 1));
+      plus.classList.add("add");
+      plus.disabled = !canAdd(entry.defId);
+      const shown = document.createElement("span");
+      shown.className = "card-count";
+      shown.textContent = String(entry.count);
+      row.append(minus, shown, plus);
+      box.append(row);
+    }
+  }
+}
+
+/**
+ * 検索欄に打った語をすべて含むカードを並べる。名前の前方一致を先に出す。
+ *
+ * 名前だけでは絞れない。同じ名前のカードが上限より多いこともあるので、ワザや特性の名前、
+ * 収録でも当たるようにして、空白で区切って打ち足せるようにする。
+ */
+function renderSearch() {
+  const box = $("card-results");
+  box.innerHTML = "";
+  const words = searchKey($("card-search").value).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return;
+  if (Object.keys(cards).length === 0) {
+    box.append(noteLine("カードの一覧をまだ読めていません。"));
+    return;
+  }
+  const first = words[0];
+  const found = Object.entries(cards)
+    .map(([defId, card]) => ({ defId, card, name: searchKey(card.name) }))
+    .filter(({ card }) => {
+      const text = searchKey(
+        [card.name, ...(card.attacks ?? []), ...(card.abilities ?? []), card.set, card.number].join(
+          " ",
+        ),
+      );
+      return words.every((word) => text.includes(word));
     })
-    .catch((error) => showDeckStatus([`確かめられませんでした: ${error.message}`], "ng"));
+    .sort(
+      (a, b) =>
+        Number(!a.name.startsWith(first)) - Number(!b.name.startsWith(first)) ||
+        a.card.name.localeCompare(b.card.name, "ja") ||
+        (a.defId < b.defId ? -1 : 1),
+    );
+  if (found.length === 0) box.append(noteLine("見つかりません。"));
+  for (const { defId } of found.slice(0, SEARCH_LIMIT)) {
+    const row = cardRow(defId);
+    const inDeck = countInDeck(defId);
+    const shown = document.createElement("span");
+    shown.className = "card-count";
+    shown.textContent = inDeck === 0 ? "" : `${inDeck} 枚`;
+    const add = rowButton("追加", () => changeCount(defId, 1));
+    add.classList.add("add");
+    add.disabled = !canAdd(defId);
+    row.append(shown, add);
+    box.append(row);
+  }
+  if (found.length > SEARCH_LIMIT) {
+    box.append(
+      noteLine(
+        `ほかに ${found.length - SEARCH_LIMIT} 件あります。ワザの名前などを空白のあとに打ち足すと絞れます。`,
+      ),
+    );
+  }
+}
+
+/**
+ * 検索で比べる形。ひらがなで打ってもカタカナの名前に当たるようにし、全角と半角の違いも潰す。
+ */
+function searchKey(text) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\u3041-\u3096]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 0x60));
+}
+
+function cardRow(defId) {
+  const card = cards[defId];
+  const row = document.createElement("div");
+  row.className = "card-row";
+  row.dataset.defId = defId;
+  const label = document.createElement("span");
+  label.className = "card-label";
+  const name = document.createElement("strong");
+  name.textContent = card?.name ?? defId;
+  const detail = document.createElement("span");
+  detail.className = "card-detail";
+  detail.textContent = describeCard(card);
+  label.append(name, " ", detail);
+  row.append(label);
+  return row;
+}
+
+function rowButton(text, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary";
+  button.textContent = text;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function noteLine(text) {
+  const line = document.createElement("p");
+  line.className = "note";
+  line.textContent = text;
+  return line;
 }
 
 /**

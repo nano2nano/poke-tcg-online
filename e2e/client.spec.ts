@@ -951,3 +951,119 @@ test("相手のシェアが使われていなければ、そう出す", async ({
 
   await close();
 });
+
+/**
+ * デッキを組む画面。カードの名前はこのリポジトリへ書かないので、サーバの表から実行時に拾う。
+ * サンプルデッキを、画面の検索から同じ中身で組み直す。
+ */
+async function sampleDeckEntries(
+  page: Page,
+): Promise<{ defId: string; name: string; count: number }[]> {
+  const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { name: string }
+  >;
+  const counts = new Map<string, number>();
+  for (const defId of deck.cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
+  return [...counts].map(([defId, count]) => ({
+    defId,
+    count,
+    name: (cards[defId] as { name: string }).name,
+  }));
+}
+
+/** カタカナをひらがなへ。人がひらがなで打っても当たることを見るのに使う。 */
+function toHiragana(text: string): string {
+  return text.replace(/[ァ-ヶ]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0x60));
+}
+
+test("検索して組んだデッキで対戦に入り、開き直してもデッキが残る", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `くみたて-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await Promise.all([a.goto("/"), b.goto("/")]);
+
+  const entries = await sampleDeckEntries(a);
+  for (const entry of entries) {
+    await a.fill("#card-search", toHiragana(entry.name));
+    const add = a.locator(`#card-results .card-row[data-def-id="${entry.defId}"] button.add`);
+    for (let i = 0; i < entry.count; i++) await add.click();
+    // サンプルデッキのポケモンは同じ名前を 4 枚ずつ入れてある。60 枚に届く前でも 5 枚目は押せない。
+    if (entry.count === 4) await expect(add).toBeDisabled();
+  }
+  await expect(a.locator("#deck-count")).toHaveClass(/full/);
+
+  await a.reload();
+  await expect(a.locator("#deck-cards .card-row")).toHaveCount(entries.length);
+  await expect(a.locator("#deck-count")).toHaveClass(/full/);
+
+  const joined = a.waitForRequest((request) => request.url().endsWith("/api/join"));
+  await join(a, room);
+  const sent = (await joined).postDataJSON() as { deck: { cards: string[] } };
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#table")).toBeVisible();
+  await expect(b.locator("#table")).toBeVisible();
+
+  const expected = entries.flatMap((entry) => Array<string>(entry.count).fill(entry.defId));
+  expect([...sent.deck.cards].sort()).toEqual(expected.sort());
+
+  await close();
+});
+
+test("テキストの同じ名前の行は、候補を選ぶとデッキに入る", async ({ page }) => {
+  await page.goto("/");
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { name: string }
+  >;
+  const byName = new Map<string, string[]>();
+  for (const [defId, card] of Object.entries(cards)) {
+    byName.set(card.name, [...(byName.get(card.name) ?? []), defId]);
+  }
+  const [name, defIds] = [...byName].find(([, ids]) => ids.length > 1) as [string, string[]];
+
+  await page.click(".deck-text summary");
+  await page.fill("#decklist", `${name} 4`);
+  await page.click("#import-button");
+  const choices = page.locator("#deck-status .choices button");
+  await expect(choices).toHaveCount(defIds.length);
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(0);
+
+  await choices.nth(1).click();
+  const row = page.locator("#deck-cards .card-row");
+  await expect(row).toHaveCount(1);
+  await expect(row.locator(".card-count")).toHaveText("4");
+
+  // 減らしきった行は消える。
+  for (let i = 0; i < 4; i++) await row.locator("button.remove").click();
+  await expect(row).toHaveCount(0);
+});
+
+test("同じ名前のカードが並びきらなくても、ワザの名前を打ち足せば絞れる", async ({ page }) => {
+  await page.goto("/");
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { name: string; attacks?: string[] }
+  >;
+  const byName = new Map<string, string[]>();
+  for (const [defId, card] of Object.entries(cards)) {
+    byName.set(card.name, [...(byName.get(card.name) ?? []), defId]);
+  }
+  // 版の多い名前ほど、名前だけで探すと表示の上限に隠れやすい。いちばん多い名前の、並びの最後を選ぶ。
+  const [name, defIds] = [...byName].sort(([, a], [, b]) => b.length - a.length)[0] as [
+    string,
+    string[],
+  ];
+  const target = [...defIds]
+    .sort()
+    .reverse()
+    .find((defId) => (cards[defId]?.attacks ?? []).length > 0) as string;
+  const attack = (cards[target]?.attacks as string[])[0] as string;
+
+  await page.fill("#card-search", `${toHiragana(name)} ${attack}`);
+  await expect(page.locator(`#card-results .card-row[data-def-id="${target}"]`)).toBeVisible();
+});

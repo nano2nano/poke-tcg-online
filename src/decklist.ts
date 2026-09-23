@@ -12,6 +12,7 @@
 import type { CardDef, CardDefId, DeckList } from "./engine.js";
 import { getCardDef, loadGeneratedCards } from "./engine.js";
 import { DECK_SIZE } from "./deck.js";
+import { briefOf, type CardBrief } from "./card-index.js";
 
 /** 1 度に読む行数の上限。これを越える入力は、デッキではない。 */
 const MAX_LINES = 200;
@@ -19,17 +20,8 @@ const MAX_LINES = 200;
 /** 同名 4 枚制限は `validateDeck` が見る。ここで見るのは、配列が爆発しない範囲かどうかだけ。 */
 const MAX_COUNT_PER_LINE = DECK_SIZE;
 
-/** 同じ名前の候補を見分けるための値。表示の仕方はクライアントが決める。 */
-export interface CardChoice {
-  defId: CardDefId;
-  kind: string;
-  /** ポケモンだけ。同名の版はここが違う。 */
-  hp?: number;
-  stage?: "basic" | "stage1" | "stage2";
-  /** 収録。公式の表記そのまま。 */
-  set?: string;
-  number?: string;
-}
+/** 同じ名前の候補。見分けに使う値は、デッキを組む画面と同じものを添える。 */
+export type CardChoice = CardBrief & { defId: CardDefId };
 
 export interface ResolvedEntry {
   name: string;
@@ -205,14 +197,7 @@ function lookupDefId(defId: CardDefId): CardDef | null {
 }
 
 function choiceOf(def: CardDef): CardChoice {
-  const print = def.prints[0];
-  return {
-    defId: def.defId,
-    kind: def.kind,
-    ...(def.kind === "pokemon" ? { hp: def.hp, stage: def.evolutionStage } : {}),
-    ...(print === undefined ? {} : { set: print.set }),
-    ...(print?.number == null ? {} : { number: print.number }),
-  };
+  return { defId: def.defId, ...briefOf(def) };
 }
 
 export function describeDecklistFailure(failure: DecklistFailure): string {
