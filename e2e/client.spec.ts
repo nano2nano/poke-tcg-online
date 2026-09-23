@@ -1161,7 +1161,7 @@ test("候補を出したあとにテキストを書き換えていたら、候�
   await expect(page.locator("#deck-status")).toHaveClass(/ng/);
 });
 
-test("キーボードで「追加」を続けて押せる", async ({ page }) => {
+test("キーボードで「追加」を続けて押せて、押せなくなったら検索欄へ戻る", async ({ page }) => {
   await page.goto("/");
   const [entry] = await sampleDeckEntries(page);
   const { defId, name } = entry as { defId: string; name: string };
@@ -1170,10 +1170,11 @@ test("キーボードで「追加」を続けて押せる", async ({ page }) => 
     `${name} ${[entry?.set, entry?.number].filter(Boolean).join(" ")}`,
   );
   await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).focus();
-  await page.keyboard.press("Enter");
-  await page.keyboard.press("Enter");
+  for (let i = 0; i < 4; i++) await page.keyboard.press("Enter");
 
   await expect(
     page.locator(`#deck-cards .card-row[data-def-id="${defId}"] .card-count`),
-  ).toHaveText("2");
+  ).toHaveText("4");
+  // 4 枚目で押せなくなったら、フォーカスは検索欄へ移る。ページの先頭へ落ちると、打ち直しから始まる。
+  await expect(page.locator("#card-search")).toBeFocused();
 });

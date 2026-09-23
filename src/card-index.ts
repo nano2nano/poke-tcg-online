@@ -34,6 +34,7 @@ export interface CardBrief {
 }
 
 let index: Record<string, CardBrief> | null = null;
+let indexJson: string | null = null;
 
 export function cardIndex(): Record<string, CardBrief> {
   if (index !== null) return index;
@@ -41,6 +42,14 @@ export function cardIndex(): Record<string, CardBrief> {
   for (const def of loadGeneratedCards()) built[def.defId] = briefOf(def);
   index = built;
   return built;
+}
+
+/**
+ * `GET /api/cards` の本文。ページを開くたびに取られる大きさなので、文字列にするのも 1 度だけにする。
+ */
+export function cardIndexJson(): string {
+  indexJson ??= JSON.stringify(cardIndex());
+  return indexJson;
 }
 
 export function briefOf(def: CardDef): CardBrief {

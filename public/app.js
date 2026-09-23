@@ -143,16 +143,17 @@ function loadCards() {
 
 /**
  * 対戦に入る画面の名前の表。取れるまで間を空けて取り直す。取れないとデッキを組めず、
- * 繋ぎ直した盤面の名前も出ない。
+ * 繋ぎ直した盤面の名前も出ない。取り直すのは取れなかったときだけで、描く側の例外は拾わない。
  */
-function loadCardsForJoin() {
-  loadCards()
-    .then(() => {
+function loadCardsForJoin(delayMs = 5_000) {
+  loadCards().then(
+    () => {
       renderDeck();
       renderSearch();
       if (lastView !== null) renderView(lastView);
-    })
-    .catch(() => setTimeout(loadCardsForJoin, 5_000));
+    },
+    () => setTimeout(() => loadCardsForJoin(Math.min(delayMs * 2, 60_000)), delayMs),
+  );
 }
 
 /** 名前の表を待たずに描き始める画面向け。届いたら `redraw` で描き直す。 */
@@ -233,11 +234,13 @@ $("clear-button").addEventListener("click", () => {
 
 /** 別のタブで組み替えたら、こちらも合わせる。合わせないと、次に押したときに古い中身で上書きする。 */
 window.addEventListener("storage", (event) => {
-  if (event.key !== DECK_KEY) return;
+  // key が null なのは、ストレージごと消されたとき。
+  if (event.key !== DECK_KEY && event.key !== null) return;
   deckEntries = loadDeck();
   renderDeck();
   renderSearch();
-  showDeckStatus([], "");
+  // 「規則を通ります」は古くなるので消す。候補のボタンはテキスト欄のものなので残す。
+  if ($("deck-status").classList.contains("ok")) showDeckStatus([], "");
 });
 
 $("concede-button").addEventListener("click", () => {
@@ -457,7 +460,7 @@ async function importText() {
   for (const { defId, count } of outcome.entries) {
     const same = merged.find((entry) => entry.defId === defId);
     if (same === undefined) merged.push({ defId, count });
-    else same.count = Math.min(same.count + count, DECK_SIZE);
+    else same.count += count;
   }
   setDeck(merged);
   $("decklist").value = "";
@@ -525,8 +528,12 @@ function pickChoice(line, name, defId) {
   const lines = $("decklist").value.split("\n");
   const index = line - 1;
   if (lines[index] === undefined) return;
-  const tokens = lines[index].trim().split(/\s+/);
-  const countFirst = /^[0-9０-９]+$/.test(tokens[0]);
+  // サーバは全角の数字と空白を半角に直してから読む。返ってくる名前と比べるので、こちらも揃える。
+  const tokens = lines[index]
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .trim()
+    .split(/\s+/);
+  const countFirst = /^[0-9]+$/.test(tokens[0]);
   const count = countFirst ? tokens[0] : tokens[tokens.length - 1];
   const written = (countFirst ? tokens.slice(1) : tokens.slice(0, -1)).join(" ");
   // 候補を出したあとにテキストを書き換えていたら、その行はもう別のカードかもしれない。
@@ -592,10 +599,15 @@ function focusedRowButton() {
   if (row == null || action === undefined) return () => {};
   const list = row.parentElement.id;
   const { defId } = row.dataset;
+  // 同じボタンが押せなくなっていたら（上限に届いた、行が消えた）、同じ行のもう片方か検索欄へ。
   return () => {
-    $(list)
-      ?.querySelector(`.card-row[data-def-id="${CSS.escape(defId)}"] button.${action}`)
-      ?.focus();
+    const next = $(list)?.querySelector(`.card-row[data-def-id="${CSS.escape(defId)}"]`);
+    const target = [...(next?.querySelectorAll("button") ?? [])]
+      .filter((candidate) => !candidate.disabled)
+      .sort(
+        (a, b) => Number(!a.classList.contains(action)) - Number(!b.classList.contains(action)),
+      )[0];
+    (target ?? $("card-search")).focus();
   };
 }
 
