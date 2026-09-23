@@ -81,6 +81,12 @@ async function join(page: Page, room: string): Promise<void> {
  */
 async function playOne(page: Page): Promise<boolean> {
   try {
+    // 準備はまとめて出す。バトル場だけ選び、ベンチは空のまま出す。
+    if (await page.locator("#setup-submit").isVisible()) {
+      await page.locator("#setup-active button").first().click({ timeout: 1_000 });
+      await page.locator("#setup-submit").click({ timeout: 1_000 });
+      return true;
+    }
     await page.locator("#moves button").first().click({ timeout: 1_000 });
     return true;
   } catch {
@@ -143,6 +149,8 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
 test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {
   const room = `あいことば-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA = lastSeen(a);
+  const seenB = lastSeen(b);
 
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
@@ -155,8 +163,16 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
 
   /**
    * **手が並ぶのは片側だけである。** サーバは手番でない座席へ `legalMoves` を送らない。
-   * 両方に並ぶなら、射影ではなく生の局面が流れている。
+   * 両方に並ぶなら、射影ではなく生の局面が流れている。準備は両座席が同時に出すので、済ませてから見る。
    */
+  await untilBothChoose(a, b, seenA, seenB);
+  expect(await playOne(a)).toBe(true);
+  expect(await playOne(b)).toBe(true);
+  await expect.poll(() => seenA()?.phase).not.toBe("setup");
+  await expect.poll(() => seenB()?.phase).not.toBe("setup");
+  for (const page of [a, b]) {
+    await expect(page.locator("#moves button, #moves .waiting").first()).toBeVisible();
+  }
   const counts = await Promise.all([
     a.locator("#moves button").count(),
     b.locator("#moves button").count(),
@@ -171,6 +187,15 @@ interface Seen {
   phase: string;
   viewer: number;
   choice: { owner: number; kind: string } | undefined;
+  /** サーバが送った準備の状態（`choose` か `submitted`）。 */
+  setup: string | null;
+  hand: { instanceId: string; defId: string }[];
+  activeDefId: string | null;
+  benchCount: number;
+}
+
+interface SeenPokemon {
+  stack: { defId: string }[];
 }
 
 /**
@@ -180,14 +205,29 @@ interface Seen {
 function seenIn(message: {
   t: string;
   stateVersion?: number;
-  view?: { phase: string; viewer: number; choices: { owner: number; kind: string }[] };
+  setup?: { kind: string } | null;
+  view?: {
+    phase: string;
+    viewer: number;
+    choices: { owner: number; kind: string }[];
+    self: {
+      hand: { instanceId: string; defId: string }[];
+      active: SeenPokemon | null;
+      bench: (SeenPokemon | null)[];
+    };
+  };
 }): Seen | null {
   if ((message.t !== "sync" && message.t !== "delta") || message.view === undefined) return null;
+  const { view } = message;
   return {
     stateVersion: message.stateVersion ?? -1,
-    phase: message.view.phase,
-    viewer: message.view.viewer,
-    choice: message.view.choices.at(-1),
+    phase: view.phase,
+    viewer: view.viewer,
+    choice: view.choices.at(-1),
+    setup: message.setup?.kind ?? null,
+    hand: view.self.hand,
+    activeDefId: view.self.active?.stack.at(-1)?.defId ?? null,
+    benchCount: view.self.bench.filter((pokemon) => pokemon !== null).length,
   };
 }
 
@@ -204,6 +244,7 @@ function lastSeen(page: Page): () => Seen | null {
 /**
  * 自分の番の途中で相手が選ぶ局面（きぜつしたあとにバトル場へ出すポケモンなど）は、きぜつまで
  * 指さないと来ない。準備も手番のプレイヤーでない側が選ぶので、その `phase` を書き換えて作る。
+ * まとめて出す準備の状態も落とし、エンジンの選択を 1 つずつ答える画面にする。
  */
 async function relabelSetupAsMain(page: Page): Promise<() => Seen | null> {
   let seen: Seen | null = null;
@@ -212,6 +253,7 @@ async function relabelSetupAsMain(page: Page): Promise<() => Seen | null> {
     server.onMessage((raw) => {
       const message = JSON.parse(String(raw));
       if (message.view?.phase === "setup") message.view.phase = "main";
+      if (message.setup !== undefined) message.setup = null;
       seen = seenIn(message) ?? seen;
       client.send(JSON.stringify(message));
     });
@@ -227,38 +269,69 @@ async function advance(a: Page, b: Page, seen: () => Seen | null): Promise<void>
 }
 
 /**
- * 準備は 1 人ずつ順に選ぶので、バトル場に 1 体出すと、たねが手札に残ったまま相手の選ぶ番になる。
- * 待ちを「相手の番」とだけ出すと、番が相手へ移ったと読まれる。
+ * 両座席が準備をまとめて出せるところまで進める。マリガンの追加ドローが先に来ることがあり、
+ * それはエンジンの選択を 1 つずつ答える。
  */
-test("対戦準備のあいだは、選ぶ側にも待つ側にも何の準備かを出す", async ({
+async function untilBothChoose(
+  a: Page,
+  b: Page,
+  seenA: () => Seen | null,
+  seenB: () => Seen | null,
+): Promise<void> {
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  await expect.poll(() => seenB()?.phase).toBe("setup");
+  while (seenA()?.setup !== "choose" || seenB()?.setup !== "choose") {
+    const mover = seenA()?.choice?.owner === seenA()?.viewer ? a : b;
+    const before = seenA()?.stateVersion ?? -1;
+    await mover.locator("#moves button").first().click();
+    // 両座席に次の局面が届くまで待つ。片方だけ見ると、もう片方の古い準備の状態で続きを決める。
+    await expect.poll(() => seenA()?.stateVersion ?? -1).toBeGreaterThan(before);
+    await expect.poll(() => seenB()?.stateVersion ?? -1).toBeGreaterThan(before);
+  }
+}
+
+/**
+ * 実際のポケカでは両者が裏向きで同時に置く。エンジンは 1 人ずつの選択に並べるが、
+ * 番の来ていない側の答えもサーバが預かるので、後攻が先に出しても待たされない。
+ */
+test("対戦準備は、番を待たずに両座席がバトル場とベンチを選んで出せる", async ({
   browser,
   pageErrors,
 }) => {
   const room = `じゅんび-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  const seen = lastSeen(a);
+  const seenA = lastSeen(a);
+  const seenB = lastSeen(b);
   await seatPair(a, b, room);
-  await expect.poll(() => seen()?.phase).toBe("setup");
+  await untilBothChoose(a, b, seenA, seenB);
 
-  // マリガンの追加ドローが先に来ることがある。バトル場を選ぶところまで進める。
-  while (seen()?.choice?.kind !== "setup-place-active") await advance(a, b, seen);
-  const moverSeat = seen()?.choice?.owner;
-  const [mover, waiter] = moverSeat === seen()?.viewer ? [a, b] : [b, a];
+  const [first, second] = seenA()?.choice?.owner === seenA()?.viewer ? [a, b] : [b, a];
+  const seenSecond = second === a ? seenA : seenB;
+  const active = second.locator("#setup-active button").first();
+  await active.click();
+  await expect(active).toHaveAttribute("aria-pressed", "true");
+  const pickedId = await active.getAttribute("data-instance-id");
+  const pickedDefId = seenSecond()?.hand.find((card) => card.instanceId === pickedId)?.defId;
+  const benchable = await second.locator("#setup-bench button").count();
+  if (benchable > 0) await second.locator("#setup-bench button").first().click();
+  await second.locator("#setup-submit").click();
 
-  await expect(mover.locator("#moves button").first()).toBeVisible();
-  for (const page of [a, b]) await expect(page.locator("#move-prompt")).toBeVisible();
-  await expect(waiter.locator("#moves button")).toHaveCount(0);
-  await expect(waiter.locator("#moves .waiting")).toHaveCount(0);
+  // 出した側は待ちになり、まだ選んでいる先攻もそのまま選べる。
+  await expect(second.locator("#setup")).toBeHidden();
+  await expect(second.locator("#move-prompt")).toBeVisible();
+  await expect(second.locator("#moves button")).toHaveCount(0);
+  await expect(second.locator("#moves .waiting")).toHaveCount(0);
+  await expect(first.locator("#setup")).toBeVisible();
 
-  // バトル場に出すと相手の選ぶ番になる。出した側にも、準備の待ちだと出す。
-  await advance(a, b, seen);
-  expect(seen()?.choice?.owner).not.toBe(moverSeat);
-  await expect(mover.locator("#moves button")).toHaveCount(0);
-  await expect(mover.locator("#move-prompt")).toBeVisible();
-  await expect(mover.locator("#moves .waiting")).toHaveCount(0);
-
-  while (seen()?.phase === "setup") await advance(a, b, seen);
-  for (const page of [a, b]) await expect(page.locator("#move-prompt")).toBeHidden();
+  await first.locator("#setup-active button").first().click();
+  await first.locator("#setup-submit").click();
+  await expect.poll(() => seenSecond()?.phase).not.toBe("setup");
+  expect(seenSecond()?.activeDefId).toBe(pickedDefId);
+  expect(seenSecond()?.benchCount).toBe(benchable > 0 ? 1 : 0);
+  for (const page of [a, b]) {
+    await expect(page.locator("#setup")).toBeHidden();
+    await expect(page.locator("#move-prompt")).toBeHidden();
+  }
 
   await close();
 });
@@ -287,30 +360,28 @@ test("自分の番の途中で相手が選んでいるあいだは、相手の�
 });
 
 /** 座席へ戻った直後は、名前の表より先に局面が届くことがある。 */
-test("名前の表が局面より遅れて届いたら、指せる手の見出しも描き直す", async ({
+test("名前の表が局面より遅れて届いたら、準備の候補の名前も描き直す", async ({
   browser,
   pageErrors,
 }) => {
   const room = `なまえ-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  const seen = lastSeen(a);
+  const seenA = lastSeen(a);
+  const seenB = lastSeen(b);
   await seatPair(a, b, room);
-  await expect.poll(() => seen()?.choice?.kind).toBeDefined();
-  // 追加で引くかどうかの答えにはカードの名前が無い。名前の出る選択まで進める。
-  while (seen()?.choice?.kind !== "setup-place-active") await advance(a, b, seen);
-  const mover = seen()?.choice?.owner === seen()?.viewer ? a : b;
+  await untilBothChoose(a, b, seenA, seenB);
 
   const names = gate();
-  await mover.route("**/api/cards", async (route) => {
+  await a.route("**/api/cards", async (route) => {
     await names.wait;
     await route.continue();
   });
-  await mover.reload();
-  const firstMove = mover.locator("#moves button").first();
-  await expect(firstMove).toBeVisible();
-  const before = await firstMove.textContent();
+  await a.reload();
+  const candidate = a.locator("#setup-active button").first();
+  await expect(candidate).toBeVisible();
+  const before = await candidate.textContent();
   names.open();
-  await expect(firstMove).not.toHaveText(before ?? "");
+  await expect(candidate).not.toHaveText(before ?? "");
 
   await close();
 });
@@ -582,7 +653,19 @@ async function seatPair(a: Page, b: Page, room: string): Promise<void> {
   await expect(b.locator("#self .mat").first()).toBeVisible();
 }
 
+/**
+ * どちらかの座席で 1 手ぶん局面を動かす。準備は両座席がそろってはじめて動くので、
+ * 出せる座席がそろって出す。
+ */
 async function playEither(a: Page, b: Page): Promise<boolean> {
+  const setup = [];
+  for (const page of [a, b]) if (await page.locator("#setup-submit").isVisible()) setup.push(page);
+  if (setup.length > 0) {
+    for (const page of setup) await playOne(page);
+    // マリガンの追加ドローを答えていない座席は、まだ準備を出せない。それを答えれば局面が動く。
+    for (const page of [a, b]) if (!setup.includes(page)) await playOne(page);
+    return true;
+  }
   for (let attempt = 0; attempt < 6; attempt += 1) {
     if ((await playOne(a)) || (await playOne(b))) return true;
   }
@@ -803,11 +886,7 @@ test("観戦のリンクを開くと、プレイヤーを作らずに両者の�
   await expect(watcher.locator("#watch-side-1")).not.toBeEmpty();
   await expect(watcher.locator("#watch-events li")).toHaveCount(0);
 
-  let played = false;
-  for (let attempt = 0; attempt < 6 && !played; attempt += 1) {
-    played = (await playOne(a)) || (await playOne(b));
-  }
-  expect(played).toBe(true);
+  expect(await playEither(a, b)).toBe(true);
   // 座席の 1 手が観戦者へも届いた印は、できごとの行が増えることである。
   await expect(watcher.locator("#watch-events li")).not.toHaveCount(0);
 
@@ -1382,9 +1461,11 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
 test("画像を読めなかったカードは、名前の面で残る", async ({ browser, pageErrors }) => {
   const room = `がぞうなし-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  let asked = 0;
+  const seenA = lastSeen(a);
+  const seenB = lastSeen(b);
+  const asked: string[] = [];
   await withCardImages(a, (route) => {
-    asked += 1;
+    asked.push(new URL(route.request().url()).pathname);
     return route.fulfill({ status: 502, body: "" });
   });
 
@@ -1392,6 +1473,7 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await untilBothChoose(a, b, seenA, seenB);
 
   const hand = a.locator('#self [data-zone="hand"] .card');
   await expect(hand.first()).toBeVisible();
@@ -1400,14 +1482,14 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
 
   /**
    * 盤面は 1 手ごとに描き直す。読めなかった画像を覚えていないと、公式が落ちているあいだ
-   * 1 手ごとに全部のカードを頼み直す。
+   * 1 手ごとに全部のカードを頼み直す。準備が終わる手で相手の場が表になり、初めて出る画像は頼む。
    */
-  const before = asked;
   const events = a.locator("#events li");
   const seen = await events.count();
-  while (!(await playOne(a)) && !(await playOne(b)));
+  expect(await playEither(a, b)).toBe(true);
   await expect(events).not.toHaveCount(seen);
-  expect(asked).toBe(before);
+  expect(asked.length).toBeGreaterThan(0);
+  expect(new Set(asked).size).toBe(asked.length);
 
   await close();
 });

@@ -50,6 +50,17 @@ button.danger {
 .move-prompt {
   margin: 0 0 6px;
 }
+.setup h3 {
+  font-size: 0.9rem;
+  margin: 8px 0 4px;
+}
+.setup > button {
+  margin-top: 10px;
+}
+button[aria-pressed="true"] {
+  outline: 2px solid #2b6cb0;
+  background: #dbe8f6;
+}
 .moves {
   display: flex;
   flex-wrap: wrap;
