@@ -11,7 +11,7 @@ import { build, type Plugin } from "esbuild";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { engineIdentity } from "./engine-identity.js";
+import { cardIdsOf, engineIdentity } from "./engine-identity.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CARD_LOADER = join(ROOT, "engine", "src", "cardpool", "generated-cards.ts");
@@ -62,6 +62,7 @@ const result = await build({
   define: {
     __ENGINE_COMMIT__: JSON.stringify(identity.commit),
     __CARD_DATA_SHA256__: JSON.stringify(identity.cardDataSha256),
+    __CARD_IDS__: JSON.stringify(cardIdsOf(identity.cardDataText)),
   },
   plugins: [embedCardData],
   logLevel: "warning",

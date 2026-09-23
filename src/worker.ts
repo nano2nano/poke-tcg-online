@@ -2,7 +2,7 @@
  * Cloudflare Workers への載せ方（`docs/spec/battle-server.md` 3.1 節）。
  *
  * 画面（`public/`）は静的アセットとして配り、Worker はそこを通らない。Worker が受けるのは
- * `/api/` と `/ws` だけで、どちらも Durable Object `Server` の 1 つへ回す。
+ * `/api/` と `/ws` だけで、カードの画像のほかは Durable Object `Server` の 1 つへ回す。
  * 生きている対戦はその 1 つのメモリにあり、終わった対戦は R2 と D1 へ残す。
  */
 
@@ -25,6 +25,7 @@ import {
   type Connection,
 } from "./app.js";
 import { MatchArchive } from "./archive.js";
+import { cardImageRoute } from "./card-image.js";
 import { ensureSchema } from "./database.js";
 import { registerPoolCards } from "./engine.js";
 
@@ -34,10 +35,15 @@ export interface Env extends AppVars {
   SERVER: DurableObjectNamespace;
   DB: D1Database;
   ARCHIVE: R2Bucket;
+  /** `official` のときだけ、公式のカード画像へ転送する（3.7 節）。 */
+  CARD_IMAGES?: string;
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // カードの画像は Durable Object へ回さない（3.7 節）。
+    const image = await cardImageRoute(request, env.CARD_IMAGES === "official");
+    if (image !== null) return image;
     // 対戦サーバは 1 つだけ置く。同じ部屋の 2 人が別の場所に着くと出会えない。
     const server = env.SERVER.get(env.SERVER.idFromName("main"));
     return (await server.fetch(request as never)) as unknown as Response;

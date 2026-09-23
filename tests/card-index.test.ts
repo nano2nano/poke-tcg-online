@@ -27,7 +27,7 @@ describe("カードの表", () => {
     ensureCards();
     const groups = new Map<string, CardDef[]>();
     for (const def of loadGeneratedCards()) {
-      const { set: _set, number: _number, ...shown } = briefOf(def);
+      const { set: _set, number: _number, cardID: _cardID, ...shown } = briefOf(def);
       const key = canonical(shown);
       groups.set(key, [...(groups.get(key) ?? []), def]);
     }

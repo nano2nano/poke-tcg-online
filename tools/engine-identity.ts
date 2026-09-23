@@ -41,6 +41,15 @@ export function engineIdentity(): EngineIdentity {
 }
 
 /**
+ * カードデータにある公式の cardID をすべて返す。画像の転送（仕様 3.7 節）が、頼まれた cardID が
+ * カードの表にあるかを見るのに使う。Worker はカードデータを解析せずに済むよう、ビルドのときに埋め込む。
+ */
+export function cardIdsOf(cardDataText: string): string[] {
+  const defs = JSON.parse(cardDataText) as { prints: { cardID: string }[] }[];
+  return [...new Set(defs.flatMap((def) => def.prints.map((print) => print.cardID)))];
+}
+
+/**
  * `npm run deploy` を通さずに `wrangler deploy` を呼んでも、手を入れたエンジンで指した記録が
  * 手を入れる前の commit を名乗らないようにする。
  */
