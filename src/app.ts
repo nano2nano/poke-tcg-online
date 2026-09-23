@@ -7,7 +7,7 @@
  */
 
 import type { ZodType } from "zod";
-import { cardIndex } from "./card-index.js";
+import { cardIndexJson } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
@@ -337,7 +337,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     return account === null ? accountNotFound() : json(200, account);
   }
   if (request.method === "GET" && url.pathname === "/api/cards") {
-    return json(200, cardIndex());
+    return jsonText(200, cardIndexJson());
   }
   if (request.method === "GET" && url.pathname === "/api/sample-deck") {
     return json(200, sampleDeck());
@@ -421,7 +421,11 @@ function parseBody<T>(schema: ZodType<T>, body: unknown): T {
 }
 
 function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
+  return jsonText(status, JSON.stringify(body));
+}
+
+function jsonText(status: number, text: string): Response {
+  return new Response(text, {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });

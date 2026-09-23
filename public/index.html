@@ -22,15 +22,29 @@
       <p id="account" class="note"></p>
       <label>ルームコード <input id="room" placeholder="空ならマッチングキューへ" /></label>
 
-      <label for="decklist">デッキ</label>
+      <h2>デッキ</h2>
       <p class="note">
-        1 行に 1 種類、「カード名 枚数」で書きます。同じ名前のカードが複数あるときは
-        候補を出すので、行のうしろに 1
-        つ選んで書き足してください。空のままならサンプルデッキを使います。
+        カード名で検索して、候補の「追加」を押します。ワザの名前や収録でも探せます。同じ名前のカードは
+        HP やワザ、収録で見分けます。
+        組んだデッキはこのブラウザに残ります。空のままならサンプルデッキを使います。
       </p>
-      <textarea id="decklist" rows="8" placeholder="カード名 4"></textarea>
+      <input id="card-search" type="search" placeholder="カード名で検索" autocomplete="off" />
+      <div id="card-results" class="card-list"></div>
+      <p id="deck-count" class="deck-count"></p>
+      <div id="deck-cards" class="card-list"></div>
+
+      <details class="deck-text">
+        <summary>テキストから読み込む</summary>
+        <p class="note">
+          1 行に 1 種類、「カード名 枚数」で書きます。読み込むと、いまのデッキと置き換わります。
+          同じ名前のカードが複数あるときは候補を出すので、1 つ選んでください。
+        </p>
+        <textarea id="decklist" rows="8" placeholder="カード名 4"></textarea>
+        <button id="import-button" class="secondary">読み込む</button>
+      </details>
       <div class="deck-actions">
         <button id="check-button" class="secondary">デッキを確かめる</button>
+        <button id="clear-button" class="secondary">デッキを空にする</button>
         <button id="join-button">対戦をさがす</button>
       </div>
       <div id="deck-status" class="deck-status"></div>
