@@ -22,13 +22,14 @@ import {
   viewFor,
   type Match,
 } from "./match.js";
-import type {
-  ClientMessage,
-  DeltaMessage,
-  ServerMessage,
-  SpectatorDeltaMessage,
-  SpectatorSyncMessage,
-  SyncMessage,
+import {
+  SEAT_NOT_FOUND,
+  type ClientMessage,
+  type DeltaMessage,
+  type ServerMessage,
+  type SpectatorDeltaMessage,
+  type SpectatorSyncMessage,
+  type SyncMessage,
 } from "./protocol.js";
 import type { MatchRegistry, PendingSeatRef } from "./registry.js";
 import { allRevealed, reveal, type PendingMatch } from "./pending.js";
@@ -85,6 +86,7 @@ export class MatchHub {
       send(socket, {
         t: "error",
         message: "座席が見つからない（対戦が終わっているか、座席トークンが違う）",
+        code: SEAT_NOT_FOUND,
       });
       return false;
     }
@@ -275,6 +277,9 @@ export class MatchHub {
         seedShares: match.seedCommitment.shares,
         view: viewFor(match, seat),
       });
+      // 座席トークンはもう通らないので、開いたままだと画面の `ping` のたびに
+      // 「座席が見つからない」が返り続ける。
+      socket.close();
     }
     this.sockets.delete(match.matchId);
     /**

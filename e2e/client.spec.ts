@@ -347,6 +347,55 @@ test("サーバが知らない座席を覚えていたら、マッチングの�
 });
 
 /**
+ * 繋がらなかっただけでは、覚えている座席を捨てないこと。
+ *
+ * Upgrade を通さない中継を挟むと、繋ぐ段階で断られ、何も受け取らずに閉じる。
+ * これを「サーバが座席を知らない」と読んで捨てると、続いている対戦へ戻れず時間切れで負ける。
+ */
+test("繋がらずに閉じただけなら、座席を覚えたままマッチングの画面を出す", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
+  );
+  // 何も届かないまま閉じる形を作る。
+  await page.routeWebSocket(/\/ws\?/, (ws) => ws.close());
+  await page.reload();
+
+  // 開いた直後は盤面の画面が出るので、閉じたあとにしか起きないことを待ってから見る。
+  await expect(page.locator("#join")).toBeVisible();
+  await expect(page.locator("#table")).toBeHidden();
+  await expect(page.locator("#join-status")).not.toBeEmpty();
+  expect(await page.evaluate(() => localStorage.getItem("poke-seat"))).not.toBeNull();
+});
+
+/**
+ * 終わった座席を捨てるときに、別のタブが置いた新しい座席まで消さないこと。
+ * 座席はタブをまたいで同じ localStorage に置くので、消すと新しい対戦へ戻れなくなる。
+ */
+test("終わった座席を捨てても、別のタブが置いた座席は残す", async ({ browser, pageErrors }) => {
+  const context = await browser.newContext();
+  const stale = watch(await context.newPage(), pageErrors);
+  const fresh = watch(await context.newPage(), pageErrors);
+  const next = JSON.stringify({ seat: 1, seatToken: "あたらしい座席" });
+  await Promise.all([stale.goto("/"), fresh.goto("/")]);
+  await stale.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "おわった座席" })),
+  );
+  // 古いタブが断られる前に、別のタブが新しい座席を置く。
+  await stale.routeWebSocket(/\/ws\?/, async (ws) => {
+    await fresh.evaluate((seat) => localStorage.setItem("poke-seat", seat), next);
+    ws.send(JSON.stringify({ t: "error", message: "座席が見つからない", code: "seat-not-found" }));
+    ws.close();
+  });
+  await stale.reload();
+
+  await expect(stale.locator("#join")).toBeVisible();
+  expect(await stale.evaluate(() => localStorage.getItem("poke-seat"))).toBe(next);
+
+  await context.close();
+});
+
+/**
  * 終わった対戦の座席を覚えたままにしないこと。
  *
  * 覚えたままでも、次に開いたときは上の歯止めが働いてマッチングの画面へ戻る。
