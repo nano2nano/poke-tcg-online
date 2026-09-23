@@ -1,0 +1,55 @@
+# エンジン（private な submodule）を deploy key で取る。verify と deploy の両方の job が使う。
+#
+# リポジトリ自身の checkout は呼ぶ側で、既定のトークンで済ませておくこと。鍵が要るのは
+# submodule の 1 行だけで、範囲をそこへ閉じる。
+name: エンジンを取る
+description: deploy key で engine/ の submodule を取る
+inputs:
+  deploy-key:
+    description: poke-tcg-engine を読める deploy key（SSH 秘密鍵）
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: エンジンを読む鍵が渡っているか確かめる
+      shell: bash
+      env:
+        ENGINE_DEPLOY_KEY: ${{ inputs.deploy-key }}
+        IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        if [ -n "$ENGINE_DEPLOY_KEY" ]; then
+          exit 0
+        fi
+        if [ "$ACTOR" = "dependabot[bot]" ]; then
+          echo "::error::dependabot が起こした実行には Actions のシークレットが渡らない。Settings > Secrets and variables > Dependabot にも同じ名前で同じ deploy key を登録すること。"
+        elif [ "$IS_FORK" = "true" ]; then
+          echo "::error::fork から来た PR にはシークレットが渡らないため、エンジン（private な submodule）を取得できない。この PR を検査するには、同じ変更をこのリポジトリのブランチへ push すること。"
+        else
+          echo "::error::ENGINE_DEPLOY_KEY が空。Settings > Secrets and variables > Actions に、poke-tcg-engine を読める deploy key（SSH 秘密鍵）を同じ名前で登録すること。"
+        fi
+        exit 1
+
+    # この action には deploy key の秘密鍵を渡す。タグは書き換えられるので、
+    # 差し替えが起きても効かないようにコミットの SHA で固定する。更新は dependabot に任せる。
+    - name: 鍵を ssh-agent へ載せる
+      uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+      with:
+        ssh-private-key: ${{ inputs.deploy-key }}
+
+    - name: github.com のホスト鍵を控える
+      shell: bash
+      run: |
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+        sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
+
+    # .gitmodules は https の URL を持つ。鍵で取れるのは ssh なので、この 1 回だけ読み替える。
+    # 設定はリポジトリへ書き込まず、このコマンドの中だけで効かせる。
+    - name: エンジン（submodule）を取る
+      shell: bash
+      run: |
+        git -c url."git@github.com:".insteadOf=https://github.com/ \
+          submodule update --init --depth 1 engine
+        test -f engine/package.json \
+          || { echo "::error::engine/ が空のまま。submodule の取得に失敗している"; exit 1; }

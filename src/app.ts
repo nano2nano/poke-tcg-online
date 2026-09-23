@@ -159,7 +159,14 @@ export function createApp(options: AppOptions): App {
     hub,
     fetch: async (request, origin) => {
       try {
-        return await route(request, origin, { lobby, accounts, archive, now, accountLimit });
+        return await route(request, origin, {
+          lobby,
+          registry,
+          accounts,
+          archive,
+          now,
+          accountLimit,
+        });
       } catch (error) {
         /**
          * **外へ出してよい文言は `BadRequest` に載っているものだけである。**
@@ -244,6 +251,7 @@ export function createApp(options: AppOptions): App {
 
 interface RouteContext {
   lobby: Lobby;
+  registry: MatchRegistry;
   accounts: AccountStore;
   archive: MatchArchive;
   now: () => number;
@@ -251,8 +259,18 @@ interface RouteContext {
 }
 
 async function route(request: Request, origin: string, context: RouteContext): Promise<Response> {
-  const { lobby, accounts, archive, now, accountLimit } = context;
+  const { lobby, registry, accounts, archive, now, accountLimit } = context;
   const url = new URL(request.url);
+
+  /**
+   * 指している最中の対戦の数。デプロイするとこれが消えるので、自動のデプロイは 0 になるまで待つ
+   * （`docs/deploy.md`）。始める前の対戦も数える。席が決まった時点で、座席はもう対戦を待っている。
+   * 決着を残し終えてから答える。レジストリを離れた対戦も、R2 へ置き終わるまではメモリにしか無い。
+   */
+  if (request.method === "GET" && url.pathname === "/api/status") {
+    await archive.settled();
+    return json(200, { liveMatches: registry.liveCount() });
+  }
 
   // 済んだ対戦の一覧とリプレイ。どちらも自分が指した対戦しか返さない（6.6 節）。
   if (request.method === "POST" && url.pathname === "/api/matches") {

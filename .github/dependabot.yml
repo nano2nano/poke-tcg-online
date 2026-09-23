@@ -2,8 +2,11 @@
 # dependabot は `# v4` の注釈も新しい版に書き換える。
 version: 2
 updates:
+  # `/` が見るのは `.github/workflows/` だけで、自前の composite action の中は別に指す。
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     commit-message:
