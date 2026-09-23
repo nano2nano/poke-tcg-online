@@ -47,6 +47,9 @@ button.danger {
   border: 1px solid #b7791f;
   border-radius: 8px;
 }
+.move-prompt {
+  margin: 0 0 6px;
+}
 .moves {
   display: flex;
   flex-wrap: wrap;

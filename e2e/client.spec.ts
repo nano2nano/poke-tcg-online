@@ -166,6 +166,80 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
   await close();
 });
 
+interface Seen {
+  stateVersion: number;
+  phase: string;
+  viewer: number;
+  choice: { owner: number; kind: string } | undefined;
+}
+
+/**
+ * ページが最後に受け取った局面。画面の文言を読まずに、準備のどこにいるかを知るために使う。
+ * 選択の `kind` と持ち主は、持ち主でない座席の射影にも載る。
+ */
+function lastSeen(page: Page): () => Seen | null {
+  let seen: Seen | null = null;
+  page.on("websocket", (socket) => {
+    socket.on("framereceived", ({ payload }) => {
+      const message = JSON.parse(String(payload));
+      if (message.t !== "sync" && message.t !== "delta") return;
+      const { view } = message;
+      seen = {
+        stateVersion: message.stateVersion,
+        phase: view.phase,
+        viewer: view.viewer,
+        choice: view.choices.at(-1),
+      };
+    });
+  });
+  return () => seen;
+}
+
+/** 1 手指し、その局面が届くまで待つ。待たずに続けると、古い局面を見て次の手を選ぶ。 */
+async function advance(a: Page, b: Page, seen: () => Seen | null): Promise<void> {
+  const before = seen()?.stateVersion ?? -1;
+  expect(await playEither(a, b)).toBe(true);
+  await expect.poll(() => seen()?.stateVersion ?? -1).toBeGreaterThan(before);
+}
+
+/**
+ * 準備は 1 人ずつ順に選ぶので、バトル場に 1 体出すと、たねが手札に残ったまま相手の選ぶ番になる。
+ * 待ちを「相手の番」とだけ出すと、番が相手へ移ったと読まれる。
+ */
+test("対戦準備のあいだは、選ぶ側にも待つ側にも何の準備かを出す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `じゅんび-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seen = lastSeen(a);
+  await seatPair(a, b, room);
+  await expect.poll(() => seen()?.phase).toBe("setup");
+
+  // マリガンの追加ドローが先に来ることがある。バトル場を選ぶところまで進める。
+  while (seen()?.choice?.kind !== "setup-place-active") await advance(a, b, seen);
+  const moverSeat = seen()?.choice?.owner;
+  const [mover, waiter] = moverSeat === seen()?.viewer ? [a, b] : [b, a];
+
+  await expect(mover.locator("#moves button").first()).toBeVisible();
+  for (const page of [a, b]) await expect(page.locator("#move-prompt")).toBeVisible();
+  await expect(waiter.locator("#moves button")).toHaveCount(0);
+  await expect(waiter.locator("#moves .waiting")).toHaveCount(0);
+
+  // バトル場に出すと相手の選ぶ番になる。出した側にも、準備の待ちだと出す。
+  await advance(a, b, seen);
+  expect(seen()?.choice?.owner).not.toBe(moverSeat);
+  await expect(mover.locator("#moves button")).toHaveCount(0);
+  await expect(mover.locator("#move-prompt")).toBeVisible();
+  await expect(mover.locator("#moves .waiting")).toHaveCount(0);
+
+  // 準備が終われば消す。
+  while (seen()?.phase === "setup") await advance(a, b, seen);
+  for (const page of [a, b]) await expect(page.locator("#move-prompt")).toBeHidden();
+
+  await close();
+});
+
 /**
  * 1 局を 12 手だけ指して投了し、その対戦のリプレイを開いたページを返す。
  * リプレイのテストはどれもここから始めるので、1 つにまとめてある。
