@@ -68,12 +68,30 @@ function resumeSeat() {
   const seated = storedSeat();
   if (seated === null) return;
   openMatch(seated);
+  loadCardsThen(() => {
+    if (lastView !== null) renderView(lastView);
+  });
+}
+
+/** 名前の表を待たずに描き始める画面向け。届いたら `redraw` で描き直す。 */
+function loadCardsThen(redraw) {
   getJson("/api/cards")
     .then((loaded) => {
       cards = loaded;
-      if (lastView !== null) renderView(lastView);
+      redraw();
     })
     .catch(() => {});
+}
+
+function socketUrl(query) {
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${location.host}/ws?${query}`;
+}
+
+function moveRemainingText(clock) {
+  return clock.moveRemainingMs === null
+    ? ""
+    : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
 }
 
 /** レーティングと戦績を引き直す。対戦が終われば動くので、そのたびに読む。 */
@@ -269,10 +287,7 @@ function openMatch(seated) {
   $("join").hidden = true;
   $("table").hidden = false;
 
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(
-    `${scheme}://${location.host}/ws?seatToken=${encodeURIComponent(seated.seatToken)}`,
-  );
+  socket = new WebSocket(socketUrl(`seatToken=${encodeURIComponent(seated.seatToken)}`));
   /**
    * 一度でも `sync` が届いたかどうか。閉じた理由を分けるのに使う。
    *
@@ -420,10 +435,7 @@ function renderClock(clock) {
   const mine = Math.round(clock.bankMs[seat] / 1000);
   const theirs = Math.round(clock.bankMs[1 - seat] / 1000);
   const turn = clock.toMove === seat ? "あなたの番です" : "相手が考えています";
-  const remaining =
-    clock.moveRemainingMs === null
-      ? ""
-      : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
+  const remaining = moveRemainingText(clock);
   $("clock").textContent = `${turn}${remaining} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
 }
 
@@ -561,17 +573,11 @@ function openWatch(token) {
   $("join").hidden = true;
   $("history").hidden = true;
   $("watch").hidden = false;
-  getJson("/api/cards")
-    .then((loaded) => {
-      cards = loaded;
-      if (lastWatchView !== null) renderWatch(lastWatchView);
-    })
-    .catch(() => {});
+  loadCardsThen(() => {
+    if (lastWatchView !== null) renderWatch(lastWatchView);
+  });
 
-  const scheme = location.protocol === "https:" ? "wss" : "ws";
-  const watching = new WebSocket(
-    `${scheme}://${location.host}/ws?spectatorToken=${encodeURIComponent(token)}`,
-  );
+  const watching = new WebSocket(socketUrl(`spectatorToken=${encodeURIComponent(token)}`));
   let synced = false;
   let ended = false;
   /** 閉じる直前にサーバが言った理由。入れなかったときに、そのまま見せる。 */
@@ -627,10 +633,7 @@ function watchName(seat) {
 
 function renderWatchClock(clock) {
   const turn = clock.toMove === null ? "" : `${watchName(clock.toMove)} が考えています`;
-  const remaining =
-    clock.moveRemainingMs === null
-      ? ""
-      : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
+  const remaining = moveRemainingText(clock);
   const banks = [0, 1]
     .map((seat) => `${watchName(seat)} ${Math.round(clock.bankMs[seat] / 1000)} 秒`)
     .join("・");

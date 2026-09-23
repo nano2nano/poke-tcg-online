@@ -171,11 +171,9 @@ export function createApp(options: AppOptions = {}): App {
     });
     const connection = connectionOf(request);
     const attached =
-      connection === null
-        ? false
-        : connection.kind === "seat"
-          ? hub.attach(socket, connection.token)
-          : hub.attachSpectator(socket, connection.token);
+      connection?.kind === "seat"
+        ? hub.attach(socket, connection.token)
+        : connection?.kind === "spectator" && hub.attachSpectator(socket, connection.token);
     if (connection === null || !attached) {
       socket.close();
       return;

@@ -112,18 +112,20 @@ export class MatchHub {
   }
 
   detach(socket: SeatSocket): void {
+    const watched = this.spectatorOf.get(socket);
+    if (watched !== undefined) {
+      this.spectatorOf.delete(socket);
+      const watching = this.spectators.get(watched);
+      watching?.delete(socket);
+      if (watching?.size === 0) this.spectators.delete(watched);
+      return;
+    }
     for (const [matchId, perMatch] of this.sockets) {
       for (const [seat, held] of perMatch) {
         if (held === socket) perMatch.delete(seat);
       }
       if (perMatch.size === 0) this.sockets.delete(matchId);
     }
-    const watched = this.spectatorOf.get(socket);
-    if (watched === undefined) return;
-    this.spectatorOf.delete(socket);
-    const watching = this.spectators.get(watched);
-    watching?.delete(socket);
-    if (watching?.size === 0) this.spectators.delete(watched);
   }
 
   handleSpectator(socket: SeatSocket, spectatorToken: string, message: ClientMessage): void {
