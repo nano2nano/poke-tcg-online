@@ -485,6 +485,13 @@ async function importText() {
 }
 
 /**
+ * 公式のデッキコードで読み込んだデッキのうち、まだ決まっていないカードと、画面に出す理由。
+ * `deck` はこちらが最後に置いたデッキで、ほかの操作で組み替わっていたら候補を押させない。
+ * 押させると、読み込んだのとは別のデッキにカードが足される。
+ */
+let officialImport = null;
+
+/**
  * 公式のデッキコードのデッキと置き換える。取り込めないカードがあっても、取り込めたぶんで
  * 置き換え、残りはどのカードかを公式のページにある名前で出す。
  */
@@ -494,6 +501,7 @@ async function importDeckCode() {
     showDeckStatus(["デッキコードか、公式サイトのデッキのページの URL を入れてください。"], "ng");
     return;
   }
+  const before = deckEntries;
   showDeckStatus(["公式サイトからデッキを読んでいます。"], "");
   const official = await fetchOfficialDeck(code);
   if (official === null) {
@@ -505,41 +513,87 @@ async function importDeckCode() {
     showDeckStatus(outcome.errors ?? ["読み込めませんでした。"], "ng");
     return;
   }
-  // 1 枚も決まらなければ、組んでいるデッキを空にしてまで置き換えない。
-  if (outcome.entries.length > 0) setDeck(outcome.entries);
-
-  const nameOfficial = (cardId) => official.names[cardId] ?? `カード ID ${cardId}`;
-  const messages = [];
-  const ambiguous = [];
-  for (const failure of outcome.failures) {
-    const name = nameOfficial(failure.cardId);
-    if (failure.kind === "ambiguous") {
-      messages.push(
-        `${name} は ${failure.choices.length} 通りあります。1 つ選ぶと ${failure.count} 枚足します。`,
-      );
-      ambiguous.push({ failure, name });
-    } else {
-      messages.push(`このサーバに無いカードです: ${name} ${failure.count} 枚`);
-    }
+  // 待つあいだに組み替えられていたら、置き換えると組み替えたぶんが黙って消える。
+  if (deckEntries !== before) {
+    showDeckStatus(["読み込むあいだにデッキが変わったので、置き換えませんでした。"], "ng");
+    return;
   }
-  if (outcome.ok) messages.push(`デッキは ${deckCards().length} 枚で、規則を通ります。`);
-  else if (outcome.entries.length > 0) messages.push(...outcome.errors);
-  showDeckStatus(messages, outcome.ok ? "ok" : "ng");
-  for (const { failure, name } of ambiguous) {
+
+  const nameOf = (cardId) => official.names[cardId] ?? `カード ID ${cardId}`;
+  const missing = outcome.failures
+    .filter((failure) => failure.kind !== "ambiguous")
+    .map((failure) => `このサーバに無いカードです: ${nameOf(failure.cardId)} ${failure.count} 枚`);
+  const pending = outcome.failures
+    .filter((failure) => failure.kind === "ambiguous")
+    .map((failure) => ({ ...failure, name: nameOf(failure.cardId), left: failure.count }));
+  // 1 枚も決まらず選ぶものも無ければ、組んでいるデッキを空にしてまで置き換えない。
+  if (outcome.entries.length === 0 && pending.length === 0) {
+    officialImport = null;
+    showDeckStatus(missing, "ng");
+    return;
+  }
+  setDeck(outcome.entries);
+  officialImport = { deck: deckEntries, missing, pending, errors: outcome.errors };
+  showOfficialStatus();
+}
+
+/**
+ * 決まっていないカードは、候補を 1 枚ずつ押させる。左右 2 枚で 1 つのスタジアムは公式サイトでは
+ * 1 つのカードなので、枚数を左右にどう分けるかはデッキコードからは分からない。
+ */
+function showOfficialStatus() {
+  const { missing, pending, errors } = officialImport;
+  const open = pending.filter((group) => group.left > 0);
+  const messages = [...missing];
+  for (const group of open) {
+    messages.push(
+      `${group.name} は ${group.choices.length} 通りあります。あと ${group.left} 枚を選んでください。`,
+    );
+  }
+  // 選び終わるまでの検査の結果は、選ぶ前のデッキのものなので出さない。
+  if (errors === null) messages.push("デッキを確かめています。");
+  else if (open.length === 0) messages.push(...errors);
+  const ok = open.length === 0 && missing.length === 0 && errors?.length === 0;
+  if (ok) messages.push(`デッキは ${deckCards().length} 枚で、規則を通ります。`);
+  showDeckStatus(messages, ok ? "ok" : errors === null ? "" : "ng");
+  for (const group of open) {
     const list = document.createElement("div");
     list.className = "choices";
-    for (const choice of failure.choices) {
+    for (const choice of group.choices) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = `${name}（${describeCard(choice) || choice.defId}）`;
+      button.textContent = `${group.name}（${describeCard(choice) || choice.defId}）`;
       button.addEventListener("click", () => {
-        setDeck(withCount(deckEntries, choice.defId, failure.count));
-        list.remove();
+        pickOfficial(group, choice.defId).catch((error) =>
+          showDeckStatus([`確かめられませんでした: ${error.message}`], "ng"),
+        );
       });
       list.append(button);
     }
     $("deck-status").append(list);
   }
+}
+
+async function pickOfficial(group, defId) {
+  if (officialImport?.deck !== deckEntries) {
+    officialImport = null;
+    showDeckStatus(["デッキが変わっています。もう一度デッキコードを読み込んでください。"], "ng");
+    return;
+  }
+  if (group.left === 0) return;
+  group.left -= 1;
+  setDeck(withCount(deckEntries, defId, 1));
+  const current = officialImport;
+  current.deck = deckEntries;
+  const done = current.pending.every((each) => each.left === 0);
+  // 選び終えたら、検査の結果が届くまでは「確かめています」を出す。
+  if (done) current.errors = null;
+  showOfficialStatus();
+  if (!done) return;
+  const outcome = await postJson("/api/deck/validate", { cards: deckCards() });
+  if (officialImport !== current || current.deck !== deckEntries) return;
+  current.errors = outcome.errors ?? [];
+  showOfficialStatus();
 }
 
 /** 入れた文字からデッキコードを取り出す。デッキのページの URL を貼られても読む。 */
@@ -584,8 +638,10 @@ async function fetchOfficialDeck(code) {
 
   // 名前はページのスクリプトにしか無い。スクリプトは動かさず、文字列として読む。
   const names = {};
-  for (const [, cardId, name] of html.matchAll(/searchItemName\[([0-9]+)\]\s*=\s*'([^']*)'/g)) {
-    names[cardId] = name;
+  for (const [, cardId, quoted] of html.matchAll(
+    /searchItemName\[([0-9]+)\]\s*=\s*'((?:[^'\\]|\\.)*)'/g,
+  )) {
+    names[cardId] = quoted.replace(/\\(.)/g, "$1");
   }
   return { cards, names };
 }

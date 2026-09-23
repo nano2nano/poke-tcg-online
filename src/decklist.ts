@@ -196,7 +196,7 @@ function lookupDefId(defId: CardDefId): CardDef | null {
   }
 }
 
-function choiceOf(def: CardDef): CardChoice {
+export function choiceOf(def: CardDef): CardChoice {
   return { defId: def.defId, ...briefOf(def) };
 }
 

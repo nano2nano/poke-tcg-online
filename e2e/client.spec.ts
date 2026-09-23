@@ -1286,7 +1286,9 @@ test("公式のデッキコードが見つからなければ、組んでいる�
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
 });
 
-test("公式のカード ID で定義が決まらないカードは、候補を選ぶとその枚数で入る", async ({ page }) => {
+test("公式のカード ID で定義が決まらないカードは、枚数に届くまで候補を 1 枚ずつ選べる", async ({
+  page,
+}) => {
   await page.goto("/");
   const [cardId, defIds] = [...cardIds()].find(([, ids]) => ids.length > 1) as [string, string[]];
   await page.route(OFFICIAL_PAGE, (route) =>
@@ -1303,8 +1305,53 @@ test("公式のカード ID で定義が決まらないカードは、候補を�
   await expect(choices).toHaveCount(defIds.length);
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(0);
 
+  // 左右 2 枚で 1 つのスタジアムは、左と右を 1 枚ずつ入れられなければ場に出せない。
+  const sorted = [...defIds].sort();
+  await choices.nth(0).click();
   await choices.nth(1).click();
-  const row = page.locator(`#deck-cards .card-row[data-def-id="${[...defIds].sort()[1]}"]`);
-  await expect(row.locator(".card-count")).toHaveText("2");
+  for (const defId of sorted.slice(0, 2)) {
+    await expect(
+      page.locator(`#deck-cards .card-row[data-def-id="${defId}"] .card-count`),
+    ).toHaveText("1");
+  }
   await expect(choices).toHaveCount(0);
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+});
+
+test("公式サイトの返事を待つあいだにデッキを組み替えたら、置き換えない", async ({ page }) => {
+  await page.goto("/");
+  const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
+  const byDefId = new Map<string, string>();
+  for (const [cardId, defIds] of cardIds()) {
+    if (defIds.length === 1) byDefId.set(defIds[0] as string, cardId);
+  }
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(OFFICIAL_PAGE, async (route) => {
+    await held;
+    await route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: officialPage({
+        deck_ene: [
+          { cardId: byDefId.get(deck.cards[deck.cards.length - 1] as string) as string, count: 4 },
+        ],
+      }),
+    });
+  });
+
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  const [entry] = await sampleDeckEntries(page);
+  const { defId, name } = entry as { defId: string; name: string };
+  await page.fill(
+    "#card-search",
+    `${name} ${[entry?.set, entry?.number].filter(Boolean).join(" ")}`,
+  );
+  await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
+  release();
+
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+  await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
 });

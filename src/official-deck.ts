@@ -11,8 +11,7 @@
 
 import type { CardDef, CardDefId } from "./engine.js";
 import { loadGeneratedCards } from "./engine.js";
-import { briefOf } from "./card-index.js";
-import type { CardChoice } from "./decklist.js";
+import { choiceOf, type CardChoice } from "./decklist.js";
 
 export interface OfficialCard {
   cardId: string;
@@ -46,7 +45,7 @@ export function resolveOfficialDeck(cards: OfficialCard[]): OfficialDeckResult {
         kind: "ambiguous",
         cardId,
         count,
-        choices: defs.map((def) => ({ defId: def.defId, ...briefOf(def) })),
+        choices: defs.map(choiceOf),
       });
     } else {
       const same = entries.find((entry) => entry.defId === only.defId);
@@ -64,9 +63,10 @@ function byCardId(): Map<string, CardDef[]> {
   if (cardIdIndex !== null) return cardIdIndex;
   const built = new Map<string, CardDef[]>();
   for (const def of loadGeneratedCards()) {
-    for (const print of def.prints) {
-      const defs = built.get(print.cardID) ?? [];
-      if (!defs.includes(def)) built.set(print.cardID, [...defs, def]);
+    for (const cardId of new Set(def.prints.map((print) => print.cardID))) {
+      const defs = built.get(cardId);
+      if (defs === undefined) built.set(cardId, [def]);
+      else defs.push(def);
     }
   }
   for (const defs of built.values()) defs.sort((a, b) => (a.defId < b.defId ? -1 : 1));
