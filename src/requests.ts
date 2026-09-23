@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { DeckList } from "./engine.js";
 import type { JoinRequest } from "./lobby.js";
 import { SEED_SHARE_PATTERN } from "./fingerprint.js";
+import { DECK_SIZE } from "./deck.js";
 
 /** `CardDefId` は文字列なので、形としてはこれで足りる。枚数と構築の規則は `deck.ts` が見る。 */
 export const deckListSchema = z.object({
@@ -60,4 +61,19 @@ export const createAccountSchema = z.object({
 
 export const resolveDecklistSchema = z.object({
   text: z.string(),
+});
+
+/**
+ * 公式サイトのデッキコードから画面が読んだカード ID と枚数。デッキ 1 つぶんを越える数は、
+ * 解決する前に形として断る。
+ */
+export const officialDeckSchema = z.object({
+  cards: z
+    .array(
+      z.object({
+        cardId: z.string().regex(/^[0-9]+$/),
+        count: z.int().min(1).max(DECK_SIZE),
+      }),
+    )
+    .max(DECK_SIZE),
 });

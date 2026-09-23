@@ -10,6 +10,7 @@ import type { ZodType } from "zod";
 import { cardIndexJson } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
+import { resolveOfficialDeck } from "./official-deck.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub, type SeatSocket } from "./hub.js";
 import { Lobby } from "./lobby.js";
@@ -21,6 +22,7 @@ import {
   createAccountSchema,
   deckListSchema,
   joinRequestSchema,
+  officialDeckSchema,
   replayRequestSchema,
   resolveDecklistSchema,
   secretRequestSchema,
@@ -360,6 +362,23 @@ async function route(request: Request, origin: string, context: RouteContext): P
       errors,
       deck: resolved.deck,
       entries: resolved.entries,
+    });
+  }
+  /**
+   * 公式のデッキコードから画面が読んだカード ID を `defId` へ直す（5.4 節）。決まったぶんだけでも返す。
+   * 決まらなかったカードは文にせず `failures` で返す。画面は公式のページにあるカード名で出せるが、
+   * このサーバはカード ID しか受け取らない。
+   */
+  if (request.method === "POST" && url.pathname === "/api/deck/official") {
+    const { cards } = parseBody(officialDeckSchema, await readBody(request));
+    const { entries, failures } = resolveOfficialDeck(cards);
+    const deck = { cards: entries.flatMap(({ defId, count }) => Array<string>(count).fill(defId)) };
+    const errors = validateDeck(deck).map(describeViolation);
+    return json(200, {
+      ok: failures.length === 0 && errors.length === 0,
+      errors,
+      entries,
+      failures,
     });
   }
   if (request.method === "POST" && url.pathname === "/api/deck/validate") {

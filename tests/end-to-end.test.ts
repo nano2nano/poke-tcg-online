@@ -193,6 +193,49 @@ describe("人が書いたデッキ", () => {
   });
 });
 
+describe("公式のデッキコード", () => {
+  /** 収録の欄は正規データの側にある。登録済みの定義（`getCardDef`）は持っていないことがある。 */
+  function cardIdOf(defId: string): string | undefined {
+    return loadGeneratedCards().find((def) => def.defId === defId)?.prints[0]?.cardID;
+  }
+
+  it("カード ID で送ったデッキが、そのまま対戦に使える形で返る", async () => {
+    const counts = new Map<string, number>();
+    for (const defId of sampleDeck().cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
+    const cards = [...counts].map(([defId, count]) => ({
+      cardId: cardIdOf(defId),
+      count,
+    }));
+
+    const outcome = await postJson("/api/deck/official", { cards });
+
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.failures).toEqual([]);
+    expect(outcome.ok).toBe(true);
+    const entries = outcome.entries as { defId: string; count: number }[];
+    expect(entries.flatMap(({ defId, count }) => Array<string>(count).fill(defId))).toEqual(
+      sampleDeck().cards,
+    );
+  });
+
+  it("エンジンに無いカードがあれば、取り込めたぶんと一緒に返し、ok にしない", async () => {
+    const [defId] = sampleDeck().cards as [string];
+    const cardIds = loadGeneratedCards().flatMap((def) => def.prints.map((print) => print.cardID));
+    const missing = String(Math.max(...cardIds.map(Number)) + 1);
+
+    const outcome = await postJson("/api/deck/official", {
+      cards: [
+        { cardId: cardIdOf(defId), count: 4 },
+        { cardId: missing, count: 2 },
+      ],
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.entries).toEqual([{ defId, count: 4 }]);
+    expect(outcome.failures).toEqual([{ kind: "unknown-card", cardId: missing, count: 2 }]);
+  });
+});
+
 /**
  * エラーの理由は画面まで届かなければ意味がない。`/api/join` のエラー応答は `error` の 1 行ではなく
  * `errors` の並びで返るので、画面はこの形を読む。ここが変わると理由が黙って落ちる。
@@ -260,6 +303,7 @@ describe("入れなかった理由", () => {
       "/api/join",
       "/api/deck/validate",
       "/api/deck/resolve",
+      "/api/deck/official",
       "/api/matches",
       "/api/replay",
       "/api/account",
@@ -280,6 +324,7 @@ describe("入れなかった理由", () => {
       JSON.stringify({ secret: 7 }),
       JSON.stringify({ text: 7 }),
       JSON.stringify({ matchId: 7, ply: "さいしょ" }),
+      JSON.stringify({ cards: [{ cardId: 7, count: 1 }] }),
     ];
 
     for (const path of endpoints) {
@@ -308,6 +353,8 @@ describe("入れなかった理由", () => {
       ["/api/matches", { secret: 7 }],
       ["/api/join", { secret: "あ", deck: { cards: [1] } }],
       ["/api/deck/resolve", { text: 7 }],
+      ["/api/deck/official", { cards: [{ cardId: "1", count: 0 }] }],
+      ["/api/deck/official", { cards: [{ cardId: "../1", count: 1 }] }],
       ["/api/account", { displayName: 7 }],
       ["/api/replay", { secret: "あ", matchId: 7 }],
     ] as [string, unknown][]) {

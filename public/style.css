@@ -214,6 +214,23 @@ button.secondary {
   margin: 8px 0;
 }
 
+.deck-code {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 8px 0;
+}
+
+.deck-code label {
+  margin: 0;
+}
+
+#deck-code {
+  width: 16rem;
+  max-width: 100%;
+}
+
 #card-results {
   max-height: 360px;
   overflow-y: auto;
