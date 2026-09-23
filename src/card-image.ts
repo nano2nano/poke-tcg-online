@@ -68,8 +68,8 @@ export async function cardImageRoute(
     // 公式のページが一時的に違う形で返ったこともありうるので、長くは覚えさせない。
     return json(404, { code: "card-image-not-found", error: "画像が見つからない" }, "max-age=600");
   }
-  // 画像のパスは収録ごとに決まっていて変わらないので、ブラウザに長く覚えさせる。
-  // 覚えていれば、盤面を描き直すたびにここを通らずに済む。
+  // ブラウザに長く覚えさせ、盤面を描き直すたびにここを通らずに済ませる。公式がパスを変えると、
+  // 覚えている間は古いパスを読みに行って失敗し、画面は名前と種類の面に戻る。
   return new Response(null, {
     status: 302,
     headers: { location: `${OFFICIAL_SITE}${path}`, "cache-control": "public, max-age=604800" },
