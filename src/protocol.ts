@@ -83,7 +83,7 @@ export interface SyncMessage {
   clock: ClockView;
   /** シャッフルの公正さのコミット（6.4 節）。対戦中に seed そのものは渡さない。 */
   seedCommit: string;
-  /** この対戦を観戦する鍵（3.6 節）。渡すかどうかは座席の側が決める。 */
+  /** 渡すかどうかは座席の側が決める（3.6 節）。 */
   spectatorToken: string;
 }
 
@@ -110,10 +110,8 @@ export interface EndedMessage {
 }
 
 /**
- * 観戦者へ出す局面一式（3.6 節）。座席向けの `sync` とは別の形にする。
- *
- * `seat` と `legalMoves` を持たないのは、観戦者が手を持たないからである。
- * `seedCommit` も持たない。seed を明かす `ended` を観戦者へは送らないので、照合のしようがない。
+ * 観戦者へ出す局面一式（3.6 節）。`seedCommit` を持たないのは、seed を明かす `ended` を
+ * 観戦者へは送らず、照合のしようがないからである。
  */
 export interface SpectatorSyncMessage {
   t: "spectator-sync";
@@ -122,15 +120,14 @@ export interface SpectatorSyncMessage {
   view: SpectatorView;
   clock: ClockView;
   /**
-   * 画面に出す名前とレーティング。**公開 id は渡さない。** 観戦トークンは座席の外へ配られる値なので、
-   * それを持つだけで対局ログと人を結び付けられる形にしない。
+   * 公開 id は渡さない。観戦トークンは座席の外へ配られる値なので、それを持つだけで
+   * 対局ログと人を結び付けられる形にしない。
    */
   seats: [SpectatorSeat, SpectatorSeat];
 }
 
 export type SpectatorSeat = Pick<SeatInfo, "displayName" | "rating">;
 
-/** 1 手が適用された。観戦者へ送る。 */
 export interface SpectatorDeltaMessage {
   t: "spectator-delta";
   stateVersion: number;
@@ -139,10 +136,7 @@ export interface SpectatorDeltaMessage {
   clock: ClockView;
 }
 
-/**
- * 対戦が終わった。**観戦者へは seed を明かさない。** seed からは両者のデッキの中身が
- * すべて割れる。済んだ対戦を読めるのは指した本人だけである（6.6 節）。
- */
+/** seed は明かさない。seed からは両者のデッキの中身がすべて割れる（6.6 節）。 */
 export interface SpectatorEndedMessage {
   t: "spectator-ended";
   matchResult: MatchResult;

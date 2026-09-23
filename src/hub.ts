@@ -40,18 +40,11 @@ export interface SeatSocket {
 }
 
 /**
- * 1 対戦に付ける観戦者の上限（3.6 節）。
- *
- * 観戦者 1 人ぶん、1 手ごとにフルの `view`（平均 5 KB、3.2 節）を 1 通送る。上限が無いと、
- * 観戦トークンを知る 1 人が接続を積むだけで、その対戦の 1 手ごとの送信がいくらでも膨らむ。
+ * 観戦者の上限（3.6 節）。観戦者 1 人ぶん、1 手ごとにフルの `view` を 1 通送るので、
+ * 観戦トークンを知る 1 人が接続を積むだけで送信がいくらでも膨らむ。
+ * 全体にも置くのは、自分で対戦を開いて積むことを対戦の数だけ繰り返せるからである。
  */
 export const MAX_SPECTATORS_PER_MATCH = 32;
-
-/**
- * サーバ全体の観戦者の上限。1 対戦ぶんの上限だけでは、自分で対戦を開いて観戦者を
- * 積むことを対戦の数だけ繰り返せる。座席と違って観戦は止まっても誰も負けないので、
- * 溢れたら断る側に倒す。
- */
 export const MAX_SPECTATORS = 1_024;
 
 export interface HubOptions {
@@ -95,10 +88,7 @@ export class MatchHub {
     return true;
   }
 
-  /**
-   * 観戦トークンで観戦を始める（3.6 節）。座席とは別の経路で、手を指す道を持たない。
-   * 上限を越えたら断る。座席と違い、観戦は断っても誰も負けない。
-   */
+  /** 溢れたら断る。座席と違い、観戦は断っても誰も負けない。 */
   attachSpectator(socket: SeatSocket, spectatorToken: string): boolean {
     const match = this.options.registry.bySpectatorToken(spectatorToken);
     if (match === undefined) {
@@ -133,7 +123,6 @@ export class MatchHub {
     }
   }
 
-  /** 観戦者からの 1 通。局面の取り直しと生存確認だけを受ける。 */
   handleSpectator(socket: SeatSocket, spectatorToken: string, message: ClientMessage): void {
     const match = this.options.registry.bySpectatorToken(spectatorToken);
     if (match === undefined) {

@@ -5,9 +5,9 @@
  * 他人のデッキと引きが誰にでも見えると、それは対戦環境として成り立たない。
  *
  * 局面を保存しないので、盤面は `createGame` から指し直して作る。1 手ずつ辿るたびに初手から
- * やり直さないよう、途中の局面をメモリにだけ置く（`ReplayWalks`、6.6 節）。
+ * やり直さないよう、局面のキャッシュをメモリにだけ置く（`ReplayCache`）。
  * **どの対戦がどこにあるかは索引に引く**（`src/match-index.ts`）。
- * 正本は JSONL のままで、索引も途中の局面もそこから作り直せる。
+ * 唯一の情報源は JSONL のままで、索引もキャッシュもそこから作り直せる。
  */
 
 import { createHash } from "node:crypto";
@@ -200,16 +200,12 @@ export function isMatchId(value: string): boolean {
   return MATCH_ID.test(value);
 }
 
-/**
- * 途中の局面を置いておく間隔（手数）。前へ戻るときは、いちばん近い手前の 1 つから指し直す。
- */
-const WAYPOINT_EVERY = 16;
+/** 前へ戻るときは、手前のチェックポイントから指し直す。間隔はその手数の上限になる。 */
+const CHECKPOINT_EVERY = 16;
 
-/** 途中の局面を覚えておく対戦の数。越えたら、いちばん長く読まれていないものから捨てる。 */
-const REPLAY_WALKS = 32;
+const CACHED_REPLAYS = 32;
 
-/** `applied` 手まで指し終えたところ。 */
-interface Waypoint {
+interface Checkpoint {
   applied: number;
   state: GameState;
   /** `applied` 手目で起きたこと。0 手目なら対戦の開始で起きたこと。 */
@@ -219,55 +215,57 @@ interface Waypoint {
   playedMove: Move | null;
 }
 
-interface Walk {
-  /** 手数 → 局面。`WAYPOINT_EVERY` の倍数だけを置く。0 手目は必ずある。 */
-  waypoints: Map<number, Waypoint>;
-  /** 最後に辿り着いたところ。1 手ずつ進むときは、ここから指す。 */
-  latest: Waypoint;
-  /** 記録された手が指せなかった地点。そこから先へは進まない。見つかるまでは null。 */
+interface CachedReplay {
+  /** 手数がキー。0 手目は必ずある。 */
+  checkpoints: Map<number, Checkpoint>;
+  /** 最後に描いた局面。1 手ずつ進むときは、ここから 1 手だけ指せば済む。 */
+  latest: Checkpoint;
+  /** 記録された手が指せなかった地点。見つかるまでは null。 */
   divergedAt: number | null;
 }
 
 /**
- * 読み返している対戦の途中の局面を、メモリにだけ置く。
+ * リプレイの局面のキャッシュ（6.6 節）。直近に読まれた対戦から順に残す。
  *
- * **局面を保存しない決め（§6.1）は変えない。** 正本は seed と手の列のままで、ここは
- * 消えても作り直せるキャッシュである。持たないと、1 手進めるたびに初手から指し直すことになり、
- * そのあいだ進行中の対戦の手も持ち時間のスイープも止まる（§10 にあった重さ）。
+ * 無いと、1 手進めるたびに初手から指し直すことになる。同期で走るので、そのあいだ
+ * 進行中の対戦の手も持ち時間のスイープも止まる。
  *
- * 鍵は対戦 ID ではなく、盤面を決める中身（seed、デッキ、手の列）のハッシュにする。
- * 対戦 ID だけで引くと、同じ ID で中身の違う記録（書き換えや取り違え）に、前に読んだ
- * 別の対戦の盤面を返しうる。索引で同じ形の危険を踏んでいる（§6.5）。
+ * キーは対戦 ID ではなく、盤面を決める中身（seed、デッキ、手の列）のハッシュにする。
+ * 対戦 ID で引くと、同じ ID で中身の違う記録に、前に読んだ別の記録の盤面を返しうる。
  */
-export class ReplayWalks {
-  private readonly walks = new Map<string, Walk>();
+export class ReplayCache {
+  private readonly entries = new Map<string, CachedReplay>();
 
-  constructor(private readonly capacity = REPLAY_WALKS) {}
+  constructor(private readonly capacity = CACHED_REPLAYS) {}
 
-  walkFor(record: MatchRecord): Walk {
+  entryFor(record: MatchRecord): CachedReplay {
     const key = contentKey(record);
-    const found = this.walks.get(key);
+    const found = this.entries.get(key);
     if (found !== undefined) {
-      // 読んだものを後ろへ回す。`Map` は入れた順に並ぶので、先頭がいちばん古い。
-      this.walks.delete(key);
-      this.walks.set(key, found);
+      // `Map` は入れた順に並ぶ。読んだものを後ろへ回すと、先頭が最も長く読まれていないものになる。
+      this.entries.delete(key);
+      this.entries.set(key, found);
       return found;
     }
     const created = createGame({ seed: record.seed, decks: record.decks });
-    const start: Waypoint = {
+    const start: Checkpoint = {
       applied: 0,
       state: created.state,
       events: created.events,
       before: null,
       playedMove: null,
     };
-    const walk: Walk = { waypoints: new Map([[0, start]]), latest: start, divergedAt: null };
-    this.walks.set(key, walk);
-    for (const oldest of this.walks.keys()) {
-      if (this.walks.size <= this.capacity) break;
-      this.walks.delete(oldest);
+    const entry: CachedReplay = {
+      checkpoints: new Map([[0, start]]),
+      latest: start,
+      divergedAt: null,
+    };
+    this.entries.set(key, entry);
+    for (const oldest of this.entries.keys()) {
+      if (this.entries.size <= this.capacity) break;
+      this.entries.delete(oldest);
     }
-    return walk;
+    return entry;
   }
 }
 
@@ -278,23 +276,22 @@ function contentKey(record: MatchRecord): string {
     .digest("hex");
 }
 
-const sharedWalks = new ReplayWalks();
+const sharedCache = new ReplayCache();
 
-/** `target` 手以下で、いちばん近いところ。 */
-function nearest(walk: Walk, target: number): Waypoint {
-  let best = walk.waypoints.get(0)!;
+function nearest(entry: CachedReplay, target: number): Checkpoint {
+  let best = entry.checkpoints.get(0)!;
   for (
-    let at = Math.floor(target / WAYPOINT_EVERY) * WAYPOINT_EVERY;
+    let at = Math.floor(target / CHECKPOINT_EVERY) * CHECKPOINT_EVERY;
     at >= 0;
-    at -= WAYPOINT_EVERY
+    at -= CHECKPOINT_EVERY
   ) {
-    const found = walk.waypoints.get(at);
+    const found = entry.checkpoints.get(at);
     if (found !== undefined) {
       best = found;
       break;
     }
   }
-  const latest = walk.latest;
+  const latest = entry.latest;
   return latest.applied <= target && latest.applied > best.applied ? latest : best;
 }
 
@@ -311,7 +308,7 @@ export function frameAt(
   record: MatchRecord,
   ply: number,
   fingerprint: EngineFingerprint = engineFingerprint(),
-  walks: ReplayWalks = sharedWalks,
+  cache: ReplayCache = sharedCache,
 ): ReplayFrame {
   const readable = replayability(record, fingerprint);
   if (readable.kind !== "ok") {
@@ -321,10 +318,10 @@ export function frameAt(
   // 応答には 1.5 と返る。数でないものだけ 0 にし、大きすぎるものは下の丸めに任せる。
   const asked = Number.isNaN(ply) ? 0 : Math.floor(ply);
   const target = Math.max(0, Math.min(asked, record.moves.length));
-  const walk = walks.walkFor(record);
-  // 指せない地点が分かっていれば、その先へは歩かない。そこで止めて同じ答えを返す。
-  const reachable = walk.divergedAt === null ? target : Math.min(target, walk.divergedAt);
-  let at = nearest(walk, reachable);
+  const entry = cache.entryFor(record);
+  // 指せない地点が分かっていれば、その先は指さずに、見つけたときと同じ答えを返す。
+  const reachable = entry.divergedAt === null ? target : Math.min(target, entry.divergedAt);
+  let at = nearest(entry, reachable);
 
   for (let index = at.applied; index < reachable; index++) {
     const logged = record.moves[index];
@@ -336,7 +333,7 @@ export function frameAt(
      * §6.3 は版の違いを警告にとどめると決めているので、止めるのはこの 1 局のこの地点だけにする。
      */
     if (!legalMoves(at.state).some((candidate) => movesEqual(candidate, logged.move))) {
-      walk.divergedAt = index;
+      entry.divergedAt = index;
       break;
     }
     let next: ReturnType<typeof applyMove>;
@@ -345,7 +342,7 @@ export function frameAt(
     } catch (error) {
       // 合法手に在ったのに通らないのはエンジン側の話である。外へ例外メッセージは出さず、ここで止める。
       console.warn(`${record.matchId} の ${index} 手目を指せなかった:`, error);
-      walk.divergedAt = index;
+      entry.divergedAt = index;
       break;
     }
     /**
@@ -360,11 +357,12 @@ export function frameAt(
       before: at.state,
       playedMove: logged.move,
     };
-    if (at.applied % WAYPOINT_EVERY === 0) walk.waypoints.set(at.applied, at);
+    if (at.applied % CHECKPOINT_EVERY === 0) entry.checkpoints.set(at.applied, at);
   }
-  walk.latest = at;
-  // 指せない地点は、頼まれた手数がそこを越えたときだけ知らせる。手前までは普通に読める。
-  const divergedAt = walk.divergedAt !== null && target > walk.divergedAt ? walk.divergedAt : null;
+  entry.latest = at;
+  // 指せない地点は、頼まれた手数がそこを越えたときだけ知らせる。キャッシュの有無で答えを変えないため。
+  const divergedAt =
+    entry.divergedAt !== null && target > entry.divergedAt ? entry.divergedAt : null;
 
   return {
     matchId: record.matchId,

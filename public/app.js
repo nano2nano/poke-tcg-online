@@ -44,7 +44,6 @@ $("name").addEventListener("input", () => {
   nameTouched = true;
 });
 
-/** 観戦のリンクで開かれたときの観戦トークン（3.6 節）。 */
 const watchToken = new URLSearchParams(location.search).get("watch");
 
 /**
@@ -549,14 +548,12 @@ function watchUrl(spectatorToken) {
   return `${location.origin}/?watch=${encodeURIComponent(spectatorToken)}`;
 }
 
-/** 観戦している対戦の、座席ごとの名前。`spectator-sync` で届く。 */
 let watchSeats = null;
 /** 直近の観戦の盤面。カードの名前の表が遅れて届いたときに描き直す。 */
 let lastWatchView = null;
 
 /**
- * 観戦する。座席とは別の接続で、こちらから送るものは無い。
- * 生存確認はサーバの ping にブラウザが自分で答えるので、ここでは何もしない。
+ * こちらから送るものは無い。生存確認はサーバの ping にブラウザが自分で答える。
  */
 function openWatch(token) {
   $("join").hidden = true;

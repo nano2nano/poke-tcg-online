@@ -30,7 +30,7 @@ vi.mock("../src/engine.js", async (importOriginal) => {
   };
 });
 
-const { frameAt, ReplayWalks } = await import("../src/history.js");
+const { frameAt, ReplayCache } = await import("../src/history.js");
 
 describe("指せなかった手で止まるとき", () => {
   /**
@@ -48,17 +48,17 @@ describe("指せなかった手で止まるとき", () => {
 
     const stopAt = 3;
     /**
-     * 呼び出しごとに、途中の局面を何も覚えていない状態から指させる。覚えていると
-     * 手前の局面から指し始めるので、差し替えた `applyMove` が数える位置がずれる。
+     * 呼び出しごとに空のキャッシュを渡す。キャッシュがあると手前の局面から指し始めるので、
+     * 差し替えた `applyMove` が数える位置がずれる。
      */
-    const sound = frameAt(record, stopAt - 1, undefined, new ReplayWalks());
+    const sound = frameAt(record, stopAt - 1, undefined, new ReplayCache());
 
     control.throwAt = stopAt;
     control.seen = 0;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let stopped;
     try {
-      stopped = frameAt(record, record.moves.length, undefined, new ReplayWalks());
+      stopped = frameAt(record, record.moves.length, undefined, new ReplayCache());
     } finally {
       warn.mockRestore();
       control.throwAt = null;
@@ -74,29 +74,34 @@ describe("指せなかった手で止まるとき", () => {
 });
 
 /**
- * 途中の局面を覚える理由そのもの（6.6 節）。1 手進めるたびに初手から指し直すと、
- * そのあいだ進行中の対戦の手も持ち時間のスイープも止まる。
- * 時間では測らない（手元と CI で速さが違う）。指した回数で数える。
+ * キャッシュを置く理由そのもの（6.6 節）。時間では測らない（手元と CI で速さが違う）。
+ * 指した回数で数える。
  */
-describe("途中の局面を覚えたリプレイ", () => {
+describe("リプレイのキャッシュ", () => {
   it("1 手ずつ進むときも戻るときも、初手から指し直さない", () => {
     ensureCards();
-    const played = playToEnd(newMatch("walks-count"), 59);
-    if (played.match.result === null) concede(played.match, 0, 1);
-    const record = toRecord(played.match);
-    expect(record.moves.length).toBeGreaterThan(40);
-    const walks = new ReplayWalks();
-    frameAt(record, 40, undefined, walks);
+    // ランダムな手では早く決着する対戦もあるので、40 手を越えるまで手の選び方を変えて指し直す。
+    let record = toRecord(finished(playToEnd(newMatch("cache-count"), 59).match));
+    for (let rngSeed = 60; record.moves.length <= 40; rngSeed++) {
+      record = toRecord(finished(playToEnd(newMatch("cache-count"), rngSeed).match));
+    }
+    const cache = new ReplayCache();
+    frameAt(record, 40, undefined, cache);
 
     const appliedFor = (ply: number): number => {
       control.calls = 0;
-      frameAt(record, ply, undefined, walks);
+      frameAt(record, ply, undefined, cache);
       return control.calls;
     };
-    // 直前に辿り着いた 40 手目から 1 手。
+    // 最後に描いた 40 手目から 1 手。
     expect(appliedFor(41)).toBe(1);
-    // 戻るときは、手前の覚えている地点（32 手目）から。
+    // 戻るときは、手前のチェックポイント（32 手目）から。
     expect(appliedFor(33)).toBe(1);
     expect(appliedFor(40)).toBe(7);
   });
 });
+
+function finished<T extends Parameters<typeof concede>[0]>(match: T): T {
+  if (match.result === null) concede(match, 0, 1);
+  return match;
+}

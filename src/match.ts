@@ -88,9 +88,8 @@ export interface Match {
   readonly seats: [SeatInfo, SeatInfo];
   readonly seatTokens: [string, string];
   /**
-   * 観戦に使う鍵（3.6 節）。座席ごとではなく対戦に 1 つで、両座席へ渡す。
-   * 観戦者に見えるものは、どちらの座席も相手について見えているものに収まるので、
-   * どちらが配っても相手に不利は生じない。
+   * 座席ごとではなく対戦に 1 つ。観戦者に見えるものは、どちらの座席も相手について
+   * 見えているものに収まるので、どちらが配っても相手に不利は生じない（3.6 節）。
    */
   readonly spectatorToken: string;
   readonly startedAt: string;
