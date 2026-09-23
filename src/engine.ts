@@ -30,6 +30,7 @@ export {
   entersPlayOnlyViaEffect,
   hasSetupActiveOverrideAbility,
   isAceSpec,
+  stadiumHalfOf,
 } from "../engine/src/cards.js";
 export type { CardDef } from "../engine/src/cards.js";
 

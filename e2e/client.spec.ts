@@ -1092,7 +1092,7 @@ test("ACE SPEC は 2 枚目を足せない", async ({ page }) => {
   ).toBeDisabled();
 });
 
-test("カードの一覧を 1 度取れなくても、検索すると取り直す", async ({ page }) => {
+test("カードの一覧を 1 度取れなくても、取り直して組めるようになる", async ({ page }) => {
   const cards = (await (await page.request.get("/api/cards")).json()) as Record<
     string,
     { name: string }
@@ -1108,7 +1108,8 @@ test("カードの一覧を 1 度取れなくても、検索すると取り直�
   await page.goto("/");
   await expect.poll(() => failed).toBe(true);
   await page.fill("#card-search", name);
-  await expect(page.locator("#card-results .card-row").first()).toBeVisible();
+  // 取り直すまで間を空けるので、既定の待ち時間より長く待つ。
+  await expect(page.locator("#card-results .card-row").first()).toBeVisible({ timeout: 15_000 });
 });
 
 test("テキスト欄に読み込んでいないリストがあれば、対戦に入らない", async ({ page }) => {
@@ -1134,4 +1135,45 @@ test("カードの一覧が空で届いても、検索で固まらない", async
   await expect(page.locator("#card-results .note")).toBeVisible();
   // 描き直しが止まらないと、ページはこれに答えない。
   expect(await page.evaluate(() => 1)).toBe(1);
+});
+
+test("候補を出したあとにテキストを書き換えていたら、候補を押しても読み込まない", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { name: string }
+  >;
+  const counts = new Map<string, number>();
+  for (const card of Object.values(cards)) counts.set(card.name, (counts.get(card.name) ?? 0) + 1);
+  const names = [...counts].filter(([, count]) => count > 1).map(([name]) => name);
+
+  await page.click(".deck-text summary");
+  await page.fill("#decklist", `${names[0]} 4`);
+  await page.click("#import-button");
+  await expect(page.locator("#deck-status .choices button").first()).toBeVisible();
+  // 同じ行を、別の名前に書き換えてから押す。
+  await page.fill("#decklist", `${names[1]} 4`);
+  await page.locator("#deck-status .choices button").first().click();
+
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(0);
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+});
+
+test("キーボードで「追加」を続けて押せる", async ({ page }) => {
+  await page.goto("/");
+  const [entry] = await sampleDeckEntries(page);
+  const { defId, name } = entry as { defId: string; name: string };
+  await page.fill(
+    "#card-search",
+    `${name} ${[entry?.set, entry?.number].filter(Boolean).join(" ")}`,
+  );
+  await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+
+  await expect(
+    page.locator(`#deck-cards .card-row[data-def-id="${defId}"] .card-count`),
+  ).toHaveText("2");
 });

@@ -50,6 +50,25 @@ const ACE_SPEC_LIMIT = 1;
 
 const STAGES = { basic: "たね", stage1: "1 進化", stage2: "2 進化" };
 const KINDS = { pokemon: "ポケモン", trainer: "トレーナーズ", energy: "エネルギー" };
+const TYPES = {
+  grass: "草",
+  fire: "炎",
+  water: "水",
+  lightning: "雷",
+  psychic: "超",
+  fighting: "闘",
+  darkness: "悪",
+  metal: "鋼",
+  dragon: "竜",
+  colorless: "無色",
+};
+const TRAINER_KINDS = {
+  item: "グッズ",
+  supporter: "サポート",
+  tool: "ポケモンのどうぐ",
+  stadium: "スタジアム",
+};
+const HALVES = { left: "左", right: "右" };
 
 /** 検索で並べる上限。これより多ければ、語を打ち足して絞ってもらう。 */
 const SEARCH_LIMIT = 30;
@@ -90,11 +109,7 @@ if (watchToken !== null) {
   ensureAccount().catch((error) => setStatus(`アカウントを読めませんでした: ${error.message}`));
   resumeSeat();
   renderDeck();
-  loadCardsThen(() => {
-    renderDeck();
-    renderSearch();
-    if (lastView !== null) renderView(lastView);
-  });
+  loadCardsForJoin();
 }
 
 /**
@@ -124,6 +139,20 @@ function loadCards() {
     },
   );
   return loadingCards;
+}
+
+/**
+ * 対戦に入る画面の名前の表。取れるまで間を空けて取り直す。取れないとデッキを組めず、
+ * 繋ぎ直した盤面の名前も出ない。
+ */
+function loadCardsForJoin() {
+  loadCards()
+    .then(() => {
+      renderDeck();
+      renderSearch();
+      if (lastView !== null) renderView(lastView);
+    })
+    .catch(() => setTimeout(loadCardsForJoin, 5_000));
 }
 
 /** 名前の表を待たずに描き始める画面向け。届いたら `redraw` で描き直す。 */
@@ -366,7 +395,7 @@ async function deckToSubmit() {
     showDeckStatus(["サンプルデッキで対戦します。"], "ok");
     return getJson("/api/sample-deck");
   }
-  return checkDeck();
+  return validateBuiltDeck();
 }
 
 async function checkDeck() {
@@ -375,6 +404,10 @@ async function checkDeck() {
     showDeckStatus(["デッキにカードがありません。"], "ng");
     return null;
   }
+  return validateBuiltDeck();
+}
+
+async function validateBuiltDeck() {
   const deck = { cards: deckCards() };
   const outcome = await postJson("/api/deck/validate", deck);
   if (outcome.ok) return deck;
@@ -424,7 +457,7 @@ async function importText() {
   for (const { defId, count } of outcome.entries) {
     const same = merged.find((entry) => entry.defId === defId);
     if (same === undefined) merged.push({ defId, count });
-    else same.count += count;
+    else same.count = Math.min(same.count + count, DECK_SIZE);
   }
   setDeck(merged);
   $("decklist").value = "";
@@ -463,12 +496,19 @@ function describeCard(card) {
   const parts = [];
   if (card.kind === "pokemon") {
     parts.push(
-      [STAGES[card.stage] ?? card.stage, card.hp === undefined ? "" : `HP ${card.hp}`]
+      [
+        STAGES[card.stage] ?? card.stage,
+        TYPES[card.type] ?? card.type,
+        card.hp === undefined ? "" : `HP ${card.hp}`,
+      ]
         .filter(Boolean)
         .join(" "),
     );
     if (card.abilities?.length > 0) parts.push(`特性 ${card.abilities.join("・")}`);
     if (card.attacks?.length > 0) parts.push(`ワザ ${card.attacks.join("・")}`);
+  } else if (card.kind === "trainer") {
+    parts.push(TRAINER_KINDS[card.trainerKind] ?? KINDS.trainer);
+    if (card.stadiumHalf !== undefined) parts.push(`${HALVES[card.stadiumHalf]}半分`);
   } else {
     parts.push(card.basicEnergy ? "基本エネルギー" : (KINDS[card.kind] ?? card.kind));
   }
@@ -486,7 +526,14 @@ function pickChoice(line, name, defId) {
   const index = line - 1;
   if (lines[index] === undefined) return;
   const tokens = lines[index].trim().split(/\s+/);
-  const count = /^[0-9０-９]+$/.test(tokens[0]) ? tokens[0] : tokens[tokens.length - 1];
+  const countFirst = /^[0-9０-９]+$/.test(tokens[0]);
+  const count = countFirst ? tokens[0] : tokens[tokens.length - 1];
+  const written = (countFirst ? tokens.slice(1) : tokens.slice(0, -1)).join(" ");
+  // 候補を出したあとにテキストを書き換えていたら、その行はもう別のカードかもしれない。
+  if (written !== name) {
+    showDeckStatus(["テキストが変わっています。もう一度「読み込む」を押してください。"], "ng");
+    return;
+  }
   lines[index] = `${name} ${count} ${defId}`;
   $("decklist").value = lines.join("\n");
   importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
@@ -510,9 +557,11 @@ function loadDeck() {
 }
 
 function setDeck(entries) {
+  const restore = focusedRowButton();
   deckEntries = entries;
   renderDeck();
   renderSearch();
+  restore();
   // 残せなくても組むことはできる。投げると、画面と送る中身が食い違ったまま止まる。
   try {
     if (entries.length === 0) localStorage.removeItem(DECK_KEY);
@@ -530,6 +579,24 @@ function changeCount(defId, delta) {
   setDeck(next);
   // 前に出した検査の結果は、組み替えた時点で古くなる。
   showDeckStatus([], "");
+}
+
+/**
+ * 押したボタンは描き直しで作り直されるので、フォーカスが外れる。キーボードで続けて押せるよう、
+ * 描き直したあとで同じ行の同じボタンへ戻す関数を返す。
+ */
+function focusedRowButton() {
+  const button = document.activeElement;
+  const row = button?.closest?.(".card-row");
+  const action = ["add", "remove"].find((name) => button?.classList.contains(name));
+  if (row == null || action === undefined) return () => {};
+  const list = row.parentElement.id;
+  const { defId } = row.dataset;
+  return () => {
+    $(list)
+      ?.querySelector(`.card-row[data-def-id="${CSS.escape(defId)}"] button.${action}`)
+      ?.focus();
+  };
 }
 
 function canAdd(defId) {
@@ -563,7 +630,10 @@ function renderDeck() {
   const box = $("deck-cards");
   box.innerHTML = "";
   // 名前の表が届くまでは、defId しか出せないので並べない。
-  if (Object.keys(cards).length === 0) return;
+  if (Object.keys(cards).length === 0) {
+    if (total > 0) box.append(noteLine("カードの一覧を読み込んでいます。"));
+    return;
+  }
   for (const kind of [...Object.keys(KINDS), null]) {
     const entries = deckEntries.filter((entry) =>
       kind === null ? !(cards[entry.defId]?.kind in KINDS) : cards[entry.defId]?.kind === kind,
@@ -601,14 +671,7 @@ function renderSearch() {
   const words = searchKey($("card-search").value).split(/\s+/).filter(Boolean);
   if (words.length === 0) return;
   if (Object.keys(cards).length === 0) {
-    box.append(noteLine("カードの一覧をまだ読めていません。"));
-    // 取り直すのは、取りに行っていないときだけ。空の表が届いたときに描き直しが止まらなくなる。
-    if (loadingCards === null) {
-      loadCardsThen(() => {
-        renderDeck();
-        renderSearch();
-      });
-    }
+    box.append(noteLine("カードの一覧を読み込んでいます。"));
     return;
   }
   const first = words[0];
