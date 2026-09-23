@@ -21,6 +21,8 @@ let seatedNow = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
+/** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
+let lastMoves = { moves: null, playing: false };
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 /**
@@ -191,7 +193,10 @@ function redraw() {
   renderDeck();
   renderSearch();
   restore();
-  if (lastView !== null) renderView(lastView);
+  if (lastView !== null) {
+    renderView(lastView);
+    renderMoves(lastMoves.moves, lastMoves.playing);
+  }
   if (lastWatchView !== null) renderWatch(lastWatchView);
   if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
 }
@@ -1513,16 +1518,15 @@ function renderClock(clock) {
 
 /** `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。 */
 function renderMoves(moves, playing = true) {
+  lastMoves = { moves, playing };
   const prompt = $("move-prompt");
   prompt.textContent = playing ? promptText(lastView, moves !== null) : "";
   prompt.hidden = prompt.textContent === "";
   const container = $("moves");
   container.innerHTML = "";
   if (moves === null) {
-    // 準備の待ちを「相手の番」と出すと、番が相手へ移ったと読まれる。
-    if (playing && lastView?.phase !== "setup") {
-      container.innerHTML = '<p class="waiting">相手の番です</p>';
-    }
+    // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
+    if (playing && lastView?.phase !== "setup") container.append(waitingNote(lastView));
     return;
   }
   for (const move of moves) {
@@ -1531,6 +1535,21 @@ function renderMoves(moves, playing = true) {
     button.addEventListener("click", () => send({ t: "move", stateVersion, move }));
     container.append(button);
   }
+}
+
+/**
+ * 手番のプレイヤーでなくても、選択を持てば手を持つ（きぜつしたあとにバトル場へ出すポケモンなど）。
+ * 自分の番の途中で相手が選んでいるのを「相手の番」と出すと、番が移ったと読まれる。
+ */
+function waitingNote(view) {
+  const ownTurn = view?.turnPlayer === view?.viewer;
+  const note = el(
+    "p",
+    "waiting",
+    ownTurn ? "相手が選んでいます。あなたの番は続きます" : "相手の番です",
+  );
+  note.dataset.state = ownTurn ? "their-choice" : "their-turn";
+  return note;
 }
 
 /**
@@ -1548,7 +1567,10 @@ function promptText(view, mine) {
   const choice = view.choices.at(-1);
   switch (choice?.kind) {
     case "setup-place-active":
-      return "バトル場に出すたねポケモンを選んでください。ベンチに出すのは、両者がバトル場を選んだあとです。";
+      // 選ばずに済むのは、候補が特性でバトル場に出られるカードだけのとき（出さなければ引き直し）。
+      return choice.optional
+        ? "バトル場に出すポケモンを選んでください。出さなければ手札を引き直します。"
+        : "バトル場に出すたねポケモンを選んでください。ベンチに出すのは、両者がバトル場を選んだあとです。";
     case "setup-place-bench":
       return "ベンチに出すたねポケモンを選んでください。出し終えたら「ベンチに出し終える」を押します。";
     case "setup-bonus-draw":
