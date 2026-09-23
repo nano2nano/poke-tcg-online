@@ -469,6 +469,29 @@ button.secondary {
   opacity: 0.8;
 }
 
+.card-preview {
+  position: fixed;
+  z-index: 10;
+  width: var(--w);
+  pointer-events: none;
+  /* 縦に収まらない画面では、カードの縦から逆算して幅を詰める。 */
+  --w: min(420px, 90vw, calc((100vh - 96px) * 63 / 88));
+  padding: 6px;
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+}
+.card-preview p {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+}
+/* 長押しで文字の選択や画像のメニューが始まると、プレビューに重なる。 */
+.card {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .card-row .card.thumb {
   --w: 36px;
   padding: 1px;

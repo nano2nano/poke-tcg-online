@@ -1319,7 +1319,6 @@ function cardFace(defId) {
   face.dataset.defId = defId;
   face.dataset.kind = card?.kind ?? "";
   if (card?.type !== undefined) face.dataset.type = card.type;
-  face.title = card === undefined ? defId : `${card.name}\n${describeCard(card)}`;
   face.append(el("span", "card-name", card?.name ?? defId));
   const sub =
     card?.hp !== undefined
@@ -1396,6 +1395,134 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
   openZoom(zoomTargets.get(target));
 });
+
+/**
+ * マウスを載せている間（タッチ端末では長押しの間）、カードを大きく出す。印刷の小さな文字は
+ * 盤面の大きさでは読めない。押して開く拡大と違い、指す操作の邪魔をしないよう、読むだけの窓にする。
+ */
+const LONG_PRESS_MS = 400;
+/** 長押しの途中で指がこれより動いたら、スクロールのつもりとみなしてやめる。 */
+const LONG_PRESS_SLOP_PX = 10;
+const PREVIEW_MARGIN_PX = 8;
+const PREVIEW_GAP_PX = 12;
+
+let previewTarget = null;
+let longPress = null;
+let lastMouse = null;
+// 盤面は相手の手でも描き直され、載せていたカードが消える。マウスなら下に来たカードを出し直す。
+// 指で押している最中に消えたなら、指の下のカードは押したものと別なので閉じる。
+const previewWatch = new MutationObserver(() => {
+  if (previewTarget === null || previewTarget.isConnected) return;
+  const under =
+    longPress === null && lastMouse !== null
+      ? document.elementFromPoint(lastMouse.x, lastMouse.y)
+      : null;
+  const card = previewable(under);
+  if (card === null) hidePreview();
+  else showPreview(card, "mouse");
+});
+
+function previewable(target) {
+  const card = target?.closest?.(".card[data-def-id]");
+  // 開いた拡大の中のカードは、もう大きい。
+  if (card == null || card.closest("dialog, #card-preview") !== null) return null;
+  return card;
+}
+
+function showPreview(card, pointerType) {
+  const defId = card.dataset.defId;
+  const preview = $("card-preview");
+  if (previewTarget === null || preview.dataset.defId !== defId) {
+    preview.dataset.defId = defId;
+    preview.replaceChildren(
+      cardFace(defId),
+      el("p", "", el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])),
+    );
+  }
+  previewTarget = card;
+  previewWatch.observe(document.body, { childList: true, subtree: true });
+  preview.hidden = false;
+  placePreview(preview, card.getBoundingClientRect(), pointerType);
+}
+
+function hidePreview() {
+  previewTarget = null;
+  previewWatch.disconnect();
+  $("card-preview").hidden = true;
+}
+
+/**
+ * カードの横に出し、入らなければ上下、それも無理なら画面の中央に重ねる。
+ * 指で押しているときは、指と手のひらが下と横を隠すので上を先に試す。
+ */
+function placePreview(preview, rect, pointerType) {
+  const width = preview.offsetWidth;
+  const height = preview.offsetHeight;
+  const maxX = window.innerWidth - width - PREVIEW_MARGIN_PX;
+  const maxY = window.innerHeight - height - PREVIEW_MARGIN_PX;
+  const clamp = (value, max) => Math.max(PREVIEW_MARGIN_PX, Math.min(value, max));
+  const beside = clamp(rect.top + rect.height / 2 - height / 2, maxY);
+  const across = clamp(rect.left + rect.width / 2 - width / 2, maxX);
+  const right = { x: rect.right + PREVIEW_GAP_PX, y: beside };
+  const left = { x: rect.left - PREVIEW_GAP_PX - width, y: beside };
+  const above = { x: across, y: rect.top - PREVIEW_GAP_PX - height };
+  const below = { x: across, y: rect.bottom + PREVIEW_GAP_PX };
+  const order = pointerType === "touch" ? [above, right, left, below] : [right, left, above, below];
+  const spot = order.find(
+    ({ x, y }) => x >= PREVIEW_MARGIN_PX && x <= maxX && y >= PREVIEW_MARGIN_PX && y <= maxY,
+  ) ?? {
+    x: clamp((window.innerWidth - width) / 2, maxX),
+    y: clamp((window.innerHeight - height) / 2, maxY),
+  };
+  preview.style.left = `${spot.x}px`;
+  preview.style.top = `${spot.y}px`;
+}
+
+document.addEventListener("pointerover", (event) => {
+  if (event.pointerType === "touch") return;
+  const card = previewable(event.target);
+  if (card !== null) showPreview(card, event.pointerType);
+});
+document.addEventListener("pointerout", (event) => {
+  if (event.pointerType === "touch" || previewTarget === null) return;
+  if (previewTarget.contains(event.relatedTarget)) return;
+  hidePreview();
+});
+document.addEventListener("pointerdown", (event) => {
+  // クリックで拡大が開くか盤面が変わるので、出したままだと邪魔になる。
+  if (event.pointerType !== "touch") {
+    hidePreview();
+    return;
+  }
+  if (longPress !== null) endLongPress();
+  const card = previewable(event.target);
+  if (card === null) return;
+  const timer = setTimeout(() => {
+    if (card.isConnected) showPreview(card, "touch");
+  }, LONG_PRESS_MS);
+  longPress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer };
+});
+document.addEventListener("pointermove", (event) => {
+  if (event.pointerType !== "touch") lastMouse = { x: event.clientX, y: event.clientY };
+  if (longPress?.pointerId !== event.pointerId) return;
+  const moved = Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y);
+  if (moved > LONG_PRESS_SLOP_PX) endLongPress();
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  document.addEventListener(type, (event) => {
+    if (longPress?.pointerId === event.pointerId) endLongPress();
+  });
+}
+// 長押しで出る画像の保存や選択のメニューが、プレビューの上に重なる。
+document.addEventListener("contextmenu", (event) => {
+  if (longPress !== null) event.preventDefault();
+});
+
+function endLongPress() {
+  clearTimeout(longPress.timer);
+  longPress = null;
+  hidePreview();
+}
 
 /** 盤面のゾーン。`count` は山札やトラッシュのように、枚数を読むゾーンでだけ渡す。 */
 function zone(name, label, count, ...children) {

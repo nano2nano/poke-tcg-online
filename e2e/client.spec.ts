@@ -1579,6 +1579,129 @@ test("公式のカード ID で定義が決まらないカードは、枚数に�
   await expect(page.locator("#deck-status")).toHaveClass(/ng/);
 });
 
+/** 要素の枠が重なっているか。 */
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+
+test("カードにマウスを載せると横に大きく出て、外すと消える", async ({ browser, pageErrors }) => {
+  const room = `のせる-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+
+  const hand = a.locator('#self [data-zone="hand"] .card');
+  const preview = a.locator("#card-preview");
+  await expect(hand.first()).toBeVisible();
+  await expect(preview).toBeHidden();
+
+  const card = hand.last();
+  const defId = await card.getAttribute("data-def-id");
+  await card.hover();
+  await expect(preview).toBeVisible();
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", defId as string);
+  const shown = (await preview.boundingBox()) as Box;
+  const under = (await card.boundingBox()) as Box;
+  const viewport = a.viewportSize() as { width: number; height: number };
+  expect(shown.width).toBeGreaterThan(under.width * 2);
+  expect(overlaps(shown, under)).toBe(false);
+  expect(shown.x).toBeGreaterThanOrEqual(0);
+  expect(shown.y).toBeGreaterThanOrEqual(0);
+  expect(shown.x + shown.width).toBeLessThanOrEqual(viewport.width);
+  expect(shown.y + shown.height).toBeLessThanOrEqual(viewport.height);
+
+  // 盤面の描き直しと同じく、載せているカードを差し替える。閉じずに、マウスの下に来た方へ移る。
+  const hides = await preview.evaluateHandle((node) => {
+    const seen = { count: 0 };
+    // この tsconfig は DOM の型を読まないので、ページの側から引く。
+    const Observer = Reflect.get(globalThis, "MutationObserver");
+    new Observer(() => {
+      if (node.hidden) seen.count += 1;
+    }).observe(node, { attributes: true, attributeFilter: ["hidden"] });
+    return seen;
+  });
+  const other = "差し替えたカード";
+  await card.evaluate((node, defId) => {
+    const replacement = node.cloneNode() as typeof node;
+    replacement.dataset.defId = defId;
+    node.replaceWith(replacement);
+  }, other);
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", other);
+  expect(await hides.evaluate((seen) => seen.count)).toBe(0);
+
+  // 下にカードが無くなったら閉じる。
+  await hand.last().evaluate((node) => node.remove());
+  await expect(preview).toBeHidden();
+
+  await hand.first().hover();
+  await expect(preview).toBeVisible();
+  await a.mouse.move(0, 0);
+  await expect(preview).toBeHidden();
+
+  // 押して開く拡大の中では出さない。
+  await hand.first().click();
+  await expect(a.locator("#card-zoom")).toBeVisible();
+  await a.locator("#card-zoom-cards .card").first().hover();
+  await expect(preview).toBeHidden();
+
+  await close();
+});
+
+test.describe("タッチ端末", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+
+  /** CDP で指を置いて離す。Playwright の `tap` は置いてすぐ離すので、長押しを作れない。 */
+  async function finger(page: Page, box: Box): Promise<() => Promise<void>> {
+    const cdp = await page.context().newCDPSession(page);
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    return async () => {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+  }
+
+  test("長押しのあいだだけ大きく出る", async ({ page }) => {
+    await withCardImages(page, (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
+    );
+    await page.goto("/");
+    await page.fill("#card-search", "エネルギー");
+    const thumb = page.locator("#card-results .card-row .card").first();
+    await expect(thumb).toBeVisible();
+    const defId = await thumb.getAttribute("data-def-id");
+    const preview = page.locator("#card-preview");
+    const box = (await thumb.boundingBox()) as Box;
+
+    // 見るのは、画面が長押しのメニューを止めたかどうか。
+    const menus = await thumb.evaluateHandle((node) => {
+      const prevented: boolean[] = [];
+      node.ownerDocument.addEventListener("contextmenu", (event: { defaultPrevented: boolean }) =>
+        prevented.push(event.defaultPrevented),
+      );
+      return prevented;
+    });
+
+    const lift = await finger(page, box);
+    await expect(preview).toBeVisible();
+    await expect(preview.locator(".card")).toHaveAttribute("data-def-id", defId as string);
+    await expect(preview.locator(".card img")).toBeVisible();
+    const shown = (await preview.boundingBox()) as Box;
+    expect(overlaps(shown, box)).toBe(false);
+    expect(shown.x + shown.width).toBeLessThanOrEqual(390);
+    // ヘッドレスの Chromium は長押しでメニューを出さないので、届いたときの扱いを直に見る。
+    await thumb.dispatchEvent("contextmenu");
+    await lift();
+    await expect(preview).toBeHidden();
+    // 長押しでないときのメニューは止めない。
+    await thumb.dispatchEvent("contextmenu");
+    expect(await menus.evaluate((prevented) => [...prevented])).toEqual([true, false]);
+  });
+});
+
 test("公式サイトの返事を待つあいだにデッキを組み替えたら、置き換えない", async ({ page }) => {
   await page.goto("/");
   const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
