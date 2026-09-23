@@ -30,12 +30,17 @@ export const joinRequestSchema = z
     deck: deckListSchema,
     displayName: z.string().optional(),
     roomCode: z.string().optional(),
+    seedShareCommit: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
   })
   .transform((body): JoinRequest => ({
     secret: body.secret,
     deck: body.deck,
     ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
     ...(body.roomCode === undefined ? {} : { roomCode: body.roomCode }),
+    ...(body.seedShareCommit === undefined ? {} : { seedShareCommit: body.seedShareCommit }),
   }));
 
 /** 自分のものを読むだけの要求。シークレットを URL に載せないので本文で受ける（7.2 節）。 */

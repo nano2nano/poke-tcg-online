@@ -14,6 +14,8 @@ import { describeViolation, validateDeck } from "./deck.js";
 import { createMatch, type SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
 import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
+import { commitSeed, NO_SHARES, type SeedShares } from "./fingerprint.js";
+import { SHARE_REVEAL_DEADLINE_MS } from "./pending.js";
 
 export interface JoinRequest {
   /** プレイヤーのシークレット（7.2 節）。これが無い対戦は始めない。 */
@@ -23,6 +25,11 @@ export interface JoinRequest {
   displayName?: string;
   /** 同じ文字列を入れた 2 人を繋ぐ。無ければマッチングキューへ入る。 */
   roomCode?: string;
+  /**
+   * シャッフルへの寄与のコミット（6.4 節）。寄与そのものは、席に着いてから開く。
+   * 省いた座席は寄与を出さず、その対戦の並びはサーバと相手の値で決まる。
+   */
+  seedShareCommit?: string;
 }
 
 export interface Ticket {
@@ -30,6 +37,7 @@ export interface Ticket {
   seat: SeatInfo;
   deck: DeckList;
   roomCode: string | null;
+  shareCommit: string | null;
 }
 
 export type JoinOutcome =
@@ -42,6 +50,12 @@ export interface Seated {
   matchId: string;
   seat: Player;
   seatToken: string;
+  /**
+   * サーバのコミットと、両座席の寄与のコミット。**寄与を開く前に**受け取っておく。
+   * 決着のあとに開かれた値をこれと突き合わせれば、どちらの値もあとから選び直されていないと分かる。
+   */
+  seedCommit: string;
+  seedShareCommits: SeedShares;
 }
 
 /**
@@ -139,6 +153,7 @@ export class Lobby {
       },
       deck: request.deck,
       roomCode: request.roomCode ?? null,
+      shareCommit: request.seedShareCommit ?? null,
     };
 
     /**
@@ -176,7 +191,7 @@ export class Lobby {
        * 時間切れになると席はもう無いが、それは「別のタブから入り直した」ではない。
        * 対戦はあったことにして、そう答える。生きているかどうかはレジストリが知っている。
        */
-      if (this.registry.bySeatToken(seat.seatToken) === undefined) {
+      if (!this.registry.holdsSeat(seat.seatToken)) {
         return { kind: "finished", matchId: seat.matchId };
       }
       return { kind: "seated", seat };
@@ -214,7 +229,7 @@ export class Lobby {
     for (const [id, old] of this.seated) {
       if (this.seated.size <= this.seatedLimit || seen++ >= this.seatedLimit) break;
       if (id === ticketId) continue;
-      if (this.registry.bySeatToken(old.seatToken) !== undefined) continue;
+      if (this.registry.holdsSeat(old.seatToken)) continue;
       this.seated.delete(id);
       this.rememberFinished(id, old.matchId);
     }
@@ -316,27 +331,55 @@ export class Lobby {
     else this.queue.push(ticket);
   }
 
+  /**
+   * 座席を決める。どちらかが寄与のコミットを送っていれば、対戦はまだ始めない。
+   * 寄与が開くまで `seed` が決まらないので、局面も時計もまだ無い（6.4 節）。
+   */
   private start(first: Ticket, second: Ticket): [Seated, Seated] {
     const nowMs = this.now();
+    const matchId = randomUUID();
     const seatTokens: [string, string] = [newToken(), newToken()];
+    const shareCommits: SeedShares = [first.shareCommit, second.shareCommit];
     /**
      * レーティングは今この場で読み直す（7.2 節）。待っている間に別のタブの対戦が終われば
      * レーティングは動いている。チケットを取ったときの値を残すと、記録が「対戦を始めた時点」でなくなる。
      */
     const seats: [SeatInfo, SeatInfo] = [this.seatNow(first), this.seatNow(second)];
-    const match = createMatch({
-      matchId: randomUUID(),
-      decks: [first.deck, second.deck],
-      seats,
-      seatTokens,
-      spectatorToken: newToken(),
-      nowMs,
-      startedAt: new Date(nowMs).toISOString(),
+    const decks: [DeckList, DeckList] = [first.deck, second.deck];
+    const server = commitSeed();
+    if (shareCommits.every((commit) => commit === null)) {
+      this.registry.add(
+        createMatch({
+          matchId,
+          decks,
+          seats,
+          seatTokens,
+          spectatorToken: newToken(),
+          nowMs,
+          startedAt: new Date(nowMs).toISOString(),
+          seedCommitment: server,
+        }),
+      );
+    } else {
+      this.registry.addPending({
+        matchId,
+        decks,
+        seats,
+        seatTokens,
+        spectatorToken: newToken(),
+        server,
+        shareCommits,
+        shares: [...NO_SHARES],
+        deadlineMs: nowMs + SHARE_REVEAL_DEADLINE_MS,
+      });
+    }
+    const seated = (seat: Player): Seated => ({
+      matchId,
+      seat,
+      seatToken: seatTokens[seat],
+      seedCommit: server.commit,
+      seedShareCommits: shareCommits,
     });
-    this.registry.add(match);
-    return [
-      { matchId: match.matchId, seat: 0, seatToken: seatTokens[0] },
-      { matchId: match.matchId, seat: 1, seatToken: seatTokens[1] },
-    ];
+    return [seated(0), seated(1)];
   }
 }

@@ -9,7 +9,12 @@
 
 import { applyMove, createGame, legalMoves, movesEqual } from "./engine.js";
 import type { DomainEvent, GameOutcome, GameState, Player } from "./engine.js";
-import { commitSeed, OLDEST_REPLAYABLE_SCHEMA_VERSION } from "./fingerprint.js";
+import {
+  commitSeed,
+  commitShare,
+  NO_SHARES,
+  OLDEST_REPLAYABLE_SCHEMA_VERSION,
+} from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
 
 export type ReplayFailure =
@@ -172,9 +177,22 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
   };
 }
 
-/** 公開された `nonce` から `seed` とコミットを導き直す（6.4 節）。 */
+/**
+ * 公開された `nonce` と寄与から `seed` とコミットを導き直す（6.4 節）。
+ *
+ * **開いた寄与は、参加のときのコミットと突き合わせる。** 突き合わせないと、サーバが
+ * 寄与を差し替えて並びを選んでも、記録の中では辻褄が合ってしまう。コミットがあって
+ * 寄与が無いのは、期限までに開かなかった座席で、これは正しい記録である。
+ */
 export function seedCommitmentHolds(record: MatchRecord): boolean {
-  const recomputed = commitSeed(record.seedNonce);
+  const shares = record.seedShares ?? NO_SHARES;
+  const commits = record.seedShareCommits ?? NO_SHARES;
+  for (const seat of [0, 1] as const) {
+    const share = shares[seat];
+    if (share === null) continue;
+    if (commits[seat] === null || commitShare(share) !== commits[seat]) return false;
+  }
+  const recomputed = commitSeed(record.seedNonce, shares);
   return recomputed.seed === record.seed && recomputed.commit === record.seedCommit;
 }
 

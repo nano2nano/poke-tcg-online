@@ -428,3 +428,58 @@ test("観戦のリンクが通らなければ、そう出して終わる", async
   await expect(page.locator("#watch")).toBeVisible();
   await expect(page.locator("#watch-status")).not.toBeEmpty();
 });
+
+/**
+ * シャッフルの検算（仕様 6.4 節）。決着で開かれた値を、席に着く前に受け取ったコミットと
+ * 突き合わせる。検算が合うことと、サーバが値を差し替えたら合わないと出すことの両方を見る。
+ * 片方だけだと、何を渡されても「合う」と出す画面でも通ってしまう。
+ */
+test("決着のあと、両座席がシャッフルを検算して合う", async ({ browser, pageErrors }) => {
+  const room = `けんざん-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#self .row").first()).toBeVisible();
+
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+
+  await expect(a.locator("#shuffle-check")).toHaveAttribute("data-result", "ok");
+  await expect(b.locator("#shuffle-check")).toHaveAttribute("data-result", "ok");
+
+  await close();
+});
+
+test("決着で開かれた寄与が差し替えられていたら、合わないと出す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `さしかえ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  // b に届く決着だけ、両座席の寄与を入れ替える。サーバが並びを選び直したのと同じ形になる。
+  await b.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "ended") message.seedShares = [...message.seedShares].reverse();
+      client.send(JSON.stringify(message));
+    });
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#self .row").first()).toBeVisible();
+
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+
+  await expect(a.locator("#shuffle-check")).toHaveAttribute("data-result", "ok");
+  await expect(b.locator("#shuffle-check")).toHaveAttribute("data-result", "mismatch");
+
+  await close();
+});

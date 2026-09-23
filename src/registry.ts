@@ -10,9 +10,15 @@ import { randomBytes } from "node:crypto";
 import type { Player } from "./engine.js";
 import { applyTimeout, type Match } from "./match.js";
 import { appendRecord, toRecord, type MatchRecord } from "./log.js";
+import { startPending, type PendingMatch } from "./pending.js";
 
 export interface SeatRef {
   match: Match;
+  seat: Player;
+}
+
+export interface PendingSeatRef {
+  pending: PendingMatch;
   seat: Player;
 }
 
@@ -24,6 +30,8 @@ export class MatchRegistry {
   private readonly matches = new Map<string, Match>();
   private readonly seats = new Map<string, SeatRef>();
   private readonly spectators = new Map<string, Match>();
+  private readonly pending = new Map<string, PendingMatch>();
+  private readonly pendingSeats = new Map<string, PendingSeatRef>();
 
   constructor(private readonly logDir?: string) {}
 
@@ -37,6 +45,36 @@ export class MatchRegistry {
 
   bySeatToken(token: string): SeatRef | undefined {
     return this.seats.get(token);
+  }
+
+  addPending(pending: PendingMatch): void {
+    this.pending.set(pending.matchId, pending);
+    for (const seat of [0, 1] as Player[]) {
+      this.pendingSeats.set(pending.seatTokens[seat], { pending, seat });
+    }
+  }
+
+  pendingBySeatToken(token: string): PendingSeatRef | undefined {
+    return this.pendingSeats.get(token);
+  }
+
+  /** 座席トークンが、始まる前か進行中の対戦を指しているか。 */
+  holdsSeat(token: string): boolean {
+    return this.seats.has(token) || this.pendingSeats.has(token);
+  }
+
+  /** 待っていた対戦を始め、進行中の対戦として置き直す。座席トークンはそのまま使える。 */
+  start(pending: PendingMatch, nowMs: number): Match {
+    const match = startPending(pending, nowMs);
+    this.pending.delete(pending.matchId);
+    for (const token of pending.seatTokens) this.pendingSeats.delete(token);
+    this.add(match);
+    return match;
+  }
+
+  /** 寄与を開く期限を過ぎた、始まる前の対戦。 */
+  overdue(nowMs: number): PendingMatch[] {
+    return [...this.pending.values()].filter((pending) => pending.deadlineMs <= nowMs);
   }
 
   bySpectatorToken(token: string): Match | undefined {

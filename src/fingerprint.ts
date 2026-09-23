@@ -77,15 +77,15 @@ function cardDataSha256(): string {
 }
 
 /**
- * 対戦のあとに、サーバが `seed` を言い換えていないことを示すための組（6.4 節）。
+ * 対戦のあとに、`seed` が対戦の前に決まっていたことを示すための組（6.4 節）。
  *
- * 256 ビットの `nonce` を引き、そこから**別々の接頭辞で** `seed` とコミットを導く。
+ * サーバは 256 ビットの `nonce` を引き、そこから**別々の接頭辞で** `seed` とコミットを導く。
  * コミットが満たすべきなのは、対戦の前にサーバを `seed` へ縛ること（拘束）と、
  * 対戦中は `seed` を何も明かさないこと（秘匿）の 2 つである。接頭辞を分けておけば、
  * この 2 つが `seed` の幅に依存しない。
  *
- * **示せるのはそこまでである。** `nonce` を引くのはサーバだけなので、対戦の前に
- * 引き直して有利な並びを選ぶことは、この組では妨げられない（10 節）。
+ * `shares` は座席が出した寄与である。サーバが `nonce` を引き直して有利な並びを選べないよう、
+ * サーバがコミットしたあとで座席が開いた値を `seed` に混ぜる。
  */
 export interface SeedCommitment {
   nonce: string;
@@ -99,22 +99,49 @@ export interface SeedCommitment {
    */
   seed: string;
   commit: string;
+  shares: SeedShares;
 }
+
+/** 座席ごとの寄与。出さなかった座席、または期限までに開かなかった座席は null。 */
+export type SeedShares = [string | null, string | null];
+
+export const NO_SHARES: SeedShares = [null, null];
+
+/** 寄与は 32 バイトの 16 進。形を決めておかないと、区切り文字を含む寄与で別の組と同じ入力を作れる。 */
+export const SEED_SHARE_PATTERN = /^[0-9a-f]{64}$/;
 
 /** `seed` の桁数。エンジンの `RngState` の幅（128 ビット）に合わせる。 */
 const SEED_HEX_DIGITS = 32;
 
-export function commitSeed(nonce: string = randomBytes(32).toString("hex")): SeedCommitment {
-  const digest = createHash("sha256").update(`seed:${nonce}`).digest();
+export function commitSeed(
+  nonce: string = randomBytes(32).toString("hex"),
+  shares: SeedShares = NO_SHARES,
+): SeedCommitment {
+  const digest = createHash("sha256").update(seedInput(nonce, shares)).digest();
   return {
     nonce,
     seed: digest.toString("hex").slice(0, SEED_HEX_DIGITS),
     commit: createHash("sha256").update(`commit:${nonce}`).digest("hex"),
+    shares,
   };
 }
 
-/** 公開された `nonce` が、対戦の開始時に配ったコミットと `seed` に一致することを確かめる。 */
+/**
+ * 寄与が 1 つも無いときは、寄与を混ぜる前と同じ入力にする。そうしておけば、
+ * 寄与の欄を持たない記録を、読み方を分けずに検算できる。
+ */
+function seedInput(nonce: string, shares: SeedShares): string {
+  if (shares[0] === null && shares[1] === null) return `seed:${nonce}`;
+  return `seed:${nonce}:${shares[0] ?? ""}:${shares[1] ?? ""}`;
+}
+
+/** 座席が参加するときに送る、寄与のコミット。 */
+export function commitShare(share: string): string {
+  return createHash("sha256").update(`share:${share}`).digest("hex");
+}
+
+/** 公開された `nonce` と寄与が、対戦の開始時に配ったコミットと `seed` に一致することを確かめる。 */
 export function verifySeedCommitment(commitment: SeedCommitment): boolean {
-  const recomputed = commitSeed(commitment.nonce);
+  const recomputed = commitSeed(commitment.nonce, commitment.shares);
   return recomputed.seed === commitment.seed && recomputed.commit === commitment.commit;
 }

@@ -172,7 +172,7 @@ export function createApp(options: AppOptions = {}): App {
     const connection = connectionOf(request);
     const attached =
       connection?.kind === "seat"
-        ? hub.attach(socket, connection.token)
+        ? hub.attach(socket, connection.token, connection.seedShare)
         : connection?.kind === "spectator" && hub.attachSpectator(socket, connection.token);
     if (connection === null || !attached) {
       socket.close();
@@ -236,11 +236,16 @@ export function createApp(options: AppOptions = {}): App {
  */
 function connectionOf(
   request: IncomingMessage,
-): { kind: "seat" | "spectator"; token: string } | null {
+):
+  | { kind: "seat"; token: string; seedShare: string | null }
+  | { kind: "spectator"; token: string }
+  | null {
   const params = new URL(request.url ?? "/", "http://localhost").searchParams;
   const seatToken = params.get("seatToken");
   const spectatorToken = params.get("spectatorToken");
-  if (seatToken !== null && spectatorToken === null) return { kind: "seat", token: seatToken };
+  if (seatToken !== null && spectatorToken === null) {
+    return { kind: "seat", token: seatToken, seedShare: params.get("seedShare") };
+  }
   if (spectatorToken !== null && seatToken === null) {
     return { kind: "spectator", token: spectatorToken };
   }

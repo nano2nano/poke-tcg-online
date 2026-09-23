@@ -30,7 +30,8 @@ import type {
   SpectatorSyncMessage,
   SyncMessage,
 } from "./protocol.js";
-import type { MatchRegistry } from "./registry.js";
+import type { MatchRegistry, PendingSeatRef } from "./registry.js";
+import { allRevealed, reveal, type PendingMatch } from "./pending.js";
 import type { MatchRecord } from "./log.js";
 
 /** 送り先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
@@ -71,7 +72,13 @@ export class MatchHub {
    * 座席トークンで座席に就く。再接続もこれ 1 つで、特別な復元の手順は要らない
    * （局面はサーバが持っている）。同じ座席に 2 本目が繋がったら古いほうを閉じる。
    */
-  attach(socket: SeatSocket, seatToken: string): boolean {
+  attach(socket: SeatSocket, seatToken: string, seedShare: string | null = null): boolean {
+    const pending = this.options.registry.pendingBySeatToken(seatToken);
+    if (pending !== undefined) {
+      this.seatSocket(pending.pending.matchId, pending.seat, socket);
+      this.acceptShare(socket, pending, seedShare);
+      return true;
+    }
     const ref = this.options.registry.bySeatToken(seatToken);
     if (ref === undefined) {
       send(socket, {
@@ -80,13 +87,37 @@ export class MatchHub {
       });
       return false;
     }
-    const perMatch = this.sockets.get(ref.match.matchId) ?? new Map<Player, SeatSocket>();
-    const previous = perMatch.get(ref.seat);
-    if (previous !== undefined && previous !== socket) previous.close();
-    perMatch.set(ref.seat, socket);
-    this.sockets.set(ref.match.matchId, perMatch);
+    this.seatSocket(ref.match.matchId, ref.seat, socket);
     send(socket, this.syncFor(ref.match, ref.seat));
     return true;
+  }
+
+  private seatSocket(matchId: string, seat: Player, socket: SeatSocket): void {
+    const perMatch = this.sockets.get(matchId) ?? new Map<Player, SeatSocket>();
+    const previous = perMatch.get(seat);
+    if (previous !== undefined && previous !== socket) previous.close();
+    perMatch.set(seat, socket);
+    this.sockets.set(matchId, perMatch);
+  }
+
+  /**
+   * 席に着いた接続が開いた寄与を受け取り、そろえば対戦を始める。
+   * そろうまでは何も送らない。局面がまだ無い。
+   */
+  private acceptShare(socket: SeatSocket, ref: PendingSeatRef, seedShare: string | null): void {
+    if (reveal(ref.pending, ref.seat, seedShare) === "mismatch") {
+      send(socket, { t: "error", message: "寄与が、参加のときに送ったコミットと合わない" });
+    }
+    if (allRevealed(ref.pending)) this.startPending(ref.pending);
+  }
+
+  private startPending(pending: PendingMatch): void {
+    const match = this.options.registry.start(pending, this.now());
+    const perMatch = this.sockets.get(match.matchId);
+    for (const seat of [0, 1] as Player[]) {
+      const socket = perMatch?.get(seat);
+      if (socket !== undefined) send(socket, this.syncFor(match, seat));
+    }
   }
 
   /** 溢れたら断る。座席と違い、観戦は断っても誰も負けない。 */
@@ -207,6 +238,7 @@ export class MatchHub {
         outcome: engineOutcome(match),
         seed: match.seedCommitment.seed,
         seedNonce: match.seedCommitment.nonce,
+        seedShares: match.seedCommitment.shares,
         view: viewFor(match, seat),
       });
     }
@@ -244,12 +276,20 @@ export class MatchHub {
   }
 
   /**
-   * 持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
+   * 寄与を開く期限を過ぎた対戦を始め、持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
    *
    * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じスイープで終わらせるはずだった
    * ほかの対戦が、時計を過ぎたまま残り続ける。
    */
   sweepTimeouts(): void {
+    // 始めた対戦では、来ない座席の時計が流れる（3.4 節）。
+    for (const pending of this.options.registry.overdue(this.now())) {
+      try {
+        this.startPending(pending);
+      } catch (error) {
+        console.error(`対戦を始められなかった（${pending.matchId}）:`, error);
+      }
+    }
     for (const match of this.options.registry.sweepTimeouts(this.now())) {
       try {
         this.endMatch(match);

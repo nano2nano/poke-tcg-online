@@ -33,7 +33,7 @@ import type {
   Viewer,
 } from "./engine.js";
 import { consume, createClock, isTimedOut, moveRemainingMs, type Clock } from "./clock.js";
-import { commitSeed, type SeedCommitment } from "./fingerprint.js";
+import { commitSeed, NO_SHARES, type SeedCommitment, type SeedShares } from "./fingerprint.js";
 import type { ClockView, RejectReason } from "./protocol.js";
 
 export interface SeatInfo {
@@ -84,6 +84,8 @@ export interface LoggedMove {
 export interface Match {
   readonly matchId: string;
   readonly seedCommitment: SeedCommitment;
+  /** 参加のときに座席が送った、寄与のコミット。開いた寄与が本物かを記録から検算するために残す。 */
+  readonly seedShareCommits: SeedShares;
   readonly decks: [DeckList, DeckList];
   readonly seats: [SeatInfo, SeatInfo];
   readonly seatTokens: [string, string];
@@ -116,6 +118,7 @@ export interface CreateMatchOptions {
   startedAt: string;
   /** テストのために固定したいときだけ渡す。既定は 256 ビットの乱数。 */
   seedCommitment?: SeedCommitment;
+  seedShareCommits?: SeedShares;
   bankMs?: number;
 }
 
@@ -125,6 +128,7 @@ export function createMatch(options: CreateMatchOptions): Match {
   return {
     matchId: options.matchId,
     seedCommitment,
+    seedShareCommits: options.seedShareCommits ?? NO_SHARES,
     decks: options.decks,
     seats: options.seats,
     seatTokens: options.seatTokens,
