@@ -92,7 +92,10 @@ export const clientMessageSchema = z.discriminatedUnion("t", [
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 
-/** 局面一式。`hello` の直後、`stale-version` の応答、準備の答えを預かったとき（2.4 節）に送る。 */
+/**
+ * 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、
+ * 準備の答えを預かったとき（2.4 節）に送る。
+ */
 export interface SyncMessage {
   t: "sync";
   matchId: string;

@@ -263,7 +263,10 @@ export type SetupView =
   | { kind: "choose"; active: string[]; bench: string[]; benchSlots: number }
   | { kind: "submitted"; active: string; bench: string[] };
 
-/** 相手の準備を仮の答えで進める回数の上限。準備の選択は両座席で十数回に収まる。 */
+/**
+ * 相手の準備を仮の答えで進める回数の上限。準備の選択は有限なので、越えるのはエンジンが想定外に
+ * 回り続けたときだけで、そのときはまとめて受け取らない。
+ */
 const LOOKAHEAD_LIMIT = 64;
 
 /**
