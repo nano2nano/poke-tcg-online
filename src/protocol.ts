@@ -163,7 +163,7 @@ export type ServerMessage =
   | { t: "error"; message: string; code?: typeof SEAT_NOT_FOUND }
   /**
    * 席は取れているが、シェアがそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
-   * `sync` の届かないまま切れた接続を、席を失ったのと見分けられない。
+   * 始まる前に切れた接続を、サーバへ繋がらなかったのと見分けられない。
    */
   | { t: "pending" }
   | { t: "pong" };

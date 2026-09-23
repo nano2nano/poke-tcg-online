@@ -277,10 +277,8 @@ export class MatchHub {
         seedShares: match.seedCommitment.shares,
         view: viewFor(match, seat),
       });
-      /**
-       * 決着を伝えたら閉じる。座席トークンはもう通らないので、開いたままだと画面の `ping` に
-       * 「座席が見つからない」が 20 秒ごとに返り続ける。
-       */
+      // 座席トークンはもう通らないので、開いたままだと画面の `ping` のたびに
+      // 「座席が見つからない」が返り続ける。
       socket.close();
     }
     this.sockets.delete(match.matchId);

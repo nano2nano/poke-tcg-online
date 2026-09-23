@@ -357,7 +357,7 @@ test("繋がらずに閉じただけなら、座席を覚えたままマッチ�
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
   );
-  // サーバへ繋がずに閉じる。何も届かないまま閉じる形を作る。
+  // 何も届かないまま閉じる形を作る。
   await page.routeWebSocket(/\/ws\?/, (ws) => ws.close());
   await page.reload();
 
