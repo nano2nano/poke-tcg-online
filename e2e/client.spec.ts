@@ -336,6 +336,52 @@ test("対戦準備は、番を待たずに両座席がバトル場とベンチ�
   await close();
 });
 
+test("「準備を終える」は返事が来るまで押せず、続けて押しても答えは 1 通だけ送る", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `にどおし-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA = lastSeen(a);
+  let seenB: Seen | null = null;
+  let setups = 0;
+  // 答えを送ってからの返事は止めておき、押せなくなっているかを返事の前に確かめる。
+  const hold: { queue: (() => void)[] | null } = { queue: null };
+  await b.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    client.onMessage((raw) => {
+      if (JSON.parse(String(raw)).t === "setup") {
+        setups += 1;
+        hold.queue ??= [];
+      }
+      server.send(raw);
+    });
+    server.onMessage((raw) => {
+      const deliver = () => {
+        seenB = seenIn(JSON.parse(String(raw))) ?? seenB;
+        client.send(raw);
+      };
+      if (hold.queue === null) deliver();
+      else hold.queue.push(deliver);
+    });
+  });
+  await seatPair(a, b, room);
+  await untilBothChoose(a, b, seenA, () => seenB);
+
+  await b.locator("#setup-active button").first().click();
+  await b.locator("#setup-submit").dblclick();
+  await expect(b.locator("#setup-submit")).toBeDisabled();
+  await expect.poll(() => setups).toBe(1);
+
+  const queued = hold.queue ?? [];
+  hold.queue = null;
+  for (const deliver of queued) deliver();
+  await expect(b.locator("#setup")).toBeHidden();
+  expect(setups).toBe(1);
+
+  await close();
+});
+
 test("自分の番の途中で相手が選んでいるあいだは、相手の番と出さない", async ({
   browser,
   pageErrors,

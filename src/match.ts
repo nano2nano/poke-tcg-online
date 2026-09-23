@@ -11,8 +11,8 @@
  */
 
 import {
-  DEFAULT_BENCH_SIZE,
   applyMove,
+  benchCapacity,
   createGame,
   isBasicPokemon,
   legalMoves,
@@ -106,8 +106,11 @@ export interface Match {
    * 準備が終われば両方 null に戻す。
    */
   setupPlans: [SetupPlan | null, SetupPlan | null];
-  /** 対戦準備の答えに掛かった時間を測る起点。準備は両座席が同時に考え始める。 */
-  setupStartedAtMs: number;
+  /**
+   * 対戦準備で、座席ごとに次の答えを考え始めた時刻。準備は両座席が同時に考え始めるので、
+   * 手番の起点（`turnStartedAtMs`）とは別に持つ。
+   */
+  setupSinceMs: [number, number];
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
   version: number;
   clocks: [Clock, Clock];
@@ -147,7 +150,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     firstPlayer: firstPlayerOf(created.events),
     state: created.state,
     setupPlans: [null, null],
-    setupStartedAtMs: options.nowMs,
+    setupSinceMs: [options.nowMs, options.nowMs],
     version: 0,
     clocks: [createClock(options.bankMs), createClock(options.bankMs)],
     moves: [],
@@ -196,7 +199,7 @@ export function submitMove(
   }
 
   const elapsedMs = Math.max(0, nowMs - match.turnStartedAtMs);
-  const events = record(match, seat, move, legal, {
+  const events = record(match, seat, move, legal, chosen, {
     elapsedMs,
     chargedMs: elapsedMs,
     nowMs,
@@ -211,6 +214,7 @@ function record(
   seat: Player,
   move: Move,
   legal: Move[],
+  chosen: number,
   timing: { elapsedMs: number; chargedMs: number; nowMs: number; offered: number[] | null },
 ): DomainEvent[] {
   const applied = applyMove(match.state, move);
@@ -221,11 +225,12 @@ function record(
     elapsedMs: timing.elapsedMs,
     source: "human",
     candidates: legal.length,
-    chosen: legal.findIndex((candidate) => movesEqual(candidate, move)),
+    chosen,
     offered: timing.offered,
   });
   match.clocks[seat] = consume(match.clocks[seat], timing.chargedMs);
   match.turnStartedAtMs = timing.nowMs;
+  match.setupSinceMs[seat] = timing.nowMs;
 
   if (match.state.phase === "gameover") {
     finish(match, { kind: "normal", winner: match.state.outcome?.winner ?? null }, timing.nowMs);
@@ -336,9 +341,9 @@ export function setupViewFor(match: Match, seat: Player): SetupView | null {
   return {
     kind: "choose",
     active: hand.filter((card) => activeDefs.has(card.defId)).map((card) => card.instanceId),
+    // バトル場と違い、ベンチの候補はたねポケモンだけで、しゅんぱつりょくのカードは入らない。
     bench: hand.filter((card) => isBasicPokemon(card.defId)).map((card) => card.instanceId),
-    // 準備の時点では場にスタジアムが無いので、ベンチの枠は印刷どおりである。
-    benchSlots: DEFAULT_BENCH_SIZE,
+    benchSlots: benchCapacity(ahead, seat),
   };
 }
 
@@ -357,7 +362,9 @@ export function submitSetup(
 ): SubmitOutcome {
   if (match.result !== null) return { ok: false, reason: "match-over" };
   const start = planStart(match, seat);
-  if (start === null) return { ok: false, reason: "not-your-turn" };
+  if (start === null) {
+    return { ok: false, reason: toMove(match) === seat ? "illegal-move" : "not-your-turn" };
+  }
   const chosen = [active, ...bench];
   const hand = start.players[seat].hand;
   const defIds = chosen.map((id) => hand.find((card) => card.instanceId === id)?.defId);
@@ -386,7 +393,7 @@ export function submitSetup(
     active,
     bench: [...bench],
     steps,
-    elapsedMs: Math.max(0, nowMs - match.setupStartedAtMs),
+    elapsedMs: Math.max(0, nowMs - match.setupSinceMs[seat]),
     started: false,
   };
   return { ok: true, events: drainSetupPlans(match, nowMs) };
@@ -419,7 +426,7 @@ function drainSetupPlans(match: Match, nowMs: number): DomainEvent[] {
     plan.started = true;
     const running = Math.max(0, nowMs - match.turnStartedAtMs);
     events.push(
-      ...record(match, seat, move, legal, {
+      ...record(match, seat, move, legal, legal.indexOf(move), {
         elapsedMs: first ? plan.elapsedMs : 0,
         chargedMs: first ? Math.min(running, plan.elapsedMs) : 0,
         nowMs,

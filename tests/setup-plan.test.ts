@@ -158,7 +158,39 @@ describe("対戦準備をまとめて出す", () => {
 
     submitSetup(match, first, plans[first]!.active, plans[first]!.bench, 0);
     expect(match.state.phase).not.toBe("setup");
-    const after = submitSetup(match, first, plans[first]!.active, plans[first]!.bench, 0);
-    expect(after).toEqual({ ok: false, reason: "not-your-turn" });
+    // 手番の座席には、番でないとは返さない。
+    const mover = toMove(match) as Player;
+    expect(submitSetup(match, mover, plans[mover]!.active, plans[mover]!.bench, 0)).toEqual({
+      ok: false,
+      reason: "illegal-move",
+    });
+    const other = (1 - mover) as Player;
+    expect(submitSetup(match, other, plans[other]!.active, plans[other]!.bench, 0)).toEqual({
+      ok: false,
+      reason: "not-your-turn",
+    });
+  });
+
+  it("追加ドローに答えてからまとめて出したとき、考えた時間は追加ドローの後から測る", () => {
+    ensureCards();
+    let match: Match | undefined;
+    for (let attempt = 0; attempt < 400 && match === undefined; attempt++) {
+      const candidate = newMatch(`plan-bonus-${attempt}`);
+      if (candidate.state.choices.at(-1)?.kind === "setup-bonus-draw") match = candidate;
+    }
+    if (match === undefined) throw new Error("追加ドローから始まる対戦が見つからない");
+    const drawer = toMove(match) as Player;
+    const decline = legalMoves(match.state).find(
+      (move) => move.type === "AnswerChoice" && move.answer.kind === "decline",
+    ) as Move;
+    expect(submitMove(match, drawer, match.version, decline, 10_000).ok).toBe(true);
+    if (setupViewFor(match, drawer)?.kind !== "choose")
+      throw new Error("まとめて出せる局面ではない");
+
+    const plan = planOf(match, drawer);
+    const before = match.moves.length;
+    expect(submitSetup(match, drawer, plan.active, plan.bench, 30_000).ok).toBe(true);
+    const planned = match.moves.slice(before).find((logged) => logged.move.player === drawer);
+    expect(planned?.elapsedMs).toBe(20_000);
   });
 });

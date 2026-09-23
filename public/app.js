@@ -24,7 +24,7 @@ let lastView = null;
 /** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
 let lastMoves = { moves: null, playing: false, setup: null };
 /** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
-let setupDraft = { active: null, bench: [] };
+let setupDraft = { active: null, bench: [], sent: false };
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 /**
@@ -305,7 +305,10 @@ window.addEventListener("storage", (event) => {
 });
 
 $("setup-submit").addEventListener("click", () => {
-  if (setupDraft.active === null) return;
+  if (setupDraft.active === null || setupDraft.sent) return;
+  // 返事が来るまで押せなくする。2 度目はサーバが断り、通った答えまで失敗に見える。
+  setupDraft.sent = true;
+  $("setup-submit").disabled = true;
   send({ t: "setup", active: setupDraft.active, bench: setupDraft.bench });
 });
 
@@ -1258,6 +1261,7 @@ function receive(message) {
       if (message.events !== undefined) for (const event of message.events) addEvent(event.kind);
       renderView(message.view);
       renderClock(message.clock);
+      setupDraft.sent = false;
       renderMoves(message.legalMoves, true, message.setup);
       return;
     case "ended":
@@ -1573,7 +1577,7 @@ function waitingNote(view) {
 function renderSetupForm(offer) {
   $("setup").hidden = offer === null;
   if (offer === null) {
-    setupDraft = { active: null, bench: [] };
+    setupDraft = { active: null, bench: [], sent: false };
     return;
   }
   if (!offer.active.includes(setupDraft.active)) setupDraft.active = null;
@@ -1606,7 +1610,7 @@ function renderSetupForm(offer) {
         return button;
       }),
   );
-  $("setup-submit").disabled = setupDraft.active === null;
+  $("setup-submit").disabled = setupDraft.active === null || setupDraft.sent;
 }
 
 function toggleButton(instanceId, pressed, onClick) {

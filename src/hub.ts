@@ -199,6 +199,7 @@ export class MatchHub {
         send(socket, { t: "pong" });
         return;
       case "move":
+      case "setup":
       case "concede":
         send(socket, { t: "error", message: "観戦している接続からは指せない" });
         return;
@@ -215,6 +216,7 @@ export class MatchHub {
         send(socket, { t: "pending" });
         return;
       case "move":
+      case "setup":
       case "concede":
         send(socket, { t: "error", message: "対戦はまだ始まっていない" });
         return;
