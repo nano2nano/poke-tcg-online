@@ -23,6 +23,12 @@ import type { SeedShares } from "./fingerprint.js";
  */
 export const SEAT_NOT_FOUND = "seat-not-found";
 
+/**
+ * 同じ座席に別の接続が繋がったので、この接続を閉じるという合図（3.3 節）。
+ * 画面は切れた接続を繋ぎ直すので、これが無いと同じ座席を開いた 2 つのタブが互いを追い出し続ける。
+ */
+export const SEAT_REPLACED = "seat-replaced";
+
 /** 手を受理しなかった理由（2.2 節の検査 1〜3 に対応する）。 */
 export type RejectReason = "not-your-turn" | "stale-version" | "illegal-move" | "match-over";
 
@@ -160,7 +166,7 @@ export type ServerMessage =
   | SpectatorDeltaMessage
   | SpectatorEndedMessage
   | { t: "reject"; reason: RejectReason; stateVersion: number }
-  | { t: "error"; message: string; code?: typeof SEAT_NOT_FOUND }
+  | { t: "error"; message: string; code?: typeof SEAT_NOT_FOUND | typeof SEAT_REPLACED }
   /**
    * 席は取れているが、シェアがそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
    * 始まる前に切れた接続を、サーバへ繋がらなかったのと見分けられない。
