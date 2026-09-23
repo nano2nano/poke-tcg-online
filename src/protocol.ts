@@ -156,4 +156,9 @@ export type ServerMessage =
   | SpectatorEndedMessage
   | { t: "reject"; reason: RejectReason; stateVersion: number }
   | { t: "error"; message: string }
+  /**
+   * 席は取れているが、寄与がそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
+   * `sync` の届かないまま切れた接続を、席を失ったのと見分けられない。
+   */
+  | { t: "pending" }
   | { t: "pong" };

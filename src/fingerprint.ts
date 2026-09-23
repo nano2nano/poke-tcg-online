@@ -105,9 +105,15 @@ export interface SeedCommitment {
 /** 座席ごとの寄与。出さなかった座席、または期限までに開かなかった座席は null。 */
 export type SeedShares = [string | null, string | null];
 
-export const NO_SHARES: SeedShares = [null, null];
+/** 呼ぶたびに新しい配列を返す。共有すると、1 局の寄与を書き換えたときにほかの対戦まで変わる。 */
+export function noShares(): SeedShares {
+  return [null, null];
+}
 
-/** 寄与は 32 バイトの 16 進。形を決めておかないと、区切り文字を含む寄与で別の組と同じ入力を作れる。 */
+/**
+ * 寄与とそのコミットの形。どちらも 32 バイトの 16 進である。形を決めておかないと、
+ * 区切り文字を含む寄与で別の組と同じ入力を作れる。
+ */
 export const SEED_SHARE_PATTERN = /^[0-9a-f]{64}$/;
 
 /** `seed` の桁数。エンジンの `RngState` の幅（128 ビット）に合わせる。 */
@@ -115,7 +121,7 @@ const SEED_HEX_DIGITS = 32;
 
 export function commitSeed(
   nonce: string = randomBytes(32).toString("hex"),
-  shares: SeedShares = NO_SHARES,
+  shares: SeedShares = noShares(),
 ): SeedCommitment {
   const digest = createHash("sha256").update(seedInput(nonce, shares)).digest();
   return {

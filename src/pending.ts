@@ -30,6 +30,8 @@ export interface PendingMatch {
   readonly seats: [SeatInfo, SeatInfo];
   readonly seatTokens: [string, string];
   readonly spectatorToken: string;
+  /** 席が決まった時刻。記録に残すレーティングを読んだのもこの時点である。 */
+  readonly startedAt: string;
   /** 寄与を混ぜる前の組。使うのは `nonce` と `commit` だけで、`seed` はまだ意味を持たない。 */
   readonly server: SeedCommitment;
   readonly shareCommits: SeedShares;
@@ -58,7 +60,10 @@ export function allRevealed(pending: PendingMatch): boolean {
   );
 }
 
-/** そろった寄与で `seed` を決め、対戦を始める。開かなかった座席の寄与は null のままにする。 */
+/**
+ * そろった寄与で `seed` を決め、対戦を始める。開かなかった座席の寄与は null のままにする。
+ * 時計はここから流れる。
+ */
 export function startPending(pending: PendingMatch, nowMs: number): Match {
   return createMatch({
     matchId: pending.matchId,
@@ -67,7 +72,7 @@ export function startPending(pending: PendingMatch, nowMs: number): Match {
     seatTokens: pending.seatTokens,
     spectatorToken: pending.spectatorToken,
     nowMs,
-    startedAt: new Date(nowMs).toISOString(),
+    startedAt: pending.startedAt,
     seedCommitment: commitSeed(pending.server.nonce, [...pending.shares]),
     seedShareCommits: pending.shareCommits,
   });

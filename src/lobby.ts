@@ -11,11 +11,16 @@
 import { randomUUID } from "node:crypto";
 import type { DeckList, Player } from "./engine.js";
 import { describeViolation, validateDeck } from "./deck.js";
-import { createMatch, type SeatInfo } from "./match.js";
+import type { SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
 import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
-import { commitSeed, NO_SHARES, type SeedShares } from "./fingerprint.js";
-import { SHARE_REVEAL_DEADLINE_MS } from "./pending.js";
+import { commitSeed, noShares, type SeedShares } from "./fingerprint.js";
+import {
+  allRevealed,
+  SHARE_REVEAL_DEADLINE_MS,
+  startPending,
+  type PendingMatch,
+} from "./pending.js";
 
 export interface JoinRequest {
   /** プレイヤーのシークレット（7.2 節）。これが無い対戦は始めない。 */
@@ -337,48 +342,31 @@ export class Lobby {
    */
   private start(first: Ticket, second: Ticket): [Seated, Seated] {
     const nowMs = this.now();
-    const matchId = randomUUID();
-    const seatTokens: [string, string] = [newToken(), newToken()];
-    const shareCommits: SeedShares = [first.shareCommit, second.shareCommit];
-    /**
-     * レーティングは今この場で読み直す（7.2 節）。待っている間に別のタブの対戦が終われば
-     * レーティングは動いている。チケットを取ったときの値を残すと、記録が「対戦を始めた時点」でなくなる。
-     */
-    const seats: [SeatInfo, SeatInfo] = [this.seatNow(first), this.seatNow(second)];
-    const decks: [DeckList, DeckList] = [first.deck, second.deck];
-    const server = commitSeed();
-    if (shareCommits.every((commit) => commit === null)) {
-      this.registry.add(
-        createMatch({
-          matchId,
-          decks,
-          seats,
-          seatTokens,
-          spectatorToken: newToken(),
-          nowMs,
-          startedAt: new Date(nowMs).toISOString(),
-          seedCommitment: server,
-        }),
-      );
-    } else {
-      this.registry.addPending({
-        matchId,
-        decks,
-        seats,
-        seatTokens,
-        spectatorToken: newToken(),
-        server,
-        shareCommits,
-        shares: [...NO_SHARES],
-        deadlineMs: nowMs + SHARE_REVEAL_DEADLINE_MS,
-      });
-    }
+    const pending: PendingMatch = {
+      matchId: randomUUID(),
+      decks: [first.deck, second.deck],
+      /**
+       * レーティングは今この場で読み直す（7.2 節）。待っている間に別のタブの対戦が終われば
+       * レーティングは動いている。チケットを取ったときの値を残すと、記録が「席が決まった時点」でなくなる。
+       * 記録の `startedAt` も同じ時点にそろえる。
+       */
+      seats: [this.seatNow(first), this.seatNow(second)],
+      seatTokens: [newToken(), newToken()],
+      spectatorToken: newToken(),
+      startedAt: new Date(nowMs).toISOString(),
+      server: commitSeed(),
+      shareCommits: [first.shareCommit, second.shareCommit],
+      shares: noShares(),
+      deadlineMs: nowMs + SHARE_REVEAL_DEADLINE_MS,
+    };
+    if (allRevealed(pending)) this.registry.add(startPending(pending, nowMs));
+    else this.registry.addPending(pending);
     const seated = (seat: Player): Seated => ({
-      matchId,
+      matchId: pending.matchId,
       seat,
-      seatToken: seatTokens[seat],
-      seedCommit: server.commit,
-      seedShareCommits: shareCommits,
+      seatToken: pending.seatTokens[seat],
+      seedCommit: pending.server.commit,
+      seedShareCommits: pending.shareCommits,
     });
     return [seated(0), seated(1)];
   }

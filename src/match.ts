@@ -33,7 +33,7 @@ import type {
   Viewer,
 } from "./engine.js";
 import { consume, createClock, isTimedOut, moveRemainingMs, type Clock } from "./clock.js";
-import { commitSeed, NO_SHARES, type SeedCommitment, type SeedShares } from "./fingerprint.js";
+import { commitSeed, noShares, type SeedCommitment, type SeedShares } from "./fingerprint.js";
 import type { ClockView, RejectReason } from "./protocol.js";
 
 export interface SeatInfo {
@@ -128,7 +128,7 @@ export function createMatch(options: CreateMatchOptions): Match {
   return {
     matchId: options.matchId,
     seedCommitment,
-    seedShareCommits: options.seedShareCommits ?? NO_SHARES,
+    seedShareCommits: options.seedShareCommits ?? noShares(),
     decks: options.decks,
     seats: options.seats,
     seatTokens: options.seatTokens,

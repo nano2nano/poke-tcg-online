@@ -76,6 +76,7 @@ export class MatchHub {
     const pending = this.options.registry.pendingBySeatToken(seatToken);
     if (pending !== undefined) {
       this.seatSocket(pending.pending.matchId, pending.seat, socket);
+      send(socket, { t: "pending" });
       this.acceptShare(socket, pending, seedShare);
       return true;
     }
@@ -100,10 +101,7 @@ export class MatchHub {
     this.sockets.set(matchId, perMatch);
   }
 
-  /**
-   * 席に着いた接続が開いた寄与を受け取り、そろえば対戦を始める。
-   * そろうまでは何も送らない。局面がまだ無い。
-   */
+  /** 席に着いた接続が開いた寄与を受け取り、そろえば対戦を始める。 */
   private acceptShare(socket: SeatSocket, ref: PendingSeatRef, seedShare: string | null): void {
     if (reveal(ref.pending, ref.seat, seedShare) === "mismatch") {
       send(socket, { t: "error", message: "寄与が、参加のときに送ったコミットと合わない" });
@@ -179,8 +177,28 @@ export class MatchHub {
     }
   }
 
+  /** 始まる前の対戦には局面が無い。答えられるのは生存確認と、まだ始まっていないことだけである。 */
+  private handlePending(socket: SeatSocket, message: ClientMessage): void {
+    switch (message.t) {
+      case "ping":
+        send(socket, { t: "pong" });
+        return;
+      case "hello":
+        send(socket, { t: "pending" });
+        return;
+      case "move":
+      case "concede":
+        send(socket, { t: "error", message: "対戦はまだ始まっていない" });
+        return;
+    }
+  }
+
   /** 1 通を処理する。`seatToken` は `attach` 済みのものを呼び出し側が持つ。 */
   handle(socket: SeatSocket, seatToken: string, message: ClientMessage): void {
+    if (this.options.registry.pendingBySeatToken(seatToken) !== undefined) {
+      this.handlePending(socket, message);
+      return;
+    }
     const ref = this.options.registry.bySeatToken(seatToken);
     if (ref === undefined) {
       send(socket, { t: "error", message: "座席が見つからない" });

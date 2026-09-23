@@ -120,13 +120,13 @@ describe("寄与の開示", () => {
 
     const socketA = recorder();
     expect(arena.hub.attach(socketA, a.seatToken, SHARE_A)).toBe(true);
-    expect(socketA.sent).toEqual([]);
+    expect(socketA.sent.map((message) => message.t)).toEqual(["pending"]);
     expect(arena.registry.live()).toHaveLength(0);
 
     const socketB = recorder();
     arena.hub.attach(socketB, b.seatToken, SHARE_B);
-    expect(socketA.sent.map((message) => message.t)).toEqual(["sync"]);
-    expect(socketB.sent.map((message) => message.t)).toEqual(["sync"]);
+    expect(socketA.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
+    expect(socketB.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
 
     const match = matchOf(arena, a);
     expect(match.seedCommitment.commit).toBe(a.seedCommit);
@@ -140,7 +140,7 @@ describe("寄与の開示", () => {
     const [a, b] = seatBoth(arena, [commitShare(SHARE_A), null]);
     const wrong = recorder();
     arena.hub.attach(wrong, a.seatToken, SHARE_B);
-    expect(wrong.sent.map((message) => message.t)).toEqual(["error"]);
+    expect(wrong.sent.map((message) => message.t)).toEqual(["pending", "error"]);
     expect(arena.registry.live()).toHaveLength(0);
 
     arena.hub.attach(recorder(), a.seatToken, SHARE_A);
@@ -159,10 +159,33 @@ describe("寄与の開示", () => {
 
     arena.clock.now = SHARE_REVEAL_DEADLINE_MS;
     arena.hub.sweepTimeouts();
-    expect(socketA.sent.map((message) => message.t)).toEqual(["sync"]);
+    expect(socketA.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
     const match = matchOf(arena, a);
     expect(match.seedCommitment.shares).toEqual([SHARE_A, null]);
     expect(match.turnStartedAtMs).toBe(SHARE_REVEAL_DEADLINE_MS);
+    // 記録のレーティングは席が決まった時点で読んだので、`startedAt` もその時点にそろえる。
+    expect(match.startedAt).toBe(new Date(0).toISOString());
+  });
+
+  /**
+   * 始まる前の座席にも答える。「座席が見つからない」と返すと、仕様どおりに `hello` や `ping` を
+   * 送るクライアントは、取れている席を失ったと読む。
+   */
+  it("始まる前の座席には、生存確認とまだ始まっていないことだけを答える", () => {
+    const arena = newArena();
+    const [a] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
+    const socket = recorder();
+    arena.hub.attach(socket, a.seatToken, SHARE_A);
+    arena.hub.handle(socket, a.seatToken, { t: "ping" });
+    arena.hub.handle(socket, a.seatToken, { t: "hello" });
+    arena.hub.handle(socket, a.seatToken, { t: "concede" });
+    expect(socket.sent.map((message) => message.t)).toEqual([
+      "pending",
+      "pong",
+      "pending",
+      "error",
+    ]);
+    expect(arena.registry.live()).toHaveLength(0);
   });
 
   it("決着で寄与を明かし、記録から寄与とコミットを検算できる", () => {

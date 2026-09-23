@@ -207,6 +207,14 @@ async function verifyShuffle(seated, ended) {
   }
   const shares = ended.seedShares;
   const problems = [];
+  // 席の知らせに載ってきた自分のコミットが、送ったものと同じか。すり替えられていれば、
+  // サーバが選んだ値を自分の寄与として開いても、下の突き合わせは全部通ってしまう。
+  if (
+    typeof seated.seedShare === "string" &&
+    seated.seedShareCommits[seated.seat] !== (await sha256Hex(`share:${seated.seedShare}`))
+  ) {
+    problems.push("自分の寄与のコミットがすり替えられています");
+  }
   if ((await sha256Hex(`commit:${ended.seedNonce}`)) !== seated.seedCommit) {
     problems.push("サーバのコミットと合いません");
   }
@@ -234,7 +242,8 @@ async function verifyShuffle(seated, ended) {
       "シャッフルに自分の寄与が使われていません。席に着くのが期限に間に合わなかったか、サーバが寄与を捨てています。",
     ];
   }
-  return ["ok", "シャッフルを検算しました。並びは対戦の前に決まっていたものです。"];
+  // 確かめたのは値の対応までである。その seed で対局したかは、記録を再生しないと分からない。
+  return ["ok", "シャッフルの値を検算しました。seed は、対戦の前にコミットされた値から導けます。"];
 }
 
 /** 書かれていれば解決した結果、空ならサンプルデッキ。通らなければ null。 */
@@ -375,7 +384,7 @@ function openMatch(seated) {
   if (typeof seated.seedShare === "string") query.push(`seedShare=${seated.seedShare}`);
   socket = new WebSocket(socketUrl(query.join("&")));
   /**
-   * 一度でも `sync` が届いたかどうか。閉じた理由を分けるのに使う。
+   * 一度でも `sync` か `pending` が届いたかどうか。閉じた理由を分けるのに使う。
    *
    * 届く前に閉じたなら、サーバはこの座席を知らない（対戦はもう終わっている）。
    * 覚えている座席を持ったままだと、開き直すたびに同じ座席へ繋ぎに行って同じ形で閉じ、
@@ -384,7 +393,7 @@ function openMatch(seated) {
   let synced = false;
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    if (message.t === "sync") synced = true;
+    if (message.t === "sync" || message.t === "pending") synced = true;
     receive(message);
   });
   socket.addEventListener("close", () => {

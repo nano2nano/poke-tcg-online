@@ -5,6 +5,7 @@
  * 仕様の対象外であり、書き換わっても壊れないテストにしておく必要がある。
  */
 
+import { createHash } from "node:crypto";
 import {
   expect,
   test as base,
@@ -479,6 +480,88 @@ test("決着で開かれた寄与が差し替えられていたら、合わな�
   await a.click("#concede-button");
 
   await expect(a.locator("#shuffle-check")).toHaveAttribute("data-result", "ok");
+  await expect(b.locator("#shuffle-check")).toHaveAttribute("data-result", "mismatch");
+
+  await close();
+});
+
+/**
+ * 相手の寄与を待っているあいだに接続が切れても、席を忘れない。`sync` が届く前に切れたことだけで
+ * 「サーバが座席を知らない」と読むと、始まる直前の対戦から降り、座らないまま時間切れで負ける。
+ */
+test("相手の寄与を待っているあいだに切れても、席を覚えている", async ({ browser, pageErrors }) => {
+  const room = `まちぼうけ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  // b は席を取っても繋がない。対戦は寄与がそろうのを待ったままになる。
+  await b.routeWebSocket(/\/ws\?/, (client) => client.close());
+  // a の接続は、始まる前の知らせを受け取ったところで切る。
+  let pendingSeen = false;
+  await a.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      client.send(raw);
+      if (JSON.parse(String(raw)).t === "pending") {
+        pendingSeen = true;
+        client.close();
+      }
+    });
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+
+  await expect.poll(() => pendingSeen).toBe(true);
+  await expect(a.locator("#table")).toBeVisible();
+  expect(await a.evaluate(() => localStorage.getItem("poke-seat"))).not.toBeNull();
+
+  await close();
+});
+
+/**
+ * サーバが自分の寄与のコミットをすり替え、自分の寄与として別の値を開いた形。
+ * コミットと寄与の組は辻褄が合っているので、送ったコミットと見比べないと「寄与が使われていない」
+ * としか出せず、すり替えだと分からない。
+ */
+test("自分の寄与のコミットがすり替えられていたら、合わないと出す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `すりかえ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const forged = "c".repeat(64);
+  const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+  // b は 2 人目なので、席は参加の応答で届く。
+  await b.route("**/api/join", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    if (body.seat !== undefined) body.seat.seedShareCommits[1] = sha256(`share:${forged}`);
+    await route.fulfill({ response, json: body });
+  });
+  await b.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "ended") {
+        message.seedShares[1] = forged;
+        message.seed = sha256(
+          `seed:${message.seedNonce}:${message.seedShares[0] ?? ""}:${forged}`,
+        ).slice(0, 32);
+      }
+      client.send(JSON.stringify(message));
+    });
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#self .row").first()).toBeVisible();
+
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+
   await expect(b.locator("#shuffle-check")).toHaveAttribute("data-result", "mismatch");
 
   await close();

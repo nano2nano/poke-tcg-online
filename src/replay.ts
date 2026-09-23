@@ -12,7 +12,7 @@ import type { DomainEvent, GameOutcome, GameState, Player } from "./engine.js";
 import {
   commitSeed,
   commitShare,
-  NO_SHARES,
+  noShares,
   OLDEST_REPLAYABLE_SCHEMA_VERSION,
 } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
@@ -185,8 +185,8 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
  * 寄与が無いのは、期限までに開かなかった座席で、これは正しい記録である。
  */
 export function seedCommitmentHolds(record: MatchRecord): boolean {
-  const shares = record.seedShares ?? NO_SHARES;
-  const commits = record.seedShareCommits ?? NO_SHARES;
+  const shares = record.seedShares ?? noShares();
+  const commits = record.seedShareCommits ?? noShares();
   for (const seat of [0, 1] as const) {
     const share = shares[seat];
     if (share === null) continue;
