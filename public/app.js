@@ -606,9 +606,8 @@ function deckCodeOf(text) {
 /**
  * 公式のデッキ確認ページから、カード ID と枚数、カード名を読む。デッキが無ければ null。
  *
- * 枚数はページの隠し欄 `deck_*` に「カード ID_枚数_…」を `-` でつないだ形で入っている。
- * 欄はカードの種類ごとに分かれていて、ページの並びがそのまま公式のレシピの並びになる。
- * 見つからないコードでも欄は空で並ぶので、欄が 1 つも無ければページの形が変わったと読む。
+ * 枚数は `deck_*` の hidden input に「カード ID_枚数_…」を `-` でつないだ形で入っている。
+ * 見つからないコードでも input は空で並ぶので、1 つも無ければページの形が変わったと読む。
  */
 async function fetchOfficialDeck(code) {
   let response;
@@ -636,7 +635,7 @@ async function fetchOfficialDeck(code) {
   }
   if (cards.length === 0) return null;
 
-  // 名前はページのスクリプトにしか無い。スクリプトは動かさず、文字列として読む。
+  // 名前はページのスクリプトの中にある。DOMParser はスクリプトを動かさないので、文字列として読む。
   const names = {};
   for (const [, cardId, quoted] of html.matchAll(
     /searchItemName\[([0-9]+)\]\s*=\s*'((?:[^'\\]|\\.)*)'/g,
