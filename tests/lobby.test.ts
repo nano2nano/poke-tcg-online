@@ -513,5 +513,8 @@ describe("座席の接続", () => {
     }
     // 終わった対戦はレジストリを離れる。
     expect(registry.live()).toHaveLength(0);
+    // 開いたままだと、座席トークンの通らない接続へ `ping` のたびにエラーを返し続ける。
+    expect(socketA.closed).toBe(true);
+    expect(socketB.closed).toBe(true);
   });
 });

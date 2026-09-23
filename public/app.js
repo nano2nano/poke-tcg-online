@@ -424,7 +424,8 @@ function openMatch(seated) {
   socket.addEventListener("close", () => {
     if (storedSeat() === null) return;
     if (unknownSeat) {
-      forgetSeat();
+      // 別のタブが新しい対戦の座席を置いていれば、それは消さない。
+      if (storedSeat()?.seatToken === seated.seatToken) forgetSeat();
       backToJoin("指していた対戦は、もう終わっています。");
       return;
     }
@@ -432,11 +433,15 @@ function openMatch(seated) {
       addEvent("接続が切れました。読み込み直すと戻れます");
       return;
     }
-    $("clock").textContent = "サーバへ繋がりませんでした。読み込み直すと繋ぎ直します";
+    /**
+     * 座席は覚えたまま、マッチングの画面も出す。盤面の画面に留めると、繋がらない状態が
+     * 続いたときに対戦を始める画面へ二度と出られない。
+     */
+    backToJoin("サーバへ繋がりませんでした。読み込み直すと、指していた対戦へ繋ぎ直します。");
   });
 }
 
-/** マッチングの画面へ戻す。座席を失ったときだけ通る。 */
+/** マッチングの画面へ戻す。座席を失ったときと、座席へ繋がらなかったときに通る。 */
 function backToJoin(text) {
   socket = null;
   seat = null;
