@@ -1,23 +1,33 @@
-# 型検査と書式とテストを回す。ブランチ保護の required check はこの job の名前（verify）。
+# 型検査と書式とテストを回し、main では通ったものを本番へ出す（`docs/deploy.md`）。
+# ブランチ保護の required check は検査の job の名前（verify）。
 #
-# エンジンは private な submodule なので、取得だけ deploy key（読み取り専用）で行う。
-# リポジトリ自身の checkout には既定のトークンを使い、鍵を渡さない。鍵が要るのは
-# submodule の 1 行だけで、範囲をそこへ閉じる。
+# エンジンは private な submodule なので、取得だけ deploy key（読み取り専用）で行う
+# （`.github/actions/checkout-engine`）。
 name: verify
 
 on:
   push:
     branches: [main]
   pull_request:
+  # 出し直すときと、対戦が終わるのを待たずに出すときに使う。
+  workflow_dispatch:
+    inputs:
+      wait_for_idle:
+        description: 指している対戦が終わるまで待ってから出す
+        type: boolean
+        default: true
 
 # 公開リポジトリなので、既定の権限を読み取りだけに絞る。
 permissions:
   contents: read
 
-# 同じ ref に新しい push が来たら、走っている方を止める。
+# PR では、同じブランチに新しい push が来たら走っている方を止める。
+# main では止めずに 1 つずつ走らせる。止めると、対戦が終わるのを待っているデプロイまで途中で切れる。
+# 走っている間に来た実行は並び、さらに次が来たら並んでいた方が取り消される。並ぶのは常に最後に来た
+# 実行なので、古い版があとから出ることは無い。
 concurrency:
   group: verify-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -29,45 +39,9 @@ jobs:
         with:
           submodules: false
 
-      - name: エンジンを読む鍵が渡っているか確かめる
-        env:
-          ENGINE_DEPLOY_KEY: ${{ secrets.ENGINE_DEPLOY_KEY }}
-          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          if [ -n "$ENGINE_DEPLOY_KEY" ]; then
-            exit 0
-          fi
-          if [ "$ACTOR" = "dependabot[bot]" ]; then
-            echo "::error::dependabot が起こした実行には Actions のシークレットが渡らない。Settings > Secrets and variables > Dependabot にも同じ名前で同じ deploy key を登録すること。"
-          elif [ "$IS_FORK" = "true" ]; then
-            echo "::error::fork から来た PR にはシークレットが渡らないため、エンジン（private な submodule）を取得できない。この PR を検査するには、同じ変更をこのリポジトリのブランチへ push すること。"
-          else
-            echo "::error::ENGINE_DEPLOY_KEY が空。Settings > Secrets and variables > Actions に、poke-tcg-engine を読める deploy key（SSH 秘密鍵）を同じ名前で登録すること。"
-          fi
-          exit 1
-
-      # この action には deploy key の秘密鍵を渡す。タグは書き換えられるので、
-      # 差し替えが起きても効かないようにコミットの SHA で固定する。更新は dependabot に任せる。
-      - name: 鍵を ssh-agent へ載せる
-        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+      - uses: ./.github/actions/checkout-engine
         with:
-          ssh-private-key: ${{ secrets.ENGINE_DEPLOY_KEY }}
-
-      - name: github.com のホスト鍵を控える
-        run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
-          sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
-
-      # .gitmodules は https の URL を持つ。鍵で取れるのは ssh なので、この 1 回だけ読み替える。
-      # 設定はリポジトリへ書き込まず、このコマンドの中だけで効かせる。
-      - name: エンジン（submodule）を取る
-        run: |
-          git -c url."git@github.com:".insteadOf=https://github.com/ \
-            submodule update --init --depth 1 engine
-          test -f engine/package.json \
-            || { echo "::error::engine/ が空のまま。submodule の取得に失敗している"; exit 1; }
+          deploy-key: ${{ secrets.ENGINE_DEPLOY_KEY }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -100,3 +74,53 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  deploy:
+    name: deploy
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Cloudflare のトークンは、この environment のシークレットに置く。environment の側で
+    # 出せるブランチを main に絞れば、ほかのブランチの実行からはトークンを読めない。
+    environment: production
+    # 対戦が終わるのを待つ 60 分を含める。
+    timeout-minutes: 90
+    env:
+      PRODUCTION_URL: https://poke-tcg-online.dev2nano.workers.dev
+    steps:
+      - name: Cloudflare のトークンが渡っているか確かめる
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN か CLOUDFLARE_ACCOUNT_ID が空。Settings > Environments > production の Environment secrets に登録すること（docs/deploy.md）。"
+            exit 1
+          fi
+
+      - name: このリポジトリを取る（submodule は取らない）
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: false
+
+      - uses: ./.github/actions/checkout-engine
+        with:
+          deploy-key: ${{ secrets.ENGINE_DEPLOY_KEY }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 依存を入れる
+        run: npm ci
+
+      - name: 指している対戦が終わるのを待つ
+        if: github.event_name != 'workflow_dispatch' || inputs.wait_for_idle
+        run: npx tsx tools/wait-for-idle.ts "$PRODUCTION_URL" 60
+
+      - name: 出す
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy

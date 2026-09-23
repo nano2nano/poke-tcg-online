@@ -216,9 +216,16 @@ export class MatchArchive {
       .run();
   }
 
-  /** 決着を残す列が空くまで待つ。 */
+  /**
+   * 決着を残す列が空くまで待つ。待つ間に並んだ決着も待つ。`/api/status` は、これが返った時点で
+   * レジストリを離れた対戦を書き終えていることを前提に 0 を答える。
+   */
   async settled(): Promise<void> {
-    await this.queue;
+    let seen: Promise<unknown>;
+    do {
+      seen = this.queue;
+      await seen;
+    } while (seen !== this.queue);
   }
 
   private async index(record: MatchRecord): Promise<void> {
