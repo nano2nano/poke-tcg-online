@@ -242,6 +242,14 @@ async function verifyShuffle(seated, ended) {
       "シャッフルに自分の寄与が使われていません。席に着くのが期限に間に合わなかったか、サーバが寄与を捨てています。",
     ];
   }
+  // 期限に遅れたことにして寄与を捨てれば、サーバは並びを 2 通りから選べる。黙って「合う」とだけ出さない。
+  const opponent = 1 - seated.seat;
+  if (shares[opponent] === null && seated.seedShareCommits[opponent] !== null) {
+    return [
+      "opponent-share-unused",
+      "シャッフルの値を検算しました。ただし相手の寄与は期限までに開かれず、並びはサーバと自分の値で決まりました。",
+    ];
+  }
   // 確かめたのは値の対応までである。その seed で対局したかは、記録を再生しないと分からない。
   return ["ok", "シャッフルの値を検算しました。seed は、対戦の前にコミットされた値から導けます。"];
 }

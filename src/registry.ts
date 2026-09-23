@@ -66,10 +66,14 @@ export class MatchRegistry {
   /** 待っていた対戦を始め、進行中の対戦として置き直す。座席トークンはそのまま使える。 */
   start(pending: PendingMatch, nowMs: number): Match {
     const match = startPending(pending, nowMs);
-    this.pending.delete(pending.matchId);
-    for (const token of pending.seatTokens) this.pendingSeats.delete(token);
+    this.dropPending(pending);
     this.add(match);
     return match;
+  }
+
+  dropPending(pending: PendingMatch): void {
+    this.pending.delete(pending.matchId);
+    for (const token of pending.seatTokens) this.pendingSeats.delete(token);
   }
 
   /** 寄与を開く期限を過ぎた、始まる前の対戦。 */

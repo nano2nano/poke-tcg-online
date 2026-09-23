@@ -109,9 +109,26 @@ export class MatchHub {
     if (allRevealed(ref.pending)) this.startPending(ref.pending);
   }
 
+  /**
+   * **始められなかった対戦は捨てる。** ここは WebSocket の `connection` の中からも呼ばれるので、
+   * 投げるとプロセスごと落ちる。残すと、次のスイープでも同じ形で失敗し続け、両座席は
+   * 始まらない対戦を待ち続ける。
+   */
   private startPending(pending: PendingMatch): void {
-    const match = this.options.registry.start(pending, this.now());
-    const perMatch = this.sockets.get(match.matchId);
+    const perMatch = this.sockets.get(pending.matchId);
+    let match: Match;
+    try {
+      match = this.options.registry.start(pending, this.now());
+    } catch (error) {
+      console.error(`対戦を始められなかった（${pending.matchId}）:`, error);
+      this.options.registry.dropPending(pending);
+      this.sockets.delete(pending.matchId);
+      for (const socket of perMatch?.values() ?? []) {
+        send(socket, { t: "error", message: "対戦を始められなかった" });
+        socket.close();
+      }
+      return;
+    }
     for (const seat of [0, 1] as Player[]) {
       const socket = perMatch?.get(seat);
       if (socket !== undefined) send(socket, this.syncFor(match, seat));
@@ -301,13 +318,7 @@ export class MatchHub {
    */
   sweepTimeouts(): void {
     // 始めた対戦では、来ない座席の時計が流れる（3.4 節）。
-    for (const pending of this.options.registry.overdue(this.now())) {
-      try {
-        this.startPending(pending);
-      } catch (error) {
-        console.error(`対戦を始められなかった（${pending.matchId}）:`, error);
-      }
-    }
+    for (const pending of this.options.registry.overdue(this.now())) this.startPending(pending);
     for (const match of this.options.registry.sweepTimeouts(this.now())) {
       try {
         this.endMatch(match);

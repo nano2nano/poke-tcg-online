@@ -566,3 +566,42 @@ test("自分の寄与のコミットがすり替えられていたら、合わ�
 
   await close();
 });
+
+/**
+ * 相手の寄与が期限に遅れたとされた形。サーバは届いた寄与を捨てるかどうかで並びを
+ * 2 通りから選べるので、値の対応が合っていても、黙って「合う」とだけは出さない。
+ */
+test("相手の寄与が使われていなければ、そう出す", async ({ browser, pageErrors }) => {
+  const room = `おくれ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+  // a（座席 0）に届く決着だけ、相手の寄与を null にして seed を作り直す。
+  await a.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "ended") {
+        message.seedShares[1] = null;
+        message.seed = sha256(`seed:${message.seedNonce}:${message.seedShares[0] ?? ""}:`).slice(
+          0,
+          32,
+        );
+      }
+      client.send(JSON.stringify(message));
+    });
+  });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#self .row").first()).toBeVisible();
+
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+
+  await expect(a.locator("#shuffle-check")).toHaveAttribute("data-result", "opponent-share-unused");
+  await expect(b.locator("#shuffle-check")).toHaveAttribute("data-result", "ok");
+
+  await close();
+});

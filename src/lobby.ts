@@ -15,12 +15,7 @@ import type { SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
 import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
 import { commitSeed, noShares, type SeedShares } from "./fingerprint.js";
-import {
-  allRevealed,
-  SHARE_REVEAL_DEADLINE_MS,
-  startPending,
-  type PendingMatch,
-} from "./pending.js";
+import { allRevealed, SHARE_REVEAL_DEADLINE_MS, type PendingMatch } from "./pending.js";
 
 export interface JoinRequest {
   /** プレイヤーのシークレット（7.2 節）。これが無い対戦は始めない。 */
@@ -359,7 +354,7 @@ export class Lobby {
       shares: noShares(),
       deadlineMs: nowMs + SHARE_REVEAL_DEADLINE_MS,
     };
-    if (allRevealed(pending)) this.registry.add(startPending(pending, nowMs));
+    if (allRevealed(pending)) this.registry.start(pending, nowMs);
     else this.registry.addPending(pending);
     const seated = (seat: Player): Seated => ({
       matchId: pending.matchId,

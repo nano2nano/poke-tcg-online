@@ -9,13 +9,13 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AccountStore } from "../src/accounts.js";
 import { commitSeed, commitShare, type SeedShares } from "../src/fingerprint.js";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { Lobby, type Seated } from "../src/lobby.js";
 import type { MatchRecord } from "../src/log.js";
-import { SHARE_REVEAL_DEADLINE_MS } from "../src/pending.js";
+import { SHARE_REVEAL_DEADLINE_MS, type PendingMatch } from "../src/pending.js";
 import type { ServerMessage } from "../src/protocol.js";
 import { MatchRegistry } from "../src/registry.js";
 import { seedCommitmentHolds } from "../src/replay.js";
@@ -93,14 +93,17 @@ function seatBoth(arena: Arena, commits: SeedShares): [Seated, Seated] {
   return [claimed.seat, second.seat];
 }
 
-function recorder(): SeatSocket & { sent: ServerMessage[] } {
+function recorder(): SeatSocket & { sent: ServerMessage[]; closed: boolean } {
   const sent: ServerMessage[] = [];
   return {
     sent,
+    closed: false,
     send(data: string) {
       sent.push(JSON.parse(data) as ServerMessage);
     },
-    close() {},
+    close() {
+      this.closed = true;
+    },
   };
 }
 
@@ -186,6 +189,39 @@ describe("寄与の開示", () => {
       "error",
     ]);
     expect(arena.registry.live()).toHaveLength(0);
+  });
+
+  /**
+   * 始める処理は WebSocket の `connection` の中からも走る。投げればプロセスごと落ち、
+   * 残せば次のスイープでも同じ形で失敗して、両座席は始まらない対戦を待ち続ける。
+   */
+  it("始められなかった対戦は捨て、座席へ知らせて閉じる", () => {
+    ensureCards();
+    const arena = newArena();
+    const pending: PendingMatch = {
+      matchId: "broken",
+      // 空のデッキでは初手を引けず、エンジンが投げる。
+      decks: [{ cards: [] }, { cards: [] }],
+      seats: [
+        { playerId: "p0", displayName: "a", rating: 1500 },
+        { playerId: "p1", displayName: "b", rating: 1500 },
+      ],
+      seatTokens: ["broken-0", "broken-1"],
+      spectatorToken: "broken-watch",
+      startedAt: new Date(0).toISOString(),
+      server: commitSeed("n"),
+      shareCommits: [commitShare(SHARE_A), null],
+      shares: [null, null],
+      deadlineMs: SHARE_REVEAL_DEADLINE_MS,
+    };
+    arena.registry.addPending(pending);
+    const socket = recorder();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => arena.hub.attach(socket, "broken-0", SHARE_A)).not.toThrow();
+    errors.mockRestore();
+    expect(socket.sent.map((message) => message.t)).toEqual(["pending", "error"]);
+    expect(socket.closed).toBe(true);
+    expect(arena.registry.holdsSeat("broken-0")).toBe(false);
   });
 
   it("決着で寄与を明かし、記録から寄与とコミットを検算できる", () => {
