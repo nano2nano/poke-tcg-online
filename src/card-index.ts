@@ -31,6 +31,8 @@ export interface CardBrief {
   /** いちばん新しい収録。再録の多いカードは、古い収録では見覚えが無い。 */
   set?: string;
   number?: string;
+  /** その収録の公式の cardID。画面はこれでカードの画像を頼む（3.7 節）。 */
+  cardID?: string;
 }
 
 let index: Record<string, CardBrief> | null = null;
@@ -75,5 +77,6 @@ export function briefOf(def: CardDef): CardBrief {
     ...(isAceSpec(def.defId) ? { aceSpec: true } : {}),
     ...(print === undefined || print.set === "" ? {} : { set: print.set }),
     ...(print?.number == null ? {} : { number: print.number }),
+    ...(print === undefined ? {} : { cardID: print.cardID }),
   };
 }
