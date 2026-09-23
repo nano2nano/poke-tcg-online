@@ -58,12 +58,11 @@ export class MatchRegistry {
     return this.pendingSeats.get(token);
   }
 
-  /** 座席トークンが、始まる前か進行中の対戦を指しているか。 */
   holdsSeat(token: string): boolean {
     return this.seats.has(token) || this.pendingSeats.has(token);
   }
 
-  /** 待っていた対戦を始め、進行中の対戦として置き直す。座席トークンはそのまま使える。 */
+  /** 座席トークンは、始まる前と同じものがそのまま使える。 */
   start(pending: PendingMatch, nowMs: number): Match {
     const match = startPending(pending, nowMs);
     this.dropPending(pending);
@@ -76,7 +75,6 @@ export class MatchRegistry {
     for (const token of pending.seatTokens) this.pendingSeats.delete(token);
   }
 
-  /** 寄与を開く期限を過ぎた、始まる前の対戦。 */
   overdue(nowMs: number): PendingMatch[] {
     return [...this.pending.values()].filter((pending) => pending.deadlineMs <= nowMs);
   }

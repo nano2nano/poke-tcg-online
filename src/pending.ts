@@ -20,7 +20,7 @@ import { createMatch, type Match, type SeatInfo } from "./match.js";
  * 寄与を開くのを待つ長さ。過ぎたら、開かなかった座席の寄与を null として対戦を始める。
  *
  * 待ち続けないのは、来ない相手を待つ人が対戦を始められなくなるからである。
- * 引き換えは 1 秒ごとに問い合わせる（7 節）ので、その何倍かあれば、席に着く気のある人は間に合う。
+ * 引き換えの問い合わせ間隔（7 節）の何倍もあれば、席に着く気のある人は間に合う。
  */
 export const SHARE_REVEAL_DEADLINE_MS = 30_000;
 
@@ -53,17 +53,13 @@ export function reveal(pending: PendingMatch, seat: Player, share: string | null
   return "accepted";
 }
 
-/** コミットを送った座席がみな寄与を開いたか。 */
 export function allRevealed(pending: PendingMatch): boolean {
   return ([0, 1] as Player[]).every(
     (seat) => pending.shareCommits[seat] === null || pending.shares[seat] !== null,
   );
 }
 
-/**
- * そろった寄与で `seed` を決め、対戦を始める。開かなかった座席の寄与は null のままにする。
- * 時計はここから流れる。
- */
+/** 開かなかった座席の寄与は null のまま混ぜる。時計はここから流れる。 */
 export function startPending(pending: PendingMatch, nowMs: number): Match {
   return createMatch({
     matchId: pending.matchId,

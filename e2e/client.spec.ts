@@ -494,7 +494,7 @@ test("相手の寄与を待っているあいだに切れても、席を覚え�
   const [a, b, close] = await openPair(browser, pageErrors);
   // b は席を取っても繋がない。対戦は寄与がそろうのを待ったままになる。
   await b.routeWebSocket(/\/ws\?/, (client) => client.close());
-  // a の接続は、始まる前の知らせを受け取ったところで切る。
+  // a の接続は、`pending` を受け取ったところで切る。
   let pendingSeen = false;
   await a.routeWebSocket(/\/ws\?/, (client) => {
     const server = client.connectToServer();

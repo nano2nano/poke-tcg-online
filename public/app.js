@@ -207,7 +207,7 @@ async function verifyShuffle(seated, ended) {
   }
   const shares = ended.seedShares;
   const problems = [];
-  // 席の知らせに載ってきた自分のコミットが、送ったものと同じか。すり替えられていれば、
+  // 座席の割り当てに載ってきた自分のコミットが、送ったものと同じか。すり替えられていれば、
   // サーバが選んだ値を自分の寄与として開いても、下の突き合わせは全部通ってしまう。
   if (
     typeof seated.seedShare === "string" &&

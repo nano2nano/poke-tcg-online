@@ -101,7 +101,6 @@ export class MatchHub {
     this.sockets.set(matchId, perMatch);
   }
 
-  /** 席に着いた接続が開いた寄与を受け取り、そろえば対戦を始める。 */
   private acceptShare(socket: SeatSocket, ref: PendingSeatRef, seedShare: string | null): void {
     if (reveal(ref.pending, ref.seat, seedShare) === "mismatch") {
       send(socket, { t: "error", message: "寄与が、参加のときに送ったコミットと合わない" });

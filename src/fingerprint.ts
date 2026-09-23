@@ -141,7 +141,6 @@ function seedInput(nonce: string, shares: SeedShares): string {
   return `seed:${nonce}:${shares[0] ?? ""}:${shares[1] ?? ""}`;
 }
 
-/** 座席が参加するときに送る、寄与のコミット。 */
 export function commitShare(share: string): string {
   return createHash("sha256").update(`share:${share}`).digest("hex");
 }
