@@ -22,7 +22,9 @@ let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
 /** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
-let lastMoves = { moves: null, playing: false };
+let lastMoves = { moves: null, playing: false, setup: null };
+/** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
+let setupDraft = { active: null, bench: [], sent: false };
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 /**
@@ -195,7 +197,7 @@ function redraw() {
   restore();
   if (lastView !== null) {
     renderView(lastView);
-    renderMoves(lastMoves.moves, lastMoves.playing);
+    renderMoves(lastMoves.moves, lastMoves.playing, lastMoves.setup);
   }
   if (lastWatchView !== null) renderWatch(lastWatchView);
   if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
@@ -300,6 +302,14 @@ window.addEventListener("storage", (event) => {
   renderSearch();
   // 「規則を通ります」は古くなるので消す。候補のボタンはテキスト欄のものなので残す。
   if ($("deck-status").classList.contains("ok")) showDeckStatus([], "");
+});
+
+$("setup-submit").addEventListener("click", () => {
+  if (setupDraft.active === null || setupDraft.sent) return;
+  // 返事が来るまで押せなくする。2 度目はサーバが断り、通った答えまで失敗に見える。
+  setupDraft.sent = true;
+  $("setup-submit").disabled = true;
+  send({ t: "setup", active: setupDraft.active, bench: setupDraft.bench });
 });
 
 $("concede-button").addEventListener("click", () => {
@@ -1251,7 +1261,8 @@ function receive(message) {
       if (message.events !== undefined) for (const event of message.events) addEvent(event.kind);
       renderView(message.view);
       renderClock(message.clock);
-      renderMoves(message.legalMoves);
+      setupDraft.sent = false;
+      renderMoves(message.legalMoves, true, message.setup);
       return;
     case "ended":
       // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
@@ -1516,14 +1527,19 @@ function renderClock(clock) {
   $("clock").textContent = `${turn}${remaining} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
 }
 
-/** `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。 */
-function renderMoves(moves, playing = true) {
-  lastMoves = { moves, playing };
+/**
+ * `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。
+ * `setup` はサーバが送る準備の状態で、あるあいだは同じ選択を 1 手ずつ指すボタンを並べない。
+ */
+function renderMoves(moves, playing = true, setup = null) {
+  lastMoves = { moves, playing, setup };
   const prompt = $("move-prompt");
-  prompt.textContent = playing ? promptText(lastView, moves !== null) : "";
+  prompt.textContent = playing ? promptText(lastView, moves !== null, setup) : "";
   prompt.hidden = prompt.textContent === "";
+  renderSetupForm(playing && setup?.kind === "choose" ? setup : null);
   const container = $("moves");
   container.innerHTML = "";
+  if (playing && setup !== null) return;
   if (moves === null) {
     // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
     if (playing && lastView?.phase !== "setup") container.append(waitingNote(lastView));
@@ -1553,17 +1569,76 @@ function waitingNote(view) {
 }
 
 /**
+ * 対戦準備のバトル場とベンチを選ぶ。選んだものは「準備を終える」で 1 度に送る。
+ *
+ * エンジンは準備を 1 人ずつの選択に並べて進めるが、サーバは番の来ていない座席の答えも
+ * 預かる（仕様 2.4 節）。1 つずつ送る形にすると、相手の番を待つたびに止まる。
+ */
+function renderSetupForm(offer) {
+  $("setup").hidden = offer === null;
+  if (offer === null) {
+    setupDraft = { active: null, bench: [], sent: false };
+    return;
+  }
+  if (!offer.active.includes(setupDraft.active)) setupDraft.active = null;
+  setupDraft.bench = setupDraft.bench
+    .filter((id) => offer.bench.includes(id) && id !== setupDraft.active)
+    .slice(0, offer.benchSlots);
+
+  const redraw = () => renderSetupForm(offer);
+  $("setup-active").replaceChildren(
+    ...offer.active.map((id) =>
+      toggleButton(id, setupDraft.active === id, () => {
+        setupDraft.active = setupDraft.active === id ? null : id;
+        redraw();
+      }),
+    ),
+  );
+  const full = setupDraft.bench.length >= offer.benchSlots;
+  $("setup-bench").replaceChildren(
+    ...offer.bench
+      .filter((id) => id !== setupDraft.active)
+      .map((id) => {
+        const chosen = setupDraft.bench.includes(id);
+        const button = toggleButton(id, chosen, () => {
+          setupDraft.bench = chosen
+            ? setupDraft.bench.filter((each) => each !== id)
+            : [...setupDraft.bench, id];
+          redraw();
+        });
+        button.disabled = !chosen && full;
+        return button;
+      }),
+  );
+  $("setup-submit").disabled = setupDraft.active === null || setupDraft.sent;
+}
+
+function toggleButton(instanceId, pressed, onClick) {
+  const button = el("button", "secondary", handCardName(instanceId, lastView));
+  button.type = "button";
+  button.dataset.instanceId = instanceId;
+  button.setAttribute("aria-pressed", String(pressed));
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+/**
  * 対戦準備で、何を選んでいるのか。
  *
- * エンジンは両者同時の準備を「先攻のバトル場、後攻のバトル場、先攻のベンチ、後攻のベンチ」の
- * 順に 1 人ずつ選ばせる。バトル場に 1 体出したところで相手の選ぶ番になるので、
- * 何も書かないと、たねがまだ手札にあるのに番が移ったように見える。
+ * まとめて出せないとき（マリガンの追加ドロー、たねが無く特性で出られるカードだけのとき）は、
+ * エンジンの選択を 1 つずつ答える。準備は 1 人ずつ進むので、何も書かないと相手の番に移ったように見える。
  */
-function promptText(view, mine) {
+function promptText(view, mine, setup = null) {
   if (view?.phase !== "setup") return "";
-  if (!mine) {
-    return "相手が対戦の準備で選んでいます。準備は 1 人ずつ順に選ぶので、そのあいだは待ちになります。";
+  if (setup?.kind === "choose") {
+    return "バトル場に出すポケモンを 1 枚と、ベンチに出すたねポケモンを選んで「準備を終える」を押してください。相手に見えるのは、両者が出し終えてからです。";
   }
+  if (setup?.kind === "submitted") {
+    const bench = setup.bench.map((id) => ownCardName(id, view)).join("、");
+    const placed = `バトル場に ${ownCardName(setup.active, view)}${bench === "" ? "" : `、ベンチに ${bench}`}`;
+    return `${placed} を出しました。相手の準備を待っています。`;
+  }
+  if (!mine) return "相手が対戦の準備で選んでいます。";
   const choice = view.choices.at(-1);
   switch (choice?.kind) {
     case "setup-place-active":
@@ -1692,6 +1767,14 @@ function handCardName(instanceId, view) {
     if (card !== undefined) return nameOf(card.defId);
   }
   return instanceId;
+}
+
+/** 手札か自分の場にある自分のカードの名前。出したあとのカードは手札から場へ移っている。 */
+function ownCardName(instanceId, view) {
+  const self = view?.self;
+  const inPlay = [self?.active, ...(self?.bench ?? [])].flatMap((pokemon) => pokemon?.stack ?? []);
+  const card = [...(self?.hand ?? []), ...inPlay].find((each) => each.instanceId === instanceId);
+  return card === undefined ? instanceId : nameOf(card.defId);
 }
 
 function addEvent(text, list = "events") {

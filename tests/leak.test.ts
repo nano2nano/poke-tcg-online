@@ -14,6 +14,7 @@ import {
   clockView,
   eventsFor,
   legalMovesFor,
+  setupViewFor,
   spectatorViewFor,
   toMove,
   viewFor,
@@ -35,6 +36,7 @@ function seatPayload(match: Match, seat: Player): string {
   return JSON.stringify({
     view: viewFor(match, seat),
     legalMoves: legalMovesFor(match, seat),
+    setup: setupViewFor(match, seat),
     clock: clockView(match, 0),
   });
 }
