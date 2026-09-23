@@ -105,6 +105,12 @@ const MALFORMED: unknown[] = [
   { t: "move", stateVersion: 0, move: [] },
   { t: "move", stateVersion: 0, move: { type: "EndTurn" }, offered: "ぜんぶ" },
   { t: "move", stateVersion: 0, move: { type: "EndTurn" }, offered: [-1] },
+  { t: "setup" },
+  { t: "setup", active: "p0-1" },
+  { t: "setup", active: 1, bench: [] },
+  { t: "setup", active: "p0-1", bench: "p0-2" },
+  { t: "setup", active: "p0-1", bench: [2] },
+  { t: "setup", active: "p0-1", bench: Array.from({ length: 9 }, (_, i) => `p0-${i + 2}`) },
 ];
 
 describe("座席から届く 1 通", () => {
@@ -153,5 +159,41 @@ describe("座席から届く 1 通", () => {
     expect(answer.seat).toBe(0);
     expect(answer.view.viewer).toBe(0);
     opened.socket.close();
+  });
+});
+
+describe("対戦準備をまとめて出す 1 通", () => {
+  it("手番でない座席からも受け取り、両座席がそろったところで局面が動く", async () => {
+    let seats: Opened[] = [];
+    let syncs: Record<string, any>[] = [];
+    // マリガンの追加ドローがあると、まとめて出せるのはそれを答えてからになる。無い対戦を使う。
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const tokens = await seatTokens(`まとめて-${attempt}`);
+      seats = await Promise.all(tokens.map((token) => open(token)));
+      for (const seat of seats) seat.socket.send(JSON.stringify({ t: "hello" }));
+      syncs = await Promise.all(seats.map((seat) => seat.next()));
+      if (syncs.every((sync) => sync.setup?.kind === "choose")) break;
+      for (const seat of seats) seat.socket.close();
+    }
+    expect(syncs.map((sync) => sync.setup?.kind)).toEqual(["choose", "choose"]);
+
+    const mover = syncs.findIndex((sync) => sync.legalMoves !== null);
+    const waiter = 1 - mover;
+    const early = syncs[waiter]!.setup;
+    seats[waiter]!.socket.send(JSON.stringify({ t: "setup", active: early.active[0], bench: [] }));
+    const held = await seats[waiter]!.next();
+    expect(held.t).toBe("sync");
+    expect(held.setup).toEqual({ kind: "submitted", active: early.active[0], bench: [] });
+    expect(held.stateVersion).toBe(0);
+
+    const own = syncs[mover]!.setup;
+    seats[mover]!.socket.send(JSON.stringify({ t: "setup", active: own.active[0], bench: [] }));
+    for (const seat of seats) {
+      const delta = await seat.next();
+      expect(delta.t).toBe("delta");
+      expect(delta.view.phase).not.toBe("setup");
+      expect(delta.setup).toBeNull();
+    }
+    for (const seat of seats) seat.socket.close();
   });
 });

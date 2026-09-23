@@ -156,6 +156,8 @@ describe("観戦の配線", () => {
     expect((await watcher.next()).t).toBe("error");
     watcher.socket.send(JSON.stringify({ t: "concede" }));
     expect((await watcher.next()).t).toBe("error");
+    watcher.socket.send(JSON.stringify({ t: "setup", active: "c0", bench: [] }));
+    expect((await watcher.next()).t).toBe("error");
 
     // 局面も決着も動いていない。
     seats[0].socket.send(JSON.stringify({ t: "hello" }));
