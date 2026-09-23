@@ -136,11 +136,14 @@ describe("シェアの開示", () => {
     expect(arena.hub.attach(socketA, a.seatToken, SHARE_A)).toBe(true);
     expect(socketA.sent.map((message) => message.t)).toEqual(["pending"]);
     expect(arena.registry.live()).toHaveLength(0);
+    // 始まる前でも、デプロイで消える対戦に数える。
+    expect(arena.registry.liveCount()).toBe(1);
 
     const socketB = recorder();
     arena.hub.attach(socketB, b.seatToken, SHARE_B);
     expect(socketA.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
     expect(socketB.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
+    expect(arena.registry.liveCount()).toBe(1);
 
     const match = matchOf(arena, a);
     expect(match.seedCommitment.commit).toBe(a.seedCommit);

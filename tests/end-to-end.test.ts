@@ -354,6 +354,8 @@ describe("マッチングから決着まで", () => {
     const alpha = await postJson("/api/account", { displayName: "あ" });
     const beta = await postJson("/api/account", { displayName: "い" });
     expect(alpha.account.rating).toBe(INITIAL_RATING);
+    // 自動のデプロイはこの数が 0 になるまで待つ。数え漏らすと、指している最中の対戦を消す。
+    const idleCount = (await getJson("/api/status")).liveMatches as number;
 
     const first = await postJson("/api/join", {
       secret: alpha.secret,
@@ -367,6 +369,7 @@ describe("マッチングから決着まで", () => {
       roomCode: "とおし",
     });
     expect(second.seat.seat).toBe(1);
+    expect((await getJson("/api/status")).liveMatches).toBe(idleCount + 1);
 
     const claimed = await getJson(`/api/claim?ticket=${first.ticket}`);
     expect(claimed.seat.seat).toBe(0);
@@ -382,6 +385,7 @@ describe("マッチングから決着まで", () => {
     });
 
     await done;
+    expect((await getJson("/api/status")).liveMatches).toBe(idleCount);
     for (const ending of endings) {
       expect(ending.t).toBe("ended");
       if (ending.t === "ended") expect(ending.matchResult.kind).toBe("normal");

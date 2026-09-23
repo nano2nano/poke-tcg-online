@@ -144,6 +144,37 @@ describe("決着を残す", () => {
     expect(await archive.list(players[0]!)).toEqual([]);
     expect(accounts.byPlayerId(players[0]!)?.rating).toBe(INITIAL_RATING);
   });
+  it("待っている間に並んだ決着も、置き終わるまで待つ", async () => {
+    const { accounts, players } = await setup();
+    const gates: (() => void)[] = [];
+    // `put` を 1 回ずつ止め、こちらが開けるまで返さない。
+    const gated = new Proxy(bucket, {
+      get(target, key) {
+        const value = Reflect.get(target, key);
+        if (key !== "put") return typeof value === "function" ? value.bind(target) : value;
+        return async (...args: Parameters<R2Bucket["put"]>) => {
+          await new Promise<void>((resolve) => gates.push(resolve));
+          return target.put(...args);
+        };
+      },
+    });
+    const archive = new MatchArchive(db, gated, accounts);
+    const first = recordOf(pair(players));
+    const second = recordOf(pair(players));
+
+    void archive.settle(first);
+    let done = false;
+    const settled = archive.settled().then(() => (done = true));
+    void archive.settle(second);
+    while (gates.length < 1) await new Promise((resolve) => setTimeout(resolve, 1));
+    gates[0]!();
+    while (gates.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(done).toBe(false);
+
+    gates[1]!();
+    await settled;
+    expect(await bucket.head(objectKey(second))).not.toBeNull();
+  });
 });
 
 describe("一覧と 1 局", () => {

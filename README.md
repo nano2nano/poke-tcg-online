@@ -52,6 +52,7 @@ npm run replay:verify matches    # R2 から落とした対局ログを再生し
 
 `.github/workflows/verify.yml` が push と pull request で `npm run verify:all` を回す。
 job の名前は `verify` で、ブランチ保護の required check はこれを指す。
+main では、そのあと deploy の job が本番へ出す（`docs/deploy.md`）。
 
 エンジンは private なので、submodule の取得だけ deploy key（読み取り専用の SSH 秘密鍵）で行う。
 鍵は Actions secret の `ENGINE_DEPLOY_KEY` に置く。リポジトリ自身の checkout には既定の

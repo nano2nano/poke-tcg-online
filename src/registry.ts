@@ -85,9 +85,13 @@ export class MatchRegistry {
     return [...this.matches.values()];
   }
 
+  liveCount(): number {
+    return this.matches.size + this.pending.size;
+  }
+
   /** 時計の流れているものが 1 つも無い。始める前の対戦も、来ない座席の時計が流れる。 */
   idle(): boolean {
-    return this.matches.size === 0 && this.pending.size === 0;
+    return this.liveCount() === 0;
   }
 
   /**
