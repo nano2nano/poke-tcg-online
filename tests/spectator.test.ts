@@ -6,30 +6,24 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
-import { createApp, type App } from "../src/app.js";
 import { MAX_SPECTATORS, MAX_SPECTATORS_PER_MATCH, MatchHub, type SeatSocket } from "../src/hub.js";
 import { concede } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
+import { startWorker, type TestWorker } from "./worker.js";
 import { ensureCards, legalDecks, newMatch } from "./helpers.js";
 
-let app: App;
+let worker: TestWorker;
 let base: string;
 
 beforeAll(async () => {
   ensureCards();
-  const dir = mkdtempSync(join(tmpdir(), "poke-online-spectator-"));
-  app = createApp({ logDir: dir, accountDir: dir, accountLimit: null });
-  await new Promise<void>((resolve) => app.http.listen(0, "127.0.0.1", () => resolve()));
-  base = `127.0.0.1:${(app.http.address() as AddressInfo).port}`;
+  worker = await startWorker({ ACCOUNT_BURST: "0" });
+  base = worker.host;
 });
 
 afterAll(async () => {
-  await app.close();
+  await worker.close();
 });
 
 type Json = Record<string, any>;
@@ -261,7 +255,7 @@ function fakeSocket(): SeatSocket & { sent: Json[]; closed: boolean } {
 describe("サーバ全体の観戦者の上限", () => {
   it("溢れたら断り、終わった対戦の観戦者は閉じて数から外す", () => {
     ensureCards();
-    const registry = new MatchRegistry(mkdtempSync(join(tmpdir(), "poke-online-spectator-hub-")));
+    const registry = new MatchRegistry();
     const hub = new MatchHub({ registry, now: () => 0 });
     const matches = Array.from(
       { length: Math.ceil(MAX_SPECTATORS / MAX_SPECTATORS_PER_MATCH) + 1 },

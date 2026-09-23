@@ -7,10 +7,6 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 /**
  * ログのレコードの形の版。読み手はこれを見て解釈を選ぶ。
@@ -39,41 +35,19 @@ export interface EngineFingerprint {
   replaySchemaVersion: number;
 }
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-let cached: EngineFingerprint | null = null;
+/**
+ * ビルドのときに埋める値（`tools/build-worker.ts`、テストでは `vitest.config.ts`）。
+ * Worker の中にはリポジトリのファイルも `git` も無いので、実行時には求められない。
+ */
+declare const __ENGINE_COMMIT__: string;
+declare const __CARD_DATA_SHA256__: string;
 
 export function engineFingerprint(): EngineFingerprint {
-  if (cached !== null) return cached;
-  cached = {
-    commit: engineCommit(),
-    cardDataSha256: cardDataSha256(),
+  return {
+    commit: __ENGINE_COMMIT__,
+    cardDataSha256: __CARD_DATA_SHA256__,
     replaySchemaVersion: REPLAY_SCHEMA_VERSION,
   };
-  return cached;
-}
-
-/**
- * submodule が指す commit。環境変数を先に見るのは、本番では submodule ごと固めた
- * 成果物を置き、`.git` が無い形で動かすことがあるためである。
- */
-function engineCommit(): string {
-  const fromEnv = process.env.POKE_ENGINE_COMMIT;
-  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
-  try {
-    return execFileSync("git", ["-C", join(ROOT, "engine"), "rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return "unknown";
-  }
-}
-
-function cardDataSha256(): string {
-  const path = join(ROOT, "engine", "data", "cards.generated.json");
-  if (!existsSync(path)) return "unknown";
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 /**

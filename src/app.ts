@@ -3,29 +3,19 @@
  * （`docs/spec/battle-server.md` 3 節、7 節）。
  *
  * サーバからのプッシュが要るのは対戦が始まってからで、マッチングは要求と応答で足りる。
- * 起動そのものは `src/main.ts` が行う。ここを関数に切ってあるのは、
- * 通しのテストが同じ組み立てを任意のポートで立ち上げられるようにするためである。
+ * ここは Workers の API に触れない。Durable Object への載せ方は `src/worker.ts` にある。
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
-import { dirname, extname, join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
-import { WebSocketServer, type WebSocket } from "ws";
 import type { ZodType } from "zod";
 import { cardIndex } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { sampleDeck } from "./sample-deck.js";
-import { MatchHub } from "./hub.js";
+import { MatchHub, type SeatSocket } from "./hub.js";
 import { Lobby } from "./lobby.js";
-import { ACCOUNT_NOT_FOUND, AccountStore, type Account } from "./accounts.js";
-
-export { ACCOUNT_NOT_FOUND };
-import { findMatch, frameAt, isMatchId, listMatches, replayability } from "./history.js";
-import { closeIndex, syncIndex } from "./match-index.js";
-import { DEFAULT_LOG_DIR } from "./log.js";
-import { scoreForSeatZero } from "./match.js";
+import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
+import type { MatchArchive } from "./archive.js";
+import { frameAt, isMatchId, replayability } from "./history.js";
 import { clientMessageSchema } from "./protocol.js";
 import {
   createAccountSchema,
@@ -38,196 +28,338 @@ import {
 import { MatchRegistry } from "./registry.js";
 import { RateLimit, type RateLimitOptions } from "./ratelimit.js";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+export { ACCOUNT_NOT_FOUND };
 
 /** 持ち時間のスイープ。手番側が考えている限り時計は進むので、定期に見る必要がある。 */
-export const TIMEOUT_SWEEP_MS = 5_000;
+export const TICK_MS = 5_000;
 
-/** 要求の本文の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
-const MAX_BODY_BYTES = 64 * 1024;
+/** 要求の本文と、WebSocket の 1 通の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
+export const MAX_BODY_BYTES = 64 * 1024;
 
 /**
- * 死活確認の間隔。この間 pong が返らない接続を切る。
+ * この長さのあいだ 1 通も来ない接続を切る（3.5 節）。画面は 20 秒ごとに `ping` を送る。
  *
- * **短くしすぎない。** 詰まっているだけで、待てば戻る接続まで切ることになる。
- * 切られた側は繋ぎ直せる（3.3 節）が、そのあいだも時計は流れる（3.4 節）。
+ * **短くしすぎない。** Chrome は 5 分より長く隠れたタブのタイマーを 1 分に 1 回へ間引くので、
+ * 別のタブで相手の手番を待っている人の `ping` は 1 分おきになる。詰まっているだけで、
+ * 待てば戻る接続も切ることになる。切られた側は繋ぎ直せる（3.3 節）が、そのあいだも時計は流れる（3.4 節）。
  * 見つけたいのは戻ってこない接続だけである。
  */
-export const HEARTBEAT_MS = 60_000;
+export const SILENCE_LIMIT_MS = 150_000;
 
 /**
- * アカウントを作れる速さ。**既定では掛けない。**
+ * プレイヤーを作る速さの上限（7.2 節）。送信元 1 つにつき、続けて `burst` 回まで作れ、
+ * そのあとは `refillMs` ごとに 1 回ぶん戻る。
  *
- * 掛けるかどうかは配置先で決まる。前にプロキシがあって、その向こうの人を見分けられない
- * 設定のままだと、**来た人全員が 1 人として数えられて、誰もプレイヤーを作れなくなる。**
- * 止めたいのは機械で回す形だけなのに、止まるのは普通の人のほうである。
- * 見分けの付け方（`TRUST_PROXY`）を決めたうえで `ACCOUNT_BURST` を置いたときだけ効かせる。
- *
- * 効かせても止まるのは 1 か所から回す形だけで、送信元を変えながら来るもの
+ * 止まるのは 1 か所から回す形だけで、送信元を変えながら来るもの
  * （IPv6 なら 1 人でいくらでも変えられる）は止まらないし、待てばいくらでも作れる。
  * 本当に止めるには総数の上限か、使われていないプレイヤーを消すエンドポイントが要る。10 節に残す。
  */
-const ACCOUNT_LIMIT_DEFAULTS = { refillMs: 10_000, origins: 4_096 };
+export const DEFAULT_ACCOUNT_LIMIT: RateLimitOptions = {
+  burst: 20,
+  refillMs: 10_000,
+  origins: 4_096,
+};
 
-function accountLimitFromEnv(burst: string | undefined): RateLimitOptions | null {
-  if (burst === undefined || burst.trim() === "") return null;
-  const count = Number(burst);
-  if (!Number.isInteger(count) || count <= 0) {
-    console.warn(`ACCOUNT_BURST は 1 以上の整数で指定する。"${burst}" は読めないので掛けない。`);
-    return null;
-  }
-  return { burst: count, ...ACCOUNT_LIMIT_DEFAULTS };
-}
+/** 作る間隔が短すぎることの合図。 */
+export const TOO_MANY_ACCOUNTS = "too-many-accounts";
+
+const MALFORMED = "送られた中身の形が違う";
 
 export interface AppOptions {
-  /** 対局ログの保存先。既定は `data/matches/`。 */
-  logDir?: string;
-  /** アカウントストアの保存先。既定は `data/`。 */
-  accountDir?: string;
+  accounts: AccountStore;
+  archive: MatchArchive;
   now?: () => number;
-  /** アカウントを作れる速さ。`null` なら掛けない。既定は `ACCOUNT_BURST` を見る。 */
+  /** アカウントを作れる速さ。`null` なら掛けない。 */
   accountLimit?: RateLimitOptions | null;
-  /** 前にいくつプロキシを置いているか。0 なら `x-forwarded-for` を見ない。 */
-  trustedProxies?: number;
-  /** 死活確認の間隔。既定は `HEARTBEAT_MS`。 */
-  heartbeatMs?: number;
+  /** 黙ったままの接続を切るまでの長さ。既定は `SILENCE_LIMIT_MS`。 */
+  silenceLimitMs?: number;
+}
+
+/** 接続 1 本。Worker の WebSocket をこの形に包んで渡す（`src/worker.ts`）。 */
+export interface AppSocket extends SeatSocket {
+  close(code?: number, reason?: string): void;
+}
+
+/** 就いた接続に届いたものを渡す先。 */
+export interface Connection {
+  receive(data: string): void;
+  closed(): void;
 }
 
 export interface App {
-  http: Server;
   lobby: Lobby;
   registry: MatchRegistry;
   hub: MatchHub;
-  accounts: AccountStore;
-  close(): Promise<void>;
+  /** `/api/` の要求に答える。`origin` は送信元の見分けで、作る速さの上限に使う。 */
+  fetch(request: Request, origin: string): Promise<Response>;
+  /** `/ws` の検索部から、接続を座席か観戦へ就ける。就けなければ接続を閉じて null を返す。 */
+  connect(params: URLSearchParams, socket: AppSocket): Connection | null;
+  /** 定期処理。持ち時間の尽きた対戦を終わらせ、黙ったままの接続を切る。 */
+  tick(): void;
+  /** 定期処理で見るものが無い。対戦も、開いた接続も無い。 */
+  idle(): boolean;
 }
 
-export function createApp(options: AppOptions = {}): App {
+/** 配置先で変えられる設定。`wrangler.jsonc` の `vars` に置く。 */
+export interface AppVars {
+  /** プレイヤーを作る速さの上限を変えるときだけ置く。`0` なら掛けない。 */
+  ACCOUNT_BURST?: string;
+  /** 黙ったままの接続を切るまでのミリ秒。テストが待たずに済むように置く。 */
+  SILENCE_LIMIT_MS?: string;
+}
+
+/**
+ * `vars` を読む。**読めない値では既定に倒し、警告を残す。** 読めない上限を「掛けない」に倒すと、
+ * 書き損じ 1 つで上限が黙って外れる。`NaN` の沈黙時間は、全部の接続を毎回切る。
+ */
+export function optionsFromVars(
+  vars: AppVars,
+): Pick<AppOptions, "accountLimit" | "silenceLimitMs"> {
+  const options: Pick<AppOptions, "accountLimit" | "silenceLimitMs"> = {};
+  const burst = readCount("ACCOUNT_BURST", vars.ACCOUNT_BURST);
+  if (burst !== null)
+    options.accountLimit = burst === 0 ? null : { ...DEFAULT_ACCOUNT_LIMIT, burst };
+  const silence = readCount("SILENCE_LIMIT_MS", vars.SILENCE_LIMIT_MS);
+  if (silence !== null && silence > 0) options.silenceLimitMs = silence;
+  else if (silence === 0) console.warn("SILENCE_LIMIT_MS は 1 以上にする。既定を使う。");
+  return options;
+}
+
+/** 0 以上の整数として読む。置いていないか読めなければ null。 */
+function readCount(name: string, value: string | undefined): number | null {
+  if (value === undefined || value.trim() === "") return null;
+  const count = Number(value);
+  if (Number.isInteger(count) && count >= 0) return count;
+  console.warn(`${name} は 0 以上の整数で指定する。"${value}" は読めないので既定を使う。`);
+  return null;
+}
+
+export function createApp(options: AppOptions): App {
   const now = options.now ?? (() => Date.now());
-  const logDir = options.logDir ?? DEFAULT_LOG_DIR;
-  const registry = new MatchRegistry(logDir);
-  /**
-   * 索引を立ち上げのうちに作っておく。作るのは初回だけだが、そこは対局ログを全部読む
-   * （実測で 24,000 局・1.4 秒）。最初に一覧を開いた人にそれを払わせない。
-   */
-  syncIndex(logDir);
-  const accounts = new AccountStore(options.accountDir);
+  const { accounts, archive } = options;
+  const registry = new MatchRegistry();
   const lobby = new Lobby(registry, accounts, now);
   const limitOptions =
-    options.accountLimit === undefined
-      ? accountLimitFromEnv(process.env.ACCOUNT_BURST)
-      : options.accountLimit;
+    options.accountLimit === undefined ? DEFAULT_ACCOUNT_LIMIT : options.accountLimit;
   const accountLimit = limitOptions === null ? null : new RateLimit(limitOptions);
-  const trustedProxies = options.trustedProxies ?? trustedProxiesFromEnv(process.env.TRUST_PROXY);
-  // レーティングはログが落ちたあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
+  const silenceLimitMs = options.silenceLimitMs ?? SILENCE_LIMIT_MS;
+  // レーティングは記録が残ったあとに動かす。記録に残るのは対戦を始めた時点の値である（7.2 節）。
   const hub = new MatchHub({
     registry,
     now,
-    onFinish: (record) => {
-      accounts.applyResult(
-        [record.seats[0].playerId, record.seats[1].playerId],
-        scoreForSeatZero(record.matchResult),
-        now(),
-      );
-    },
+    onFinish: (record) => void archive.settle(record),
   });
+  /** 接続 → 最後に何か届いた時刻。 */
+  const lastHeard = new Map<AppSocket, number>();
+  const connections = new Map<AppSocket, Connection>();
 
-  const http = createServer((request, response) => {
-    route(request, response, lobby, accounts, now, logDir, accountLimit, trustedProxies).catch(
-      (error: unknown) => {
+  return {
+    lobby,
+    registry,
+    hub,
+    fetch: async (request, origin) => {
+      try {
+        return await route(request, origin, { lobby, accounts, archive, now, accountLimit });
+      } catch (error) {
         /**
          * **外へ出してよい文言は `BadRequest` に載っているものだけである。**
          * 例外の `message` をそのまま返していたときは、エンドポイントを 1 つ足すたびに
          * `Cannot read properties of null` のような内部の文言が漏れる箇所も 1 つ増えていた。
          * 読む人に意味が無いうえ、実装の中身をそのまま見せることになる。
          */
-        if (error instanceof BadRequest) {
-          respondJson(response, 400, { error: error.message });
-          return;
-        }
-        console.warn(`${request.method ?? "?"} ${request.url ?? "?"} で落ちた:`, error);
-        respondJson(response, 500, { error: "サーバ側で落ちた" });
-      },
-    );
-  });
-
-  /**
-   * **`ws` の既定の上限は 100 MiB で、座席に就いた相手ならそれだけ送れる。**
-   * 運ぶのは 1 手と、その手を見せた位置だけなので、本文と同じ上限で足りる。
-   */
-  const wss = new WebSocketServer({ server: http, path: "/ws", maxPayload: MAX_BODY_BYTES });
-  /** 前の ping に返事のあった接続。`sweepDeadSockets` が 1 巡ごとに読み直す。 */
-  const answered = new WeakSet<WebSocket>();
-  wss.on("connection", (socket: WebSocket, request: IncomingMessage) => {
-    /**
-     * **プロトコルの誤りは `error` で来る。受け手を置かないとプロセスごと落ちる。**
-     * 大きすぎる 1 通や壊れたフレームは `ws` が中で閉じるが、そのとき `error` も出す。
-     * `EventEmitter` は受け手のいない `error` をそのまま投げるので、
-     * 1 つの接続の誤りで、指している全員の対戦が落ちることになる。
-     * 席に就けなかった接続も同じなので、いちばん先に置く。
-     */
-    socket.on("error", (error: Error) => {
-      console.warn("接続で落ちた:", error.message);
-    });
-    const connection = connectionOf(request);
-    const attached =
-      connection?.kind === "seat"
-        ? hub.attach(socket, connection.token, connection.seedShare)
-        : connection?.kind === "spectator" && hub.attachSpectator(socket, connection.token);
-    if (connection === null || !attached) {
-      socket.close();
-      return;
-    }
-    answered.add(socket);
-    socket.on("pong", () => answered.add(socket));
-    socket.on("message", (raw) => {
-      let parsed: unknown;
+        if (error instanceof BadRequest) return json(400, { error: error.message });
+        console.warn(`${request.method} ${new URL(request.url).pathname} で落ちた:`, error);
+        return json(500, { error: "サーバ側で落ちた" });
+      }
+    },
+    connect: (params, socket) => {
+      const connection = connectionOf(params);
+      const attached =
+        connection?.kind === "seat"
+          ? hub.attach(socket, connection.token, connection.seedShare)
+          : connection?.kind === "spectator" && hub.attachSpectator(socket, connection.token);
+      if (connection === null || !attached) {
+        socket.close();
+        return null;
+      }
+      lastHeard.set(socket, now());
+      const handle: Connection = {
+        receive: (data) => {
+          lastHeard.set(socket, now());
+          /**
+           * **大きすぎる 1 通は、その接続だけを閉じる**（3.5 節）。座席に就いた相手は、
+           * 対戦が終わるまでいくらでもこちらへ送れる。運ぶのは 1 手と、その手を見せた位置だけである。
+           */
+          if (tooLarge(data)) {
+            handle.closed();
+            socket.close(1009, "too large");
+            return;
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            socket.send(JSON.stringify({ t: "error", message: "JSON として読めない" }));
+            return;
+          }
+          // 形を見てから配る。`null` 1 通でも、配った先で `t` を読んで落ちる。
+          const message = clientMessageSchema.safeParse(parsed);
+          if (!message.success) {
+            socket.send(JSON.stringify({ t: "error", message: MALFORMED }));
+            return;
+          }
+          if (connection.kind === "seat") hub.handle(socket, connection.token, message.data);
+          else hub.handleSpectator(socket, connection.token, message.data);
+        },
+        closed: () => {
+          lastHeard.delete(socket);
+          connections.delete(socket);
+          hub.detach(socket);
+        },
+      };
+      connections.set(socket, handle);
+      return handle;
+    },
+    tick: () => {
+      // 持ち時間の側で投げても、黙った接続は切る。切らないと接続が残り続け、定期処理も止まらない。
       try {
-        parsed = JSON.parse(String(raw));
-      } catch {
-        socket.send(JSON.stringify({ t: "error", message: "JSON として読めない" }));
-        return;
+        hub.sweepTimeouts();
+      } catch (error) {
+        console.error("持ち時間を見られなかった:", error);
       }
       /**
-       * **形を見てから配る。** `as ClientMessage` で配っていたときは、`null` を 1 通
-       * 送られただけで受け手が `t` を読んで落ちた。ここは `ws` の `message` の中なので、
-       * 投げた例外は受け手のいないまま上がり、**プロセスごと落ちる。**
-       * そのとき指していた全員の対戦が巻き添えになる（同じ形を 1 つ上の `error` で直してある）。
+       * **閉じるだけでなく、こちらで席から外す。** 線の向こうが消えていると、閉じる合図の
+       * 返事が来ないので `close` も届かない。外さないと、その接続は座席に就いたまま残る。
        */
-      const message = clientMessageSchema.safeParse(parsed);
-      if (!message.success) {
-        socket.send(JSON.stringify({ t: "error", message: MALFORMED }));
-        return;
+      const nowMs = now();
+      for (const [socket, heard] of lastHeard) {
+        if (nowMs - heard < silenceLimitMs) continue;
+        connections.get(socket)?.closed();
+        socket.close(1001, "silent");
       }
-      if (connection.kind === "seat") hub.handle(socket, connection.token, message.data);
-      else hub.handleSpectator(socket, connection.token, message.data);
-    });
-    socket.on("close", () => hub.detach(socket));
-  });
-
-  const sweep = setInterval(() => hub.sweepTimeouts(), TIMEOUT_SWEEP_MS);
-  sweep.unref();
-  const heartbeat = setInterval(
-    () => sweepDeadSockets(wss.clients, answered),
-    options.heartbeatMs ?? HEARTBEAT_MS,
-  );
-  heartbeat.unref();
-
-  return {
-    accounts,
-    http,
-    lobby,
-    registry,
-    hub,
-    close: async () => {
-      clearInterval(sweep);
-      clearInterval(heartbeat);
-      for (const client of wss.clients) client.terminate();
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => http.close(() => resolve()));
-      closeIndex(logDir);
     },
+    idle: () => registry.idle() && lastHeard.size === 0,
   };
+}
+
+interface RouteContext {
+  lobby: Lobby;
+  accounts: AccountStore;
+  archive: MatchArchive;
+  now: () => number;
+  accountLimit: RateLimit | null;
+}
+
+async function route(request: Request, origin: string, context: RouteContext): Promise<Response> {
+  const { lobby, accounts, archive, now, accountLimit } = context;
+  const url = new URL(request.url);
+
+  // 済んだ対戦の一覧とリプレイ。どちらも自分が指した対戦しか返さない（6.6 節）。
+  if (request.method === "POST" && url.pathname === "/api/matches") {
+    const { secret } = parseBody(secretRequestSchema, await readBody(request));
+    const account = await accounts.find(secret);
+    if (account === null) return accountNotFound();
+    return json(200, { matches: await archive.list(account.playerId) });
+  }
+  if (request.method === "POST" && url.pathname === "/api/replay") {
+    const body = parseBody(replayRequestSchema, await readBody(request));
+    const account = await accounts.find(body.secret);
+    if (account === null) return accountNotFound();
+    // 形になっていない識別子で D1 と R2 を読みに行かない。
+    const record = isMatchId(body.matchId)
+      ? await archive.find(account.playerId, body.matchId)
+      : null;
+    // 指していない対戦と、存在しない対戦を、同じ応答にする。
+    if (record === null) return json(404, { error: "対戦が見つからない" });
+    // 断らずに読むと、誤りを出さずに違う盤面を見せることになる（§6.3、§6.4）。
+    const readable = replayability(record);
+    if (readable.kind === "schema-too-old") {
+      return json(409, {
+        error: "この対戦は、いまとは違う乱数で指されている。読み返せない。",
+        recorded: readable.recorded,
+        oldestReplayable: readable.oldest,
+      });
+    }
+    if (readable.kind === "seed-commitment-mismatch") {
+      return json(409, {
+        error: "この対戦は、記録された種が公開された値と合わない。読み返せない。",
+      });
+    }
+    if (readable.kind === "card-data-mismatch") {
+      return json(409, {
+        error: "この対戦は、いまとは違うカードデータで指されている。読み返せない。",
+        recorded: readable.expected,
+        current: readable.actual,
+      });
+    }
+    return json(200, { seats: record.seats, frame: frameAt(record, body.ply ?? 0) });
+  }
+
+  // プレイヤーを作る。シークレットを返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
+  if (request.method === "POST" && url.pathname === "/api/account") {
+    const body = parseBody(createAccountSchema, await readBody(request));
+    /**
+     * **作った覚えの無いものが際限なく増えないようにする。** プレイヤーを消すエンドポイントは無い。
+     * 本文を先に読むのは、形の違う要求で枠を使わせないためである。
+     */
+    if (accountLimit !== null && !accountLimit.take(origin, now())) {
+      return json(429, {
+        code: TOO_MANY_ACCOUNTS,
+        error: "プレイヤーを作る間隔が短すぎる。少し待ってからもう一度どうぞ。",
+      });
+    }
+    return json(200, await accounts.create(body.displayName ?? "", now()));
+  }
+  // 自分の戦績を見る。シークレットは本文で受け取る。URL に載せるとログや履歴に残る。
+  if (request.method === "POST" && url.pathname === "/api/account/me") {
+    const { secret } = parseBody(secretRequestSchema, await readBody(request));
+    // 画面は決着のすぐあとにこれを読み直す。レーティングが動き終わってから答える。
+    await archive.settled();
+    const account = await accounts.find(secret);
+    return account === null ? accountNotFound() : json(200, account);
+  }
+  if (request.method === "GET" && url.pathname === "/api/cards") {
+    return json(200, cardIndex());
+  }
+  if (request.method === "GET" && url.pathname === "/api/sample-deck") {
+    return json(200, sampleDeck());
+  }
+  // 人が書いた文字列を `defId` の列へ直す（5.3 節）。同じ名前が複数あるときは候補を返す。
+  if (request.method === "POST" && url.pathname === "/api/deck/resolve") {
+    const { text } = parseBody(resolveDecklistSchema, await readBody(request));
+    const resolved = resolveDecklist(text);
+    if (!resolved.ok) {
+      return json(200, {
+        ok: false,
+        errors: resolved.failures.map(describeDecklistFailure),
+        failures: resolved.failures,
+      });
+    }
+    // 形として読めても、デッキとして成立しているとは限らない。続けて構築の検査も掛ける。
+    const errors = validateDeck(resolved.deck).map(describeViolation);
+    return json(200, {
+      ok: errors.length === 0,
+      errors,
+      deck: resolved.deck,
+      entries: resolved.entries,
+    });
+  }
+  if (request.method === "POST" && url.pathname === "/api/deck/validate") {
+    const deck = parseBody(deckListSchema, await readBody(request));
+    const errors = validateDeck(deck).map(describeViolation);
+    return json(200, { ok: errors.length === 0, errors });
+  }
+  if (request.method === "POST" && url.pathname === "/api/join") {
+    const body = parseBody(joinRequestSchema, await readBody(request));
+    // 前の対戦のレーティングが動き終わってから席に着ける。記録に残るのは始めた時点の値である。
+    await archive.settled();
+    const outcome = lobby.join(body, await accounts.find(body.secret));
+    return json(outcome.ok ? 200 : 400, outcome);
+  }
+  if (request.method === "GET" && url.pathname === "/api/claim") {
+    return json(200, lobby.claim(url.searchParams.get("ticket") ?? ""));
+  }
+  return json(404, { error: "not found" });
 }
 
 /**
@@ -235,12 +367,11 @@ export function createApp(options: AppOptions = {}): App {
  * 座席トークンも持っていたときに、黙って手を指せる接続になる。
  */
 function connectionOf(
-  request: IncomingMessage,
+  params: URLSearchParams,
 ):
   | { kind: "seat"; token: string; seedShare: string | null }
   | { kind: "spectator"; token: string }
   | null {
-  const params = new URL(request.url ?? "/", "http://localhost").searchParams;
   const seatToken = params.get("seatToken");
   const spectatorToken = params.get("spectatorToken");
   if (seatToken !== null && spectatorToken === null) {
@@ -250,215 +381,6 @@ function connectionOf(
     return { kind: "spectator", token: spectatorToken };
   }
   return null;
-}
-
-/** 死活確認の向き先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
-interface Heartbeatable {
-  ping(): void;
-  terminate(): void;
-}
-
-/**
- * 死活確認を 1 巡ぶん。返事の無かった接続を切り、残りへ次の ping を送る。
- *
- * **線が途中で切れると、どちらも切れたことに気付かないまま接続が残る。**
- * 閉じたことが伝わらないので `close` も出ず、座席はその接続を持ち続ける。
- * 対戦そのものは時計が流れて時間切れで終わるが、接続は溜まる一方になる。
- */
-export function sweepDeadSockets(
-  clients: Iterable<Heartbeatable>,
-  answered: WeakSet<Heartbeatable>,
-): void {
-  for (const client of clients) {
-    // 消せれば前の ping に返事があったということ。無ければ 1 巡ぶん黙っているので切る。
-    if (answered.delete(client)) client.ping();
-    else client.terminate();
-  }
-}
-
-async function route(
-  request: IncomingMessage,
-  response: ServerResponse,
-  lobby: Lobby,
-  accounts: AccountStore,
-  now: () => number,
-  logDir: string,
-  accountLimit: RateLimit | null,
-  trustedProxies: number,
-): Promise<void> {
-  const url = new URL(request.url ?? "/", "http://localhost");
-
-  // 済んだ対戦の一覧とリプレイ。どちらも自分が指した対戦しか返さない（6.6 節）。
-  if (request.method === "POST" && url.pathname === "/api/matches") {
-    const account = await accountFromBody(request, accounts);
-    if (account === null) {
-      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
-      return;
-    }
-    respondJson(response, 200, { matches: listMatches(logDir, account.playerId) });
-    return;
-  }
-  if (request.method === "POST" && url.pathname === "/api/replay") {
-    const body = parseBody(replayRequestSchema, await readBody(request));
-    const account = accounts.bySecret(body.secret);
-    if (account === null) {
-      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
-      return;
-    }
-    // 名指しの形かどうかは、走査に入る前に見る。そうでない値で全部の日を読まない（6.6 節）。
-    const record = isMatchId(body.matchId)
-      ? findMatch(logDir, account.playerId, body.matchId)
-      : null;
-    if (record === null) {
-      // 指していない対戦と、存在しない対戦を、同じ応答にする。
-      respondJson(response, 404, { error: "対戦が見つからない" });
-      return;
-    }
-    // 断らずに読むと、誤りを出さずに違う盤面を見せることになる（§6.3、§6.4）。
-    const readable = replayability(record);
-    if (readable.kind === "schema-too-old") {
-      respondJson(response, 409, {
-        error: "この対戦は、いまとは違う乱数で指されている。読み返せない。",
-        recorded: readable.recorded,
-        oldestReplayable: readable.oldest,
-      });
-      return;
-    }
-    if (readable.kind === "seed-commitment-mismatch") {
-      respondJson(response, 409, {
-        error: "この対戦は、記録された種が公開された値と合わない。読み返せない。",
-      });
-      return;
-    }
-    if (readable.kind === "card-data-mismatch") {
-      respondJson(response, 409, {
-        error: "この対戦は、いまとは違うカードデータで指されている。読み返せない。",
-        recorded: readable.expected,
-        current: readable.actual,
-      });
-      return;
-    }
-    respondJson(response, 200, { seats: record.seats, frame: frameAt(record, body.ply ?? 0) });
-    return;
-  }
-
-  // プレイヤーを作る。シークレットを返すのはこの 1 度だけで、サーバは控えを持たない（7.2 節）。
-  if (request.method === "POST" && url.pathname === "/api/account") {
-    const body = parseBody(createAccountSchema, await readBody(request));
-    /**
-     * **作った覚えの無いものが際限なく増えないようにする。** プレイヤーを消すエンドポイントは無く、
-     * 増えるのはメモリと `accounts.jsonl` の行で、後者は起動のたびに同期で読む。
-     * 本文を先に読むのは、形の違う要求で枠を使わせないためである。
-     */
-    if (accountLimit !== null && !accountLimit.take(originOf(request, trustedProxies), now())) {
-      respondJson(response, 429, {
-        code: TOO_MANY_ACCOUNTS,
-        error: "プレイヤーを作る間隔が短すぎる。少し待ってからもう一度どうぞ。",
-      });
-      return;
-    }
-    respondJson(response, 200, accounts.create(body.displayName ?? "", now()));
-    return;
-  }
-  // 自分の戦績を見る。シークレットは本文で受け取る。URL に載せるとログや履歴に残る。
-  if (request.method === "POST" && url.pathname === "/api/account/me") {
-    const account = accounts.bySecret(
-      parseBody(secretRequestSchema, await readBody(request)).secret,
-    );
-    if (account === null) {
-      respondJson(response, 404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
-      return;
-    }
-    respondJson(response, 200, account);
-    return;
-  }
-  if (request.method === "GET" && url.pathname === "/api/cards") {
-    respondJson(response, 200, cardIndex());
-    return;
-  }
-  if (request.method === "GET" && url.pathname === "/api/sample-deck") {
-    respondJson(response, 200, sampleDeck());
-    return;
-  }
-  // 人が書いた文字列を `defId` の列へ直す（5.3 節）。同じ名前が複数あるときは候補を返す。
-  if (request.method === "POST" && url.pathname === "/api/deck/resolve") {
-    const { text } = parseBody(resolveDecklistSchema, await readBody(request));
-    const resolved = resolveDecklist(text);
-    if (!resolved.ok) {
-      respondJson(response, 200, {
-        ok: false,
-        errors: resolved.failures.map(describeDecklistFailure),
-        failures: resolved.failures,
-      });
-      return;
-    }
-    // 形として読めても、デッキとして成立しているとは限らない。続けて構築の検査も掛ける。
-    const errors = validateDeck(resolved.deck).map(describeViolation);
-    respondJson(response, 200, {
-      ok: errors.length === 0,
-      errors,
-      deck: resolved.deck,
-      entries: resolved.entries,
-    });
-    return;
-  }
-  if (request.method === "POST" && url.pathname === "/api/deck/validate") {
-    const deck = parseBody(deckListSchema, await readBody(request));
-    const errors = validateDeck(deck).map(describeViolation);
-    respondJson(response, 200, { ok: errors.length === 0, errors });
-    return;
-  }
-  if (request.method === "POST" && url.pathname === "/api/join") {
-    const outcome = lobby.join(parseBody(joinRequestSchema, await readBody(request)));
-    respondJson(response, outcome.ok ? 200 : 400, outcome);
-    return;
-  }
-  if (request.method === "GET" && url.pathname === "/api/claim") {
-    respondJson(response, 200, lobby.claim(url.searchParams.get("ticket") ?? ""));
-    return;
-  }
-  serveStatic(url.pathname, response);
-}
-
-const MALFORMED = "送られた中身の形が違う";
-
-/** 作る間隔が短すぎることの合図。 */
-export const TOO_MANY_ACCOUNTS = "too-many-accounts";
-
-/**
- * 設定からプロキシの数を読む。**数でないものは 0 として扱い、黙って見過ごさない。**
- * `TRUST_PROXY=true` のような書き方をそのまま数に直すと `NaN` になり、比較はすべて
- * 偽になるので、プロキシを信用しているつもりで信用していない状態になる。
- */
-function trustedProxiesFromEnv(value: string | undefined): number {
-  if (value === undefined || value.trim() === "") return 0;
-  const count = Number(value);
-  if (!Number.isInteger(count) || count < 0) {
-    console.warn(
-      `TRUST_PROXY はプロキシの数（0 以上の整数）で指定する。"${value}" は読めないので 0 とする。`,
-    );
-    return 0;
-  }
-  return count;
-}
-
-/**
- * どこから来たかの見分け（7.2 節）。
- *
- * **`x-forwarded-for` は既定では見ない。** 送り手が好きに書ける値なので、見てしまうと
- * 書き換えながら送るだけで上限を素通りできる。
- *
- * `TRUST_PROXY` が真偽値ではなくプロキシの数なのは、右端を決め打ちにすると、プロキシが 2 つ
- * （CDN とその内側など）あるときにプロキシ自身のアドレスを拾うからである。そうなると
- * **全員が同じ 1 つとして数えられて、誰もアカウントを作れなくなる。**
- */
-function originOf(request: IncomingMessage, trustedProxies: number): string {
-  const direct = request.socket.remoteAddress ?? "unknown";
-  if (trustedProxies <= 0) return direct;
-  const forwarded = request.headers["x-forwarded-for"];
-  const header = Array.isArray(forwarded) ? forwarded.join(",") : forwarded;
-  const hops = (header ?? "").split(",").filter((hop) => hop.trim() !== "");
-  return hops[hops.length - trustedProxies]?.trim() ?? direct;
 }
 
 /** 外へ出してよいエラー応答。これ以外の例外は、文言を外へ出さない。 */
@@ -480,63 +402,54 @@ function parseBody<T>(schema: ZodType<T>, body: unknown): T {
   return outcome.data;
 }
 
-const CONTENT_TYPES: Readonly<Record<string, string>> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-};
-
-function serveStatic(pathname: string, response: ServerResponse): void {
-  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  // `..` を含む経路で public の外へ出られないようにする。
-  const base = join(ROOT, "public");
-  const resolved = join(base, normalize(relative));
-  if (!resolved.startsWith(base)) {
-    respondJson(response, 403, { error: "forbidden" });
-    return;
-  }
-  try {
-    const body = readFileSync(resolved);
-    response.writeHead(200, {
-      "content-type": CONTENT_TYPES[extname(resolved)] ?? "application/octet-stream",
-    });
-    response.end(body);
-  } catch {
-    respondJson(response, 404, { error: "not found" });
-  }
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
-function respondJson(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body));
-}
-
-/** 本文の `secret` からプレイヤーを引く。シークレットを URL に載せないのはログと履歴に残るためである。 */
-async function accountFromBody(
-  request: IncomingMessage,
-  accounts: AccountStore,
-): Promise<Account | null> {
-  return accounts.bySecret(parseBody(secretRequestSchema, await readBody(request)).secret);
+function accountNotFound(): Response {
+  return json(404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
 }
 
 /**
  * 本文を読む。**大きさだけを見て、形は見ない。**
  *
- * 形は `parseBody` がスキーマで見る（`requests.ts`）。ここでも object かどうかを見ていたが、
- * 同じ規則が 2 か所にあると、片方だけ変わったときに食い違いが出る。上限はここでしか見られない
- * （読み切る前に切る必要がある）ので、それだけを残す。
+ * 形は `parseBody` がスキーマで見る（`requests.ts`）。上限はここでしか見られない
+ * （読み切る前に切る必要がある）ので、それだけを見る。
  */
-async function readBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
+async function readBody(request: Request): Promise<unknown> {
+  const chunks: Uint8Array[] = [];
   let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new BadRequest("要求の本文が大きすぎる");
-    chunks.push(chunk as Buffer);
+  if (request.body !== null) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new BadRequest("要求の本文が大きすぎる");
+      }
+      chunks.push(value);
+    }
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
   }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     throw new BadRequest(MALFORMED);
   }
+}
+
+/** UTF-8 にして上限を越えるか。UTF-16 の 1 単位は多くて 3 バイトなので、長さだけで決まるときは数えない。 */
+function tooLarge(text: string): boolean {
+  if (text.length * 3 <= MAX_BODY_BYTES) return false;
+  return new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES;
 }

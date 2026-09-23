@@ -1,12 +1,13 @@
 import { defineConfig } from "vitest/config";
-import { fileURLToPath } from "node:url";
+import { engineIdentity } from "./tools/engine-identity.js";
+
+const identity = engineIdentity();
 
 export default defineConfig({
-  resolve: {
-    // 回り道の理由は `tests/node-sqlite-shim.ts` にある。
-    alias: {
-      "node:sqlite": fileURLToPath(new URL("./tests/node-sqlite-shim.ts", import.meta.url)),
-    },
+  // Worker のビルドが埋める値と同じものを埋める（`tools/build-worker.ts`）。
+  define: {
+    __ENGINE_COMMIT__: JSON.stringify(identity.commit),
+    __CARD_DATA_SHA256__: JSON.stringify(identity.cardDataSha256),
   },
   test: {
     include: ["tests/**/*.test.ts"],

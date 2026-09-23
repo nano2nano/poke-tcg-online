@@ -1,0 +1,27 @@
+// Cloudflare に出すときの設定（`docs/deploy.md`）。無料プランの範囲で動く形にしてある。
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "poke-tcg-online",
+  "main": "dist/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // エンジンのカードデータを埋め込むために、組み立ては自前で行う（`tools/build-worker.ts`）。
+  "build": {
+    "command": "npx tsx tools/build-worker.ts",
+    "watch_dir": ["src", "engine/src", "engine/data"],
+  },
+  // Worker を通るのは API と WebSocket だけにする。画面の配信は Worker の要求に数えられない。
+  "assets": {
+    "directory": "public",
+    "run_worker_first": ["/api/*", "/ws"],
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "SERVER", "class_name": "Server" }],
+  },
+  // 無料プランで使える Durable Object は SQLite 型だけである。この Durable Object 自身は保存を持たない。
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Server"] }],
+  // ID を書かなければ、初めての `wrangler deploy` が作る。
+  "d1_databases": [{ "binding": "DB", "database_name": "poke-tcg-online" }],
+  "r2_buckets": [{ "binding": "ARCHIVE", "bucket_name": "poke-tcg-online-matches" }],
+  "observability": { "enabled": true },
+}

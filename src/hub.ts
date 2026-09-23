@@ -34,7 +34,7 @@ import type { MatchRegistry, PendingSeatRef } from "./registry.js";
 import { allRevealed, reveal, type PendingMatch } from "./pending.js";
 import type { MatchRecord } from "./log.js";
 
-/** 送り先。`ws` の `WebSocket` はこの形を満たす。テストでは素のオブジェクトを渡す。 */
+/** 送り先。Worker の WebSocket を包んだもの（`src/worker.ts`）がこの形を満たす。テストでは素のオブジェクトを渡す。 */
 export interface SeatSocket {
   send(data: string): void;
   close(): void;
@@ -51,7 +51,7 @@ export const MAX_SPECTATORS = 1_024;
 export interface HubOptions {
   registry: MatchRegistry;
   now?: () => number;
-  /** 対戦が終わってログへ落ちたあとに 1 度だけ呼ぶ。レーティングの更新がここに乗る。 */
+  /** 対戦が終わってレジストリを離れたあとに 1 度だけ呼ぶ。記録を残し、レーティングを動かすのはここである。 */
   onFinish?: (record: MatchRecord) => void;
 }
 
@@ -109,8 +109,8 @@ export class MatchHub {
   }
 
   /**
-   * **始められなかった対戦は捨てる。** ここは WebSocket の `connection` の中からも呼ばれるので、
-   * 投げるとプロセスごと落ちる。残すと、次のスイープでも同じ形で失敗し続け、両座席は
+   * **始められなかった対戦は捨てる。** ここは接続を受けた処理と定期処理から呼ばれるので、
+   * 投げると呼んだ側の処理ごと止まる。残すと、次のスイープでも同じ形で失敗し続け、両座席は
    * 始まらない対戦を待ち続ける。
    */
   private startPending(pending: PendingMatch): void {
@@ -259,7 +259,7 @@ export class MatchHub {
     }
   }
 
-  /** 決着を両座席と観戦者へ伝え、ログへ落としてレジストリから外す。 */
+  /** 決着を両座席と観戦者へ伝え、レジストリから外す。 */
   endMatch(match: Match): void {
     const perMatch = this.sockets.get(match.matchId);
     for (const seat of [0, 1] as Player[]) {
@@ -298,13 +298,13 @@ export class MatchHub {
       socket.close();
     }
     this.spectators.delete(match.matchId);
-    // `retire` は同じ対戦を二度落とさないので、`onFinish` も 1 局につき 1 度である。
+    // `retire` は同じ対戦を二度外さないので、`onFinish` も 1 局につき 1 度である。
     const record = this.options.registry.retire(match);
     if (record === null) return;
     try {
       this.options.onFinish?.(record);
     } catch (error) {
-      // レーティングはストアへ書きに行く。書けなくても、決着そのものはもう済んでいる。
+      // 決着そのものはもう済んでいる。後始末で投げても、伝えた決着は取り消さない。
       console.error(`決着の後始末に失敗した（${match.matchId}）:`, error);
     }
   }

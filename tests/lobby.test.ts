@@ -1,15 +1,26 @@
 /** 相手を見つける（`docs/spec/battle-server.md` 7 節）と、座席の接続（3.3 節）。 */
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { D1Database } from "@cloudflare/workers-types/index.ts";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
-import { Lobby } from "../src/lobby.js";
+import { Lobby, type JoinOutcome, type JoinRequest } from "../src/lobby.js";
 import { AccountStore } from "../src/accounts.js";
 import { MatchRegistry } from "../src/registry.js";
 import type { ServerMessage } from "../src/protocol.js";
 import { ensureCards, legalDecks } from "./helpers.js";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { startStorage } from "./worker.js";
+
+let storage: Awaited<ReturnType<typeof startStorage>>;
+let db: D1Database;
+
+beforeAll(async () => {
+  storage = await startStorage();
+  db = storage.db;
+});
+
+afterAll(async () => {
+  await storage.close();
+});
 
 function recorder(): SeatSocket & { sent: ServerMessage[]; closed: boolean } {
   const sent: ServerMessage[] = [];
@@ -33,15 +44,22 @@ interface Arena {
 }
 
 function newArena(seatedLimit?: number): Arena {
-  const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
-  const registry = new MatchRegistry(dir);
-  const accounts = new AccountStore(dir);
+  const registry = new MatchRegistry();
+  const accounts = new AccountStore(db);
   return {
     registry,
     accounts,
     lobby: new Lobby(registry, accounts, () => 0, seatedLimit),
     hub: new MatchHub({ registry, now: () => 0 }),
   };
+}
+
+/** サーバと同じく、シークレットでプレイヤーを引いてからロビーへ渡す（`src/app.ts`）。 */
+async function join(
+  arena: Pick<Arena, "lobby" | "accounts">,
+  request: JoinRequest,
+): Promise<JoinOutcome> {
+  return arena.lobby.join(request, await arena.accounts.find(request.secret));
 }
 
 /** 待っていた側が取りに行って、座れた席を返す。座れていなければテストを落とす。 */
@@ -52,31 +70,31 @@ function seatOf(lobby: Lobby, ticket: string) {
 }
 
 /** プレイヤーを 1 人作り、そのシークレットで入る要求を組む。 */
-function player(arena: Arena, name: string, roomCode?: string) {
-  const deck = legalDecks()[0];
-  const { secret } = arena.accounts.create(name, 0);
+async function player(arena: Pick<Arena, "accounts">, name: string, roomCode?: string) {
+  const deck = legalDecks()[0]!;
+  const { secret } = await await arena.accounts.create(name, 0);
   return roomCode === undefined ? { secret, deck } : { secret, deck, roomCode };
 }
 
 describe("相手を見つける", () => {
-  it("同じルームコードの 2 人を繋ぐ", () => {
+  it("同じルームコードの 2 人を繋ぐ", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
-    const first = lobby.join(player(arena, "a", "あいことば"));
+    const first = await join(arena, await player(arena, "a", "あいことば"));
     expect(first).toEqual({ ok: true, ticket: expect.any(String) });
 
-    const second = lobby.join(player(arena, "b", "あいことば"));
+    const second = await join(arena, await player(arena, "b", "あいことば"));
     expect(second.ok && "seat" in second && second.seat.seat).toBe(1);
     expect(first.ok ? seatOf(lobby, first.ticket).seat : null).toBe(0);
   });
 
-  it("ルームコードが違えば繋がない", () => {
+  it("ルームコードが違えば繋がない", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
-    lobby.join(player(arena, "a", "ひとつめ"));
-    const second = lobby.join(player(arena, "b", "ふたつめ"));
+    await join(arena, await player(arena, "a", "ひとつめ"));
+    const second = await join(arena, await player(arena, "b", "ふたつめ"));
     expect(second.ok && "seat" in second).toBe(false);
     expect(lobby.waitingCount()).toBe(2);
   });
@@ -85,15 +103,15 @@ describe("相手を見つける", () => {
    * 別のタブを開いたり、待っている間に読み込み直すと、同じプレイヤーが 2 回入ってくる。
    * 自分と自分の対戦が 1 局として記録に残り、そのプレイヤーに 1 勝 1 敗が付いてしまう。
    */
-  it("同じプレイヤーは自分と当たらない", () => {
+  it("同じプレイヤーは自分と当たらない", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
     const deck = legalDecks()[0]!;
-    const { secret } = arena.accounts.create("ふたつのタブ", 0);
+    const { secret } = await arena.accounts.create("ふたつのタブ", 0);
 
-    const first = lobby.join({ secret, deck });
-    const second = lobby.join({ secret, deck });
+    const first = await join(arena, { secret, deck });
+    const second = await join(arena, { secret, deck });
     // 2 回目で対戦が始まっていない。待っているのは 1 つだけである。
     expect(second.ok && "seat" in second).toBe(false);
     expect(lobby.waitingCount()).toBe(1);
@@ -101,31 +119,31 @@ describe("相手を見つける", () => {
     expect(first.ok ? lobby.claim(first.ticket).kind : null).toBe("dropped");
 
     // 別の人が来れば、生きているほうのタブと繋がる。
-    const other = lobby.join(player(arena, "ほかのひと"));
+    const other = await join(arena, await player(arena, "ほかのひと"));
     expect(other.ok && "seat" in other).toBe(true);
     expect(lobby.waitingCount()).toBe(0);
   });
 
-  it("ルームコードでも自分と当たらない", () => {
+  it("ルームコードでも自分と当たらない", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
     const deck = legalDecks()[0]!;
-    const { secret } = arena.accounts.create("ふたつのタブ", 0);
+    const { secret } = await arena.accounts.create("ふたつのタブ", 0);
 
-    lobby.join({ secret, deck, roomCode: "へや" });
-    const second = lobby.join({ secret, deck, roomCode: "へや" });
+    await join(arena, { secret, deck, roomCode: "へや" });
+    const second = await join(arena, { secret, deck, roomCode: "へや" });
     expect(second.ok && "seat" in second).toBe(false);
     expect(lobby.waitingCount()).toBe(1);
   });
 
-  it("マッチングキューは先に待っていた人から繋ぐ", () => {
+  it("マッチングキューは先に待っていた人から繋ぐ", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
-    const first = lobby.join(player(arena, "a"));
-    lobby.join(player(arena, "b"));
-    const third = lobby.join(player(arena, "c"));
+    const first = await join(arena, await player(arena, "a"));
+    await join(arena, await player(arena, "b"));
+    const third = await join(arena, await player(arena, "c"));
     // a と b が繋がり、c だけが残る。
     expect(first.ok ? lobby.claim(first.ticket).kind : null).toBe("seated");
     expect(third.ok && "seat" in third).toBe(false);
@@ -136,33 +154,33 @@ describe("相手を見つける", () => {
    * 記録に残すのは**対戦が始まった時点**のレーティングである（7.2 節）。待っている間に
    * 別のタブの対戦が終わればレーティングは動く。チケットを取ったときの値を残すと、記録がずれる。
    */
-  it("記録に残るレーティングは、待ち始めた時点ではなく対戦が始まった時点のもの", () => {
+  it("記録に残るレーティングは、待ち始めた時点ではなく対戦が始まった時点のもの", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby, accounts } = arena;
-    const waiting = accounts.create("さきに待つ人", 0);
-    const other = accounts.create("あとから来る人", 0);
+    const waiting = await accounts.create("さきに待つ人", 0);
+    const other = await accounts.create("あとから来る人", 0);
     const deck = legalDecks()[0]!;
 
-    lobby.join({ secret: waiting.secret, deck, roomCode: "へや" });
+    await join(arena, { secret: waiting.secret, deck, roomCode: "へや" });
     // 待っている間に、別のところで 1 局終わってレーティングが動く。
-    const third = accounts.create("よその人", 0);
-    accounts.applyResult([waiting.account.playerId, third.account.playerId], 1, 0);
+    const third = await accounts.create("よその人", 0);
+    await accounts.applyResult([waiting.account.playerId, third.account.playerId], 1, 0);
     const moved = accounts.byPlayerId(waiting.account.playerId)?.rating ?? 0;
     expect(moved).not.toBe(waiting.account.rating);
 
-    const second = lobby.join({ secret: other.secret, deck, roomCode: "へや" });
+    const second = await join(arena, { secret: other.secret, deck, roomCode: "へや" });
     const seated = second.ok && "seat" in second ? second.seat : null;
     const match = arena.registry.live().find((live) => live.matchId === seated?.matchId);
     expect(match?.seats[0]?.rating).toBe(moved);
   });
 
-  it("検査を通らないデッキではマッチングキューに入れない", () => {
+  it("検査を通らないデッキではマッチングキューに入れない", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
-    const outcome = lobby.join({
-      secret: arena.accounts.create("a", 0).secret,
+    const outcome = await join(arena, {
+      secret: (await arena.accounts.create("a", 0)).secret,
       deck: { cards: [] },
     });
     expect(outcome.ok).toBe(false);
@@ -173,23 +191,23 @@ describe("相手を見つける", () => {
    * 表示名の変更はストアとそれ以後の対局ログに残り、取り消せない。断られた側から見れば
    * 何も起きていないのに、名前だけが変わっていることになる。
    */
-  it("入れなかった人の表示名は書き換えない", () => {
+  it("入れなかった人の表示名は書き換えない", async () => {
     ensureCards();
     const arena = newArena();
-    const { secret, account } = arena.accounts.create("まえ", 0);
+    const { secret, account } = await arena.accounts.create("まえ", 0);
 
-    const outcome = arena.lobby.join({ secret, deck: { cards: [] }, displayName: "あと" });
+    const outcome = await join(arena, { secret, deck: { cards: [] }, displayName: "あと" });
 
     expect(outcome.ok).toBe(false);
     expect(arena.accounts.byPlayerId(account.playerId)?.displayName).toBe("まえ");
   });
 
-  it("入れた人の表示名は書き換える", () => {
+  it("入れた人の表示名は書き換える", async () => {
     ensureCards();
     const arena = newArena();
-    const { secret, account } = arena.accounts.create("まえ", 0);
+    const { secret, account } = await arena.accounts.create("まえ", 0);
 
-    const outcome = arena.lobby.join({ secret, deck: legalDecks()[0], displayName: "あと" });
+    const outcome = await join(arena, { secret, deck: legalDecks()[0], displayName: "あと" });
 
     expect(outcome.ok).toBe(true);
     expect(arena.accounts.byPlayerId(account.playerId)?.displayName).toBe("あと");
@@ -202,12 +220,12 @@ describe("相手を見つける", () => {
  * その人は時間切れで負け、記録には普通の負けとして残る。
  */
 describe("席の引き換え", () => {
-  it("同じチケットで何度取りに来ても同じ座席を返す", () => {
+  it("同じチケットで何度取りに来ても同じ座席を返す", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
-    const first = lobby.join(player(arena, "a", "へや"));
-    lobby.join(player(arena, "b", "へや"));
+    const first = await join(arena, await player(arena, "a", "へや"));
+    await join(arena, await player(arena, "b", "へや"));
     if (!first.ok) throw new Error("入れていない");
 
     const once = lobby.claim(first.ticket);
@@ -222,12 +240,12 @@ describe("席の引き換え", () => {
    * 時間切れになった）。**これを「降りている」と同じ応答にすると嘘になる。**
    * その人は指していないがプレイヤーとしては数えられていて、レーティングも動き、記録も残っている。
    */
-  it("引き換えに来る前に終わった対戦は、降りたチケットと区別して答える", () => {
+  it("引き換えに来る前に終わった対戦は、降りたチケットと区別して答える", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby, registry } = arena;
-    const first = lobby.join(player(arena, "a", "へや"));
-    lobby.join(player(arena, "b", "へや"));
+    const first = await join(arena, await player(arena, "a", "へや"));
+    await join(arena, await player(arena, "b", "へや"));
     if (!first.ok) throw new Error("入れていない");
     const seat = seatOf(lobby, first.ticket);
 
@@ -245,18 +263,18 @@ describe("席の引き換え", () => {
    * 入れ替えればチケットは全部知らないものになる。これを「降りている」と答えると、タブを 1 つしか
    * 開いていない人にまで「別のタブから入り直した」と言うことになる。
    */
-  it("知らないチケットは「降りている」ではなく「知らない」と答える", () => {
+  it("知らないチケットは「降りている」ではなく「知らない」と答える", async () => {
     const arena = newArena();
     const { lobby } = arena;
     expect(lobby.claim("そんなチケットは無い").kind).toBe("unknown");
 
     // こちらから降ろしたチケットだけが「降りている」になる。同じプレイヤーが別のタブから入り直す形。
     const deck = legalDecks()[0]!;
-    const { secret } = arena.accounts.create("ふたつのタブ", 0);
-    const first = lobby.join({ secret, deck, roomCode: "へや" });
+    const { secret } = await arena.accounts.create("ふたつのタブ", 0);
+    const first = await join(arena, { secret, deck, roomCode: "へや" });
     if (!first.ok) throw new Error("入れていない");
     expect(lobby.claim(first.ticket).kind).toBe("waiting");
-    const again = lobby.join({ secret, deck, roomCode: "べつのへや" });
+    const again = await join(arena, { secret, deck, roomCode: "べつのへや" });
     if (!again.ok) throw new Error("入れていない");
     expect(lobby.claim(first.ticket).kind).toBe("dropped");
 
@@ -270,24 +288,24 @@ describe("席の引き換え", () => {
    * 取りに来ても席をもらえず、画面は入り直せと言う。入り直せば 2 局目が始まり、
    * 1 局目は時間切れの負けとして記録に残る。1 手も指していないのにである。
    */
-  it("席が溢れても、まだ対戦中の席は返し続ける", () => {
+  it("席が溢れても、まだ対戦中の席は返し続ける", async () => {
     const arena = newArena();
     const { lobby } = arena;
     const deck = legalDecks()[0]!;
-    const seat = (name: string): string => {
-      const a = arena.accounts.create(`${name}-a`, 0).secret;
-      const b = arena.accounts.create(`${name}-b`, 0).secret;
-      const first = lobby.join({ secret: a, deck, roomCode: name });
-      lobby.join({ secret: b, deck, roomCode: name });
+    const seat = async (name: string): Promise<string> => {
+      const a = (await arena.accounts.create(`${name}-a`, 0)).secret;
+      const b = (await arena.accounts.create(`${name}-b`, 0)).secret;
+      const first = await join(arena, { secret: a, deck, roomCode: name });
+      await join(arena, { secret: b, deck, roomCode: name });
       if (!first.ok) throw new Error("入れていない");
       return first.ticket;
     };
 
-    const early = seat("さいしょ");
+    const early = await seat("さいしょ");
     expect(lobby.claim(early).kind).toBe("seated");
 
     // 覚えていられる数を超えるまで、終わらない対戦を積む。
-    for (let i = 0; i < 300; i++) seat(`へや-${i}`);
+    for (let i = 0; i < 300; i++) await seat(`へや-${i}`);
 
     expect(lobby.claim(early).kind).toBe("seated");
   }, 60_000);
@@ -297,22 +315,22 @@ describe("席の引き換え", () => {
    * 捨てると、いま終わったばかりの対戦の席まで消える。その人は「もう終わっている」ではなく
    * 「知らない」と言われ、リプレイへの入り口を失う。
    */
-  it("溢れても、終わったばかりの席までまとめて捨てない", () => {
+  it("溢れても、終わったばかりの席までまとめて捨てない", async () => {
     const arena = newArena(4);
     const { lobby, registry } = arena;
     const deck = legalDecks()[0]!;
-    const seat = (name: string): string => {
-      const a = arena.accounts.create(`${name}-a`, 0).secret;
-      const b = arena.accounts.create(`${name}-b`, 0).secret;
-      const first = lobby.join({ secret: a, deck, roomCode: name });
-      lobby.join({ secret: b, deck, roomCode: name });
+    const seat = async (name: string): Promise<string> => {
+      const a = (await arena.accounts.create(`${name}-a`, 0)).secret;
+      const b = (await arena.accounts.create(`${name}-b`, 0)).secret;
+      const first = await join(arena, { secret: a, deck, roomCode: name });
+      await join(arena, { secret: b, deck, roomCode: name });
       if (!first.ok) throw new Error("入れていない");
       return first.ticket;
     };
 
     // 終わった席を 2 つ作る。古いほう（さき）から捨てられる。
-    const older = seat("さき");
-    const newer = seat("あと");
+    const older = await seat("さき");
+    const newer = await seat("あと");
     for (const ended of registry.sweepTimeouts(60 * 60_000)) registry.retire(ended);
     const started = lobby.claim(older);
     if (started.kind !== "finished") throw new Error("終わっていない");
@@ -320,9 +338,9 @@ describe("席の引き換え", () => {
     expect(lobby.claim(newer).kind).toBe("finished");
 
     // 上限（4）を 1 つだけ超えさせる。捨てるのは 1 つで足りる。
-    seat("いま-1");
-    seat("いま-2");
-    seat("いま-3");
+    await seat("いま-1");
+    await seat("いま-2");
+    await seat("いま-3");
 
     /**
      * **席は捨てても、終わった対戦があったことは答え続ける。** ここで「知らない」と
@@ -341,15 +359,15 @@ describe("席の引き換え", () => {
    * `leave` は知らないチケットでも呼べる。それを「降ろした」と覚えると、知らないものに
    * 「降りている」と答えるようになり、**呼ばれた回数だけ本物の記録が押し出される。**
    */
-  it("知らないチケットに `leave` を呼んでも、「降りている」にはならない", () => {
+  it("知らないチケットに `leave` を呼んでも、「降りている」にはならない", async () => {
     const arena = newArena();
     const { lobby } = arena;
     const deck = legalDecks()[0]!;
-    const { secret } = arena.accounts.create("ひとり", 0);
+    const { secret } = await arena.accounts.create("ひとり", 0);
 
-    const mine = lobby.join({ secret, deck, roomCode: "へや" });
+    const mine = await join(arena, { secret, deck, roomCode: "へや" });
     if (!mine.ok) throw new Error("入れていない");
-    const again = lobby.join({ secret, deck, roomCode: "べつのへや" });
+    const again = await join(arena, { secret, deck, roomCode: "べつのへや" });
     if (!again.ok) throw new Error("入れていない");
     expect(lobby.claim(mine.ticket).kind).toBe("dropped");
 
@@ -364,14 +382,13 @@ describe("席の引き換え", () => {
 /**
  * 決着の後始末は、持ち時間のスイープと WebSocket の処理から呼ばれる。そこから例外が漏れると
  * 走っているもの全体が止まり、**同じスイープで終わらせるはずだった別の対戦まで残る。**
- * ストアへ書けないことは本番で普通に起こる（読めない場所を渡した、いっぱいになった）。
+ * 保存先へ書けないことは本番で普通に起こる（D1 や R2 が一時的に応えない、など）。
  */
 describe("決着の後始末で落ちない", () => {
-  it("レーティングを保存できなくても、対戦は終わって決着は届く", () => {
+  it("レーティングを保存できなくても、対戦は終わって決着は届く", async () => {
     ensureCards();
-    const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
-    const registry = new MatchRegistry(dir);
-    const accounts = new AccountStore(dir);
+    const registry = new MatchRegistry();
+    const accounts = new AccountStore(db);
     const hub = new MatchHub({
       registry,
       now: () => 0,
@@ -380,52 +397,22 @@ describe("決着の後始末で落ちない", () => {
       },
     });
     const lobby = new Lobby(registry, accounts, () => 0);
-    const first = lobby.join(player({ lobby, registry, hub, accounts }, "a", "へや"));
-    lobby.join(player({ lobby, registry, hub, accounts }, "b", "へや"));
-    const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
-
-    const socket = recorder();
-    hub.attach(socket, seatA?.seatToken ?? "");
-    expect(() => hub.handle(socket, seatA?.seatToken ?? "", { t: "concede" })).not.toThrow();
-    expect(socket.sent.at(-1)?.t).toBe("ended");
-    expect(registry.live()).toHaveLength(0);
-  });
-
-  /**
-   * レーティングは対局ログから作り直せる、というのが 7.2 節である。書けなかった対戦で
-   * レーティングだけ動かすと、一覧にも出ない対戦のぶん差が付いて、どこから来た差か言えなくなる。
-   */
-  it("対局ログを書けなかった対戦では、レーティングを動かさない", () => {
-    ensureCards();
-    const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
-    // ストアそのものをファイルにして、その下へ書けないようにする。
-    const blocked = join(dir, "書けない");
-    writeFileSync(blocked, "");
-    const registry = new MatchRegistry(blocked);
-    const accounts = new AccountStore(dir);
-    let applied = 0;
-    const hub = new MatchHub({ registry, now: () => 0, onFinish: () => applied++ });
-    const lobby = new Lobby(registry, accounts, () => 0);
     const arena = { lobby, registry, hub, accounts };
-    const first = lobby.join(player(arena, "a", "へや"));
-    lobby.join(player(arena, "b", "へや"));
+    const first = await join(arena, await player(arena, "a", "へや"));
+    await join(arena, await player(arena, "b", "へや"));
     const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
 
     const socket = recorder();
     hub.attach(socket, seatA?.seatToken ?? "");
     expect(() => hub.handle(socket, seatA?.seatToken ?? "", { t: "concede" })).not.toThrow();
-
-    // 決着は届き、対戦はレジストリを離れる。それでもレーティングは動かさない。
     expect(socket.sent.at(-1)?.t).toBe("ended");
     expect(registry.live()).toHaveLength(0);
-    expect(applied).toBe(0);
   });
 
-  it("1 局の後始末で落ちても、同じスイープの別の対戦は終わる", () => {
+  it("1 局の後始末で落ちても、同じスイープの別の対戦は終わる", async () => {
     ensureCards();
-    const dir = mkdtempSync(join(tmpdir(), "poke-online-"));
-    const registry = new MatchRegistry(dir);
-    const accounts = new AccountStore(dir);
+    const registry = new MatchRegistry();
+    const accounts = new AccountStore(db);
     let seen = 0;
     const hub = new MatchHub({
       registry,
@@ -439,8 +426,8 @@ describe("決着の後始末で落ちない", () => {
     const lobby = new Lobby(registry, accounts, () => 0);
     const arena = { lobby, registry, hub, accounts };
     for (const room of ["ひとつめ", "ふたつめ"]) {
-      lobby.join(player(arena, `${room}-a`, room));
-      lobby.join(player(arena, `${room}-b`, room));
+      await join(arena, await player(arena, `${room}-a`, room));
+      await join(arena, await player(arena, `${room}-b`, room));
     }
     expect(registry.live()).toHaveLength(2);
 
@@ -452,12 +439,12 @@ describe("決着の後始末で落ちない", () => {
 });
 
 describe("座席の接続", () => {
-  it("座席トークンで局面一式を受け取る", () => {
+  it("座席トークンで局面一式を受け取る", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby, hub } = arena;
-    const first = lobby.join(player(arena, "a", "へや"));
-    const second = lobby.join(player(arena, "b", "へや"));
+    const first = await join(arena, await player(arena, "a", "へや"));
+    const second = await join(arena, await player(arena, "b", "へや"));
     const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 
@@ -473,12 +460,12 @@ describe("座席の接続", () => {
     expect(seatB).not.toBeNull();
   });
 
-  it("同じ座席に 2 本目が繋がったら古いほうを閉じる", () => {
+  it("同じ座席に 2 本目が繋がったら古いほうを閉じる", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby, hub } = arena;
-    const first = lobby.join(player(arena, "a", "へや"));
-    lobby.join(player(arena, "b", "へや"));
+    const first = await join(arena, await player(arena, "a", "へや"));
+    await join(arena, await player(arena, "b", "へや"));
     const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
 
     const old = recorder();
@@ -489,7 +476,7 @@ describe("座席の接続", () => {
     expect(fresh.closed).toBe(false);
   });
 
-  it("知らない座席トークンでは繋がない", () => {
+  it("知らない座席トークンでは繋がない", async () => {
     ensureCards();
     const arena = newArena();
     const { hub } = arena;
@@ -498,12 +485,12 @@ describe("座席の接続", () => {
     expect(socket.sent[0]?.t).toBe("error");
   });
 
-  it("投了すると両座席へ決着が届き、そこで初めて seed が出る", () => {
+  it("投了すると両座席へ決着が届き、そこで初めて seed が出る", async () => {
     ensureCards();
     const arena = newArena();
     const { lobby, hub, registry } = arena;
-    const first = lobby.join(player(arena, "a", "へや"));
-    const second = lobby.join(player(arena, "b", "へや"));
+    const first = await join(arena, await player(arena, "a", "へや"));
+    const second = await join(arena, await player(arena, "b", "へや"));
     const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 

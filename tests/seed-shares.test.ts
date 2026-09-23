@@ -6,10 +6,7 @@
  * サーバは並びを決める値の一部を知らないまま `nonce` に縛られる。
  */
 
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AccountStore } from "../src/accounts.js";
 import { commitSeed, commitShare, type SeedShares } from "../src/fingerprint.js";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
@@ -21,6 +18,17 @@ import { MatchRegistry } from "../src/registry.js";
 import { seedCommitmentHolds } from "../src/replay.js";
 import { joinRequestSchema } from "../src/requests.js";
 import { ensureCards, legalDecks } from "./helpers.js";
+import { startStorage } from "./worker.js";
+
+let storage: Awaited<ReturnType<typeof startStorage>>;
+
+beforeAll(async () => {
+  storage = await startStorage();
+});
+
+afterAll(async () => {
+  await storage.close();
+});
 
 const SHARE_A = "a".repeat(64);
 const SHARE_B = "b".repeat(64);
@@ -59,9 +67,8 @@ interface Arena {
 }
 
 function newArena(): Arena {
-  const dir = mkdtempSync(join(tmpdir(), "poke-online-shares-"));
-  const registry = new MatchRegistry(dir);
-  const accounts = new AccountStore(dir);
+  const registry = new MatchRegistry();
+  const accounts = new AccountStore(storage.db);
   const clock = { now: 0 };
   const finished: MatchRecord[] = [];
   const lobby = new Lobby(registry, accounts, () => clock.now);
@@ -77,16 +84,20 @@ function newArena(): Arena {
  * 2 人を同じルームコードで入れ、両方の席を返す。シェアのコミットは渡されたものだけ送る。
  * 先に待っていた側は対戦が始まる前に引き換えるので、始まる前の席も引き換えられることをここで通す。
  */
-function seatBoth(arena: Arena, commits: SeedShares): [Seated, Seated] {
+async function seatBoth(arena: Arena, commits: SeedShares): Promise<[Seated, Seated]> {
   ensureCards();
-  const request = (name: string, commit: string | null) => ({
-    secret: arena.accounts.create(name, 0).secret,
-    deck: legalDecks()[0],
-    roomCode: "へや",
-    ...(commit === null ? {} : { seedShareCommit: commit }),
-  });
-  const first = arena.lobby.join(request("a", commits[0]));
-  const second = arena.lobby.join(request("b", commits[1]));
+  const join = async (name: string, commit: string | null) => {
+    const { account, secret } = await arena.accounts.create(name, 0);
+    const request = {
+      secret,
+      deck: legalDecks()[0],
+      roomCode: "へや",
+      ...(commit === null ? {} : { seedShareCommit: commit }),
+    };
+    return arena.lobby.join(request, account);
+  };
+  const first = await join("a", commits[0]);
+  const second = await join("b", commits[1]);
   if (!first.ok || !second.ok || !("seat" in second)) throw new Error("席が決まっていない");
   const claimed = arena.lobby.claim(first.ticket);
   if (claimed.kind !== "seated") throw new Error(`席が取れていない: ${claimed.kind}`);
@@ -114,9 +125,9 @@ function matchOf(arena: Arena, seated: Seated) {
 }
 
 describe("シェアの開示", () => {
-  it("両座席が開くまで対戦を始めず、そろったら両方へ局面を送る", () => {
+  it("両座席が開くまで対戦を始めず、そろったら両方へ局面を送る", async () => {
     const arena = newArena();
-    const [a, b] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
+    const [a, b] = await seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     // 席を知らせる時点で、両方のコミットが両座席に届いている。
     expect(a.seedShareCommits).toEqual([commitShare(SHARE_A), commitShare(SHARE_B)]);
     expect(b.seedCommit).toBe(a.seedCommit);
@@ -138,9 +149,9 @@ describe("シェアの開示", () => {
     );
   });
 
-  it("コミットと合わないシェアは受け取らず、繋ぎ直して正しい値を開けば始まる", () => {
+  it("コミットと合わないシェアは受け取らず、繋ぎ直して正しい値を開けば始まる", async () => {
     const arena = newArena();
-    const [a, b] = seatBoth(arena, [commitShare(SHARE_A), null]);
+    const [a, b] = await seatBoth(arena, [commitShare(SHARE_A), null]);
     const wrong = recorder();
     arena.hub.attach(wrong, a.seatToken, SHARE_B);
     expect(wrong.sent.map((message) => message.t)).toEqual(["pending", "error"]);
@@ -150,9 +161,9 @@ describe("シェアの開示", () => {
     expect(matchOf(arena, b).seedCommitment.shares).toEqual([SHARE_A, null]);
   });
 
-  it("期限までに開かなかった座席のシェアは null のまま始め、時計はそこから流れる", () => {
+  it("期限までに開かなかった座席のシェアは null のまま始め、時計はそこから流れる", async () => {
     const arena = newArena();
-    const [a] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
+    const [a] = await seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     const socketA = recorder();
     arena.hub.attach(socketA, a.seatToken, SHARE_A);
 
@@ -174,9 +185,9 @@ describe("シェアの開示", () => {
    * 始まる前の座席にも答える。「座席が見つからない」と返すと、仕様どおりに `hello` や `ping` を
    * 送るクライアントは、取れている席を失ったと読む。
    */
-  it("始まる前の座席には、生存確認とまだ始まっていないことだけを答える", () => {
+  it("始まる前の座席には、生存確認とまだ始まっていないことだけを答える", async () => {
     const arena = newArena();
-    const [a] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
+    const [a] = await seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     const socket = recorder();
     arena.hub.attach(socket, a.seatToken, SHARE_A);
     arena.hub.handle(socket, a.seatToken, { t: "ping" });
@@ -192,7 +203,7 @@ describe("シェアの開示", () => {
   });
 
   /**
-   * 始める処理は WebSocket の `connection` の中からも走る。投げればプロセスごと落ち、
+   * 始める処理は、接続を受けた処理と定期処理の中から走る。投げれば呼んだ側の処理ごと止まり、
    * 残せば次のスイープでも同じ形で失敗して、両座席は始まらない対戦を待ち続ける。
    */
   it("始められなかった対戦は捨て、座席へ知らせて閉じる", () => {
@@ -224,9 +235,9 @@ describe("シェアの開示", () => {
     expect(arena.registry.holdsSeat("broken-0")).toBe(false);
   });
 
-  it("決着でシェアを明かし、記録からシェアとコミットを検算できる", () => {
+  it("決着でシェアを明かし、記録からシェアとコミットを検算できる", async () => {
     const arena = newArena();
-    const [a, b] = seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
+    const [a, b] = await seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     const socketA = recorder();
     arena.hub.attach(socketA, a.seatToken, SHARE_A);
     arena.hub.attach(recorder(), b.seatToken, SHARE_B);
