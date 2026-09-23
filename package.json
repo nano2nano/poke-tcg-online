@@ -10,23 +10,28 @@
     "test": "vitest run",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
-    "start": "tsx src/main.ts",
+    "dev": "wrangler dev",
+    "build": "tsx tools/build-worker.ts",
+    "deploy": "tsx tools/deploy.ts",
     "replay:verify": "tsx tools/replay-verify.ts",
     "verify:all": "npm run typecheck && npm run fmt:check && npm run test",
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "ws": "^8.18.3",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260923.1",
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.6.2",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
     "oxfmt": "^0.68.0",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "wrangler": "^4.136.3",
+    "ws": "^8.18.3"
   },
   "engines": {
     "node": ">=22.13.0"

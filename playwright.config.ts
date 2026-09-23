@@ -15,8 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PORT = 8081;
-/** サーバの書き込み先。リポジトリの `data/` を汚さないよう、実行ごとに捨てられる場所を渡す。 */
-const DATA_DIR = mkdtempSync(join(tmpdir(), "poke-online-e2e-"));
+/** D1 と R2 の中身の保存先。手元で遊んだ `.wrangler/` を汚さないよう、実行ごとに捨てられる場所を渡す。 */
+const STATE_DIR = mkdtempSync(join(tmpdir(), "poke-online-e2e-"));
 
 export default defineConfig({
   testDir: "./e2e",
@@ -37,15 +37,18 @@ export default defineConfig({
     /**
      * **`npx` を挟まない。** `npx` は node を孫として起こすので、後片付けで `npx` だけが
      * 死んでサーバが生き残る。次の実行が古いサーバに当たって、嘘の結果を返す。
+     *
+     * どのブラウザも同じ接続元から来るので、プレイヤーを作る速さの上限は外す。
      */
-    command: "node_modules/.bin/tsx src/main.ts",
+    command: [
+      "node_modules/.bin/wrangler dev",
+      `--ip 127.0.0.1 --port ${PORT}`,
+      `--persist-to ${STATE_DIR}`,
+      "--var ACCOUNT_BURST:0",
+    ].join(" "),
     url: `http://127.0.0.1:${PORT}`,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: {
-      PORT: String(PORT),
-      POKE_LOG_DIR: join(DATA_DIR, "matches"),
-      POKE_ACCOUNT_DIR: DATA_DIR,
-    },
+    env: { WRANGLER_SEND_METRICS: "false" },
   },
 });

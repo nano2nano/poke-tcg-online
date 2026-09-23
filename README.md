@@ -16,16 +16,17 @@
 
 ## 動かす
 
-Node.js 22.13 以上。対局ログの索引に `node:sqlite` を使う。
+Cloudflare Workers で動く。手元では `wrangler dev` が同じものを動かすので、Cloudflare のアカウントは要らない。
 
 ```sh
 git clone --recurse-submodules https://github.com/nano2nano/poke-tcg-online
 cd poke-tcg-online
-npm install
-npm start           # 既定は 8080 番。PORT で変えられる
+npm ci
+npm run dev         # http://localhost:8787
 ```
 
 `--recurse-submodules` を忘れた場合は `npm run engine:sync` でエンジンを取り込む。
+Cloudflare へ出す手順は `docs/deploy.md` にある。
 
 ブラウザで開くと、名前とルームコードを入れて対戦に入れる。
 ルームコードを空にするとマッチングキューへ入り、先に待っていた人と繋がる。
@@ -39,7 +40,8 @@ npm start           # 既定は 8080 番。PORT で変えられる
 ```sh
 npm run verify:all        # 型検査、書式、テスト
 npm test
-npm run replay:verify data/matches    # 残っている対局ログを再生して検証する
+npm run test:e2e          # ブラウザで画面を動かす
+npm run replay:verify matches    # R2 から落とした対局ログを再生して検証する（docs/deploy.md）
 ```
 
 `replay:verify` はログの健全性の検査であると同時に、エンジンの検査でもある。
@@ -62,7 +64,7 @@ job の名前は `verify` で、ブランチ保護の required check はこれ�
   `spectatorSyncFor` と `spectatorDeltaFor` だけが組み立てる。**
   `GameState` と生の `DomainEvent` を送る経路を増やさない。
   `tests/leak.test.ts` が、配信される値とイベントに隠れたカードが混じらないことを全局面で検査する。
-- **時刻を読むのは `src/hub.ts` と `src/main.ts` だけである。** 下の層は現在時刻を引数で受け取る。
+- **下の層は現在時刻を引数で受け取る。** `Date.now()` を呼ぶのは、`now` を差し替えられる入口の既定値だけである。
 - **エンジンへの import は `src/engine.ts` に集める。** 取り込み方を変えるときに直すのが 1 箇所で済む。
   例外は `src/engine-invariants.ts` だけで、こちらは検証の道具しか使わない別の入口である。
 - **カードの識別子をこのリポジトリへ書かない。** サンプルデッキもテストの `defId` も、

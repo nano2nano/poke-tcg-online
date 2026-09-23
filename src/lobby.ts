@@ -13,7 +13,7 @@ import type { DeckList, Player } from "./engine.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import type { SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
-import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
+import { ACCOUNT_NOT_FOUND, type Account, type AccountStore } from "./accounts.js";
 import { commitSeed, noShares, type SeedShares } from "./fingerprint.js";
 import { allRevealed, SHARE_REVEAL_DEADLINE_MS, type PendingMatch } from "./pending.js";
 
@@ -119,11 +119,13 @@ export class Lobby {
     private readonly seatedLimit: number = SEATED_LIMIT,
   ) {}
 
-  join(request: JoinRequest): JoinOutcome {
+  /**
+   * `known` は `request.secret` で引いたプレイヤーである。D1 を読むのは非同期で、ロビーは同期で
+   * 動くので、呼び手が先に引いておく。
+   */
+  join(request: JoinRequest, known: Account | null): JoinOutcome {
     const nowMs = this.now();
     // シークレットを先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
-    // ここでは読むだけで、ストアは書き換えない。
-    const known = this.accounts.bySecret(request.secret);
     if (known === null) {
       return { ok: false, code: ACCOUNT_NOT_FOUND, errors: ["アカウントが見つからない"] };
     }
@@ -139,9 +141,9 @@ export class Lobby {
      * ストアでもそれ以後の対局ログでも名前が変わっている。
      */
     const account =
-      (request.displayName === undefined
-        ? this.accounts.touch(request.secret, nowMs)
-        : this.accounts.rename(request.secret, request.displayName, nowMs)) ?? known;
+      request.displayName === undefined
+        ? this.accounts.touch(known, nowMs)
+        : this.accounts.rename(known, request.displayName, nowMs);
 
     const ticket: Ticket = {
       ticket: newToken(),
@@ -315,7 +317,7 @@ export class Lobby {
     return this.queue.shift() ?? null;
   }
 
-  /** チケットの座席を、今のレーティングと表示名で取り直す。プレイヤーが消えていればチケットのままを使う。 */
+  /** チケットの座席を、今のレーティングと表示名で取り直す。メモリに無ければチケットのままを使う。 */
   private seatNow(ticket: Ticket): SeatInfo {
     const account = this.accounts.byPlayerId(ticket.seat.playerId);
     if (account === null) return ticket.seat;

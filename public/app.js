@@ -85,6 +85,17 @@ function loadCardsThen(redraw) {
     .catch(() => {});
 }
 
+/**
+ * 開いている間、20 秒ごとに `ping` を送る。サーバは 150 秒何も届かない接続を切る（仕様 3.5 節）。
+ * Cloudflare Workers にはサーバから ping を送る手段が無いので、生きていることは画面の側から伝える。
+ */
+function keepAlive(ws) {
+  const timer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "ping" }));
+  }, 20_000);
+  ws.addEventListener("close", () => clearInterval(timer));
+}
+
 function socketUrl(query) {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   return `${scheme}://${location.host}/ws?${query}`;
@@ -391,6 +402,7 @@ function openMatch(seated) {
   const query = [`seatToken=${encodeURIComponent(seated.seatToken)}`];
   if (typeof seated.seedShare === "string") query.push(`seedShare=${seated.seedShare}`);
   socket = new WebSocket(socketUrl(query.join("&")));
+  keepAlive(socket);
   /**
    * 一度でも `sync` か `pending` が届いたかどうか。閉じた理由を分けるのに使う。
    *
@@ -670,9 +682,7 @@ let watchSeats = null;
 /** 直近の観戦の盤面。カードの名前の表が遅れて届いたときに描き直す。 */
 let lastWatchView = null;
 
-/**
- * こちらから送るものは無い。生存確認はサーバの ping にブラウザが自分で答える。
- */
+/** 観戦者が送るのは生きていることの `ping` だけである。 */
 function openWatch(token) {
   $("join").hidden = true;
   $("history").hidden = true;
@@ -682,6 +692,7 @@ function openWatch(token) {
   });
 
   const watching = new WebSocket(socketUrl(`spectatorToken=${encodeURIComponent(token)}`));
+  keepAlive(watching);
   let synced = false;
   let ended = false;
   /** 閉じる直前にサーバが言った理由。入れなかったときに、そのまま見せる。 */

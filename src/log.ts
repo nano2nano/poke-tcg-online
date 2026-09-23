@@ -6,9 +6,6 @@
  * どちらも再生で作り直せる値で、残すと桁が変わる。大きさの実測は 6.1 節にある。
  */
 
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { DeckList, GameOutcome, Player } from "./engine.js";
 import { engineFingerprint, type EngineFingerprint, type SeedShares } from "./fingerprint.js";
 import {
@@ -69,26 +66,4 @@ export function toRecord(match: Match): MatchRecord {
     outcome: engineOutcome(match),
     matchResult: match.result,
   };
-}
-
-/** 既定の保存先。`createApp` もリプレイのためにこれを引く。 */
-export const DEFAULT_LOG_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "data",
-  "matches",
-);
-
-/**
- * 日付で切った JSONL へ 1 行追記する（6.5 節）。データベースは置かない。
- *
- * 学習は先頭から順に読むだけで、索引を要する問い合わせは生きている対戦にしか無く、
- * それはメモリにある。
- */
-export function appendRecord(record: MatchRecord, dir: string = DEFAULT_LOG_DIR): string {
-  mkdirSync(dir, { recursive: true });
-  const day = record.endedAt.slice(0, 10);
-  const path = join(dir, `${day}.jsonl`);
-  appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
-  return path;
 }

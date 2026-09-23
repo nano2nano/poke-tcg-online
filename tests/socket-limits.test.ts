@@ -5,30 +5,26 @@
  * どこで切るかを決めておかないと、盤面が正しくてもサーバが保たない。
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { createApp, sweepDeadSockets, type App } from "../src/app.js";
-import { ensureCards, legalDecks } from "./helpers.js";
+import { startWorker, type TestWorker } from "./worker.js";
+import { createApp, SILENCE_LIMIT_MS, type AppSocket } from "../src/app.js";
+import type { AccountStore } from "../src/accounts.js";
+import type { MatchArchive } from "../src/archive.js";
+import { concede } from "../src/match.js";
+import { ensureCards, legalDecks, newMatch } from "./helpers.js";
 
-let app: App;
+let worker: TestWorker;
 let base: string;
 
 beforeAll(async () => {
   ensureCards();
-  const dir = mkdtempSync(join(tmpdir(), "poke-online-socket-"));
-  // 見たいのは接続のほうなので、プレイヤーを作る速さの上限には当てない。
-  app = createApp({ logDir: dir, accountDir: dir, accountLimit: null });
-  await new Promise<void>((resolve) => app.http.listen(0, "127.0.0.1", () => resolve()));
-  const { port } = app.http.address() as AddressInfo;
-  base = `127.0.0.1:${port}`;
+  worker = await startWorker({ ACCOUNT_BURST: "0" });
+  base = worker.host;
 });
 
 afterAll(async () => {
-  await app.close();
+  await worker.close();
 });
 
 async function postJson(path: string, body: unknown, host = base): Promise<Record<string, any>> {
@@ -60,14 +56,13 @@ describe("1 通の大きさ", () => {
     await new Promise<void>((resolve) => socket.on("open", () => resolve()));
 
     const closed = new Promise<number>((resolve) => socket.on("close", (code) => resolve(code)));
-    // `ws` の既定（100 MiB）のままなら、これは素通りして盤面に触る手前まで進む。
+    // 上限を置かなければ、これは素通りして盤面に触る手前まで進む。
     socket.send("x".repeat(128 * 1024));
 
     // 1009 は「受け取った 1 通が大きすぎる」。切った理由が相手に伝わる形で落ちる。
     expect(await closed).toBe(1009);
 
-    // **落ちるのはこの接続だけである。** 受け手のいない `error` は
-    // プロセスごと落とすので、そうなれば指している全員の対戦が巻き添えになる。
+    // **落ちるのはこの接続だけである。** ほかの接続はそのまま繋がる。
     const next = new WebSocket(`ws://${base}/ws?seatToken=${await seatToken("まきぞえ")}`);
     const sync = new Promise<string>((resolve) =>
       next.on("message", (raw) => resolve(String(raw))),
@@ -99,94 +94,117 @@ describe("1 通の大きさ", () => {
   });
 });
 
-describe("死活確認の配線", () => {
-  /** 間隔を詰めた別のサーバを立てる。既定の 60 秒はテストで待てない。 */
-  let quick: App;
-  let quickBase: string;
-
-  beforeAll(async () => {
-    const dir = mkdtempSync(join(tmpdir(), "poke-online-beat-"));
-    quick = createApp({ logDir: dir, accountDir: dir, accountLimit: null, heartbeatMs: 50 });
-    await new Promise<void>((resolve) => quick.http.listen(0, "127.0.0.1", () => resolve()));
-    const { port } = quick.http.address() as AddressInfo;
-    quickBase = `127.0.0.1:${port}`;
-  });
-
-  afterAll(async () => {
-    await quick.close();
-  });
-
-  /**
-   * **返事をしている接続を切らない。**
-   *
-   * `sweepDeadSockets` 自体は上で見ているが、それだけだと `pong` の受け手や
-   * 繋がった時点の登録を外しても全部通ってしまう。どちらを外しても、生きている接続が
-   * 2 巡目で切られる。ここはその配線だけを見る。
-   */
-  it("返事のある接続は、何巡しても切られない", async () => {
-    const token = await seatToken("はいせん", quickBase);
-    const socket = new WebSocket(`ws://${quickBase}/ws?seatToken=${token}`);
-
-    const survived = new Promise<string>((resolve) => {
-      let seen = 0;
-      // `ws` は ping に自動で pong を返す。数えるのはサーバが送ってきた ping である。
-      socket.on("ping", () => {
-        if ((seen += 1) === 5) resolve("生きている");
-      });
-      socket.on("close", () => resolve("切られた"));
+/**
+ * Cloudflare Workers ではサーバから ping を送れないので、画面が 20 秒ごとに `ping` を送り、
+ * サーバは何も届かないまま `SILENCE_LIMIT_MS` が過ぎた接続を切る（3.5 節）。
+ * 線の向こうが消えると `close` は届かないので、ここで切らないと座席に就いたまま残る。
+ */
+describe("黙ったままの接続", () => {
+  /** 時計を手で進める。定期処理もこちらで呼ぶ。 */
+  function arena() {
+    let nowMs = 0;
+    // 接続と定期処理しか使わないので、保存先は持たせない。
+    const app = createApp({
+      accounts: {} as AccountStore,
+      archive: {} as MatchArchive,
+      now: () => nowMs,
+      accountLimit: null,
     });
-
-    expect(await survived).toBe("生きている");
-    socket.close();
-  });
-});
-
-describe("死活確認", () => {
-  /** `ping` と `terminate` の呼ばれ方だけを見る。時間は動かさない。 */
-  function fakeSocket(): { ping(): void; terminate(): void; pinged: number; killed: number } {
-    return {
-      pinged: 0,
-      killed: 0,
-      ping() {
-        this.pinged += 1;
+    const match = newMatch("silence");
+    app.registry.add(match);
+    const socket: AppSocket & { closedWith: number | null } = {
+      closedWith: null,
+      send: () => {},
+      close(code) {
+        this.closedWith = code ?? 1000;
       },
-      terminate() {
-        this.killed += 1;
+    };
+    const connection = app.connect(
+      new URLSearchParams({ seatToken: match.seatTokens[0] }),
+      socket,
+    )!;
+    return {
+      app,
+      socket,
+      connection,
+      advance: (ms: number) => {
+        nowMs += ms;
       },
     };
   }
 
-  it("返事のあった接続へは次の ping を送る", () => {
-    const socket = fakeSocket();
-    const answered = new WeakSet([socket]);
+  function finish(app: ReturnType<typeof arena>["app"]): void {
+    for (const match of app.registry.live()) {
+      concede(match, 0, 0);
+      app.registry.retire(match);
+    }
+  }
 
-    sweepDeadSockets([socket], answered);
+  it("何も届かないまま上限を過ぎた接続を切り、席から外す", () => {
+    const { app, socket, advance } = arena();
 
-    expect(socket.pinged).toBe(1);
-    expect(socket.killed).toBe(0);
+    advance(SILENCE_LIMIT_MS - 1);
+    app.tick();
+    expect(socket.closedWith).toBeNull();
+
+    advance(1);
+    app.tick();
+    expect(socket.closedWith).toBe(1001);
+    // 切った接続は数えない。対戦が終われば、定期処理が見るものは無くなる。
+    finish(app);
+    expect(app.idle()).toBe(true);
   });
 
-  it("1 巡ぶん黙っている接続を切る", () => {
-    const socket = fakeSocket();
-    const answered = new WeakSet([socket]);
-
-    // 1 巡目で ping を送り、返事が無いまま 2 巡目に入る。
-    sweepDeadSockets([socket], answered);
-    sweepDeadSockets([socket], answered);
-
-    expect(socket.pinged).toBe(1);
-    expect(socket.killed).toBe(1);
+  it("持ち時間の側で投げても、黙った接続は切る", () => {
+    const { app, socket, advance } = arena();
+    app.hub.sweepTimeouts = () => {
+      throw new Error("壊れた対戦");
+    };
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      advance(SILENCE_LIMIT_MS);
+      app.tick();
+    } finally {
+      error.mockRestore();
+    }
+    expect(socket.closedWith).toBe(1001);
   });
 
-  it("返事が来ていれば切らずに続ける", () => {
-    const socket = fakeSocket();
-    const answered = new WeakSet([socket]);
+  it("`ping` が届いていれば、何度上限を跨いでも切らない", () => {
+    const { app, socket, connection, advance } = arena();
 
-    sweepDeadSockets([socket], answered);
-    answered.add(socket); // pong が届いた
-    sweepDeadSockets([socket], answered);
-
-    expect(socket.pinged).toBe(2);
-    expect(socket.killed).toBe(0);
+    for (let round = 0; round < 5; round++) {
+      advance(SILENCE_LIMIT_MS - 1);
+      connection.receive(JSON.stringify({ t: "ping" }));
+      app.tick();
+    }
+    expect(socket.closedWith).toBeNull();
   });
+
+  it("閉じた接続は、定期処理で見なくなる", () => {
+    const { app, connection } = arena();
+    expect(app.idle()).toBe(false);
+
+    connection.closed();
+    // 対戦はまだ生きているので、定期処理は止まらない。接続のぶんだけが外れる。
+    expect(app.idle()).toBe(false);
+    finish(app);
+    expect(app.idle()).toBe(true);
+  });
+
+  /** ここまでは作りの中を見た。本物の Worker で、定期処理が本当に切るところまでを 1 度だけ見る。 */
+  it("本物の Worker でも、黙った接続は切られる", async () => {
+    const quick = await startWorker({ ACCOUNT_BURST: "0", SILENCE_LIMIT_MS: "500" });
+    try {
+      const socket = new WebSocket(
+        `ws://${quick.host}/ws?seatToken=${await seatToken("だまる", quick.host)}`,
+      );
+      const code = await new Promise<number>((resolve) =>
+        socket.on("close", (closed) => resolve(closed)),
+      );
+      expect(code).toBe(1001);
+    } finally {
+      await quick.close();
+    }
+  }, 30_000);
 });

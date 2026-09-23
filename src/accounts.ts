@@ -9,19 +9,10 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import type { D1Database, D1PreparedStatement } from "@cloudflare/workers-types/index.ts";
 
 /** アカウントが見つからないことを、画面の文言に頼らずに伝える合図。 */
 export const ACCOUNT_NOT_FOUND = "account-not-found";
-import { fileURLToPath } from "node:url";
 
 /** 最初のレーティング。 */
 export const INITIAL_RATING = 1500;
@@ -45,32 +36,58 @@ export interface Account {
 /** 表示名の上限。表示名であって本人確認ではないので、長さだけ見る。 */
 const MAX_DISPLAY_NAME = 40;
 
-const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "data");
-
-/** 書き直すかどうかの下限。少ないうちは、割合で見ると何度も書き直すことになる。 */
-const COMPACT_FLOOR = 64;
-/** 実体の何倍まで古い版を許すか。大きくすると読み込みが遅くなり、小さくすると書き直しが増える。 */
-const COMPACT_RATIO = 2;
+/**
+ * メモリに置いておくプレイヤーの数。ロビーは同期で動くので、待っている人と対戦中の人は
+ * ここから引く（`src/lobby.ts`）。溢れたら長く使われていないものから捨て、次は D1 から読み直す。
+ */
+const CACHED_ACCOUNTS = 4_096;
 
 interface StoredAccount extends Account {
   /** シークレットそのものは持たない。漏れても入れないようにする。 */
   secretHash: string;
 }
 
+interface PlayerRow {
+  player_id: string;
+  secret_hash: string;
+  display_name: string;
+  rating: number;
+  games: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  created_at: string;
+  last_seen_at: string;
+}
+
+/**
+ * D1 の `players` を読み書きする。
+ *
+ * 書き換えるのはこの Durable Object だけである。 だからメモリに持っている版が常に最新で、
+ * D1 から読むのはメモリに無いときだけにする。
+ *
+ * **D1 への読み書きは 1 本の列に並べる。** 読み直しが、先に出した書き込みを追い越さないためである。
+ * 追い越すと、捨てたあとに読み直した版が古く、たとえば 1 局前のレーティングで次の対戦が始まる。
+ */
 export class AccountStore {
-  private readonly accounts = new Map<string, StoredAccount>();
+  /** 識別子 → プレイヤー。`Map` は入れた順に並ぶので、使ったものを後ろへ回すと先頭が最も古い。 */
+  private readonly cached = new Map<string, StoredAccount>();
   /** シークレットのハッシュ → 識別子。 */
   private readonly bySecretHash = new Map<string, string>();
-  /** ファイルにある行数。実体より多ければ古い版が溜まっている。 */
-  private lines = 0;
-  private broken = 0;
+  private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly dir: string = DEFAULT_DIR) {
-    this.load();
-  }
+  constructor(
+    private readonly db: D1Database,
+    private readonly capacity: number = CACHED_ACCOUNTS,
+  ) {}
 
-  /** 新しいプレイヤーを作る。シークレットを返すのはこのときだけで、控えは持たない。 */
-  create(displayName: string, nowMs: number): { account: Account; secret: string } {
+  /**
+   * 新しいプレイヤーを作る。シークレットを返すのはこのときだけで、控えは持たない。
+   *
+   * **書けてから覚える。** シークレットを返すのはこのときだけなので、書けなかったのに
+   * メモリにだけ残ると、D1 に無いプレイヤーで対戦が始まり、その戦績はどこにも残らない。
+   */
+  async create(displayName: string, nowMs: number): Promise<{ account: Account; secret: string }> {
     const secret = randomBytes(24).toString("base64url");
     const at = new Date(nowMs).toISOString();
     const stored: StoredAccount = {
@@ -85,173 +102,227 @@ export class AccountStore {
       lastSeenAt: at,
       secretHash: hash(secret),
     };
-    this.accounts.set(stored.playerId, stored);
-    this.bySecretHash.set(stored.secretHash, stored.playerId);
-    /**
-     * **書けなかったら、覚えたぶんも戻す。** シークレットを返すのはこのときだけなので、
-     * 500 を返したあとにメモリだけ残ると、誰にも名乗れないアカウントができる。消す
-     * エンドポイントは無く、次の詰め直しでそれがファイルにも載る。
-     *
-     * 覚えるのが先なのは、`record` が詰め直しに入ることがあり、そこで書かれるのは
-     * いま覚えているぶんだからである。先に書くと、追記した行を詰め直しが消してしまう。
-     */
-    try {
-      this.record([stored]);
-    } catch (error) {
-      this.accounts.delete(stored.playerId);
-      this.bySecretHash.delete(stored.secretHash);
-      throw error;
-    }
+    await this.enqueue(() =>
+      this.db
+        .prepare(
+          `INSERT INTO players (player_id, secret_hash, display_name, rating, games, wins, losses,
+             draws, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          stored.playerId,
+          stored.secretHash,
+          stored.displayName,
+          stored.rating,
+          stored.games,
+          stored.wins,
+          stored.losses,
+          stored.draws,
+          stored.createdAt,
+          stored.lastSeenAt,
+        )
+        .run(),
+    );
+    this.remember(stored);
     return { account: publicOf(stored), secret };
   }
 
-  bySecret(secret: string): Account | null {
-    const playerId = this.bySecretHash.get(hash(secret));
-    if (playerId === undefined) return null;
-    const stored = this.accounts.get(playerId);
-    return stored === undefined ? null : publicOf(stored);
+  /** シークレットからプレイヤーを引く。メモリに無ければ D1 から読む。 */
+  async find(secret: string): Promise<Account | null> {
+    const secretHash = hash(secret);
+    const playerId = this.bySecretHash.get(secretHash);
+    const stored =
+      playerId === undefined
+        ? await this.load("secret_hash", secretHash)
+        : await this.loadById(playerId);
+    return stored === null ? null : publicOf(stored);
   }
 
+  /** メモリにあるときだけ返す。ロビーは同期で動くので、読み込みは呼び手が先に済ませておく。 */
   byPlayerId(playerId: string): Account | null {
-    const stored = this.accounts.get(playerId);
+    const stored = this.cached.get(playerId);
     return stored === undefined ? null : publicOf(stored);
   }
 
   /** 表示名を変える。レーティングと戦績は動かない。 */
-  rename(secret: string, displayName: string, nowMs: number): Account | null {
-    const stored = this.storedBySecret(secret);
-    if (stored === null) return null;
-    stored.displayName = cleanName(displayName);
-    stored.lastSeenAt = new Date(nowMs).toISOString();
-    this.record([stored]);
-    return publicOf(stored);
+  rename(account: Account, displayName: string, nowMs: number): Account {
+    const name = cleanName(displayName);
+    const at = new Date(nowMs).toISOString();
+    this.update(account.playerId, "display_name = ?, last_seen_at = ?", [name, at], (stored) => {
+      stored.displayName = name;
+      stored.lastSeenAt = at;
+    });
+    return { ...account, displayName: name, lastSeenAt: at };
   }
 
-  touch(secret: string, nowMs: number): Account | null {
-    const stored = this.storedBySecret(secret);
-    if (stored === null) return null;
-    stored.lastSeenAt = new Date(nowMs).toISOString();
-    this.record([stored]);
-    return publicOf(stored);
+  touch(account: Account, nowMs: number): Account {
+    const at = new Date(nowMs).toISOString();
+    this.update(account.playerId, "last_seen_at = ?", [at], (stored) => {
+      stored.lastSeenAt = at;
+    });
+    return { ...account, lastSeenAt: at };
   }
 
   /**
    * 1 局の結果をレーティングへ入れる。`score` は座席 0 から見た値で、勝ち 1・引き分け 0.5・負け 0。
    *
+   * `alongside` は同じトランザクションで書く文である。対局ログの索引の行をここへ渡すと、
+   * 「索引に行がある」と「レーティングに入った」が必ずそろう（`src/archive.ts`）。
+   * 書けなければ投げる。プレイヤーが D1 に無ければ、`alongside` だけを書いて null を返す。
+   *
    * 投了と時間切れも普通の負けとして数える。規則上の敗北条件ではない（§2.3）が、
    * それは対局ログの `matchResult` が区別して持っている。レーティングは勝敗の履歴であって、
    * 学習の終端報酬ではない。
    */
-  applyResult(playerIds: [string, string], score: number, nowMs: number): [number, number] | null {
-    const a = this.accounts.get(playerIds[0]);
-    const b = this.accounts.get(playerIds[1]);
-    if (a === undefined || b === undefined) return null;
-
+  async applyResult(
+    playerIds: [string, string],
+    score: number,
+    nowMs: number,
+    alongside: D1PreparedStatement[] = [],
+  ): Promise<[number, number] | null> {
+    const [a, b] = await Promise.all(playerIds.map((playerId) => this.loadById(playerId)));
+    if (a == null || b == null) {
+      await this.enqueue(() => (alongside.length === 0 ? null : this.db.batch(alongside)));
+      return null;
+    }
     const expectedA = 1 / (1 + 10 ** ((b.rating - a.rating) / 400));
-    a.rating = Math.round(a.rating + K_FACTOR * (score - expectedA));
-    b.rating = Math.round(b.rating + K_FACTOR * (1 - score - (1 - expectedA)));
-
+    const ratings: [number, number] = [
+      Math.round(a.rating + K_FACTOR * (score - expectedA)),
+      Math.round(b.rating + K_FACTOR * (1 - score - (1 - expectedA))),
+    ];
     const at = new Date(nowMs).toISOString();
-    for (const [account, own] of [
-      [a, score],
-      [b, 1 - score],
-    ] as const) {
-      account.games += 1;
-      if (own === 1) account.wins += 1;
-      else if (own === 0) account.losses += 1;
-      else account.draws += 1;
-      account.lastSeenAt = at;
-    }
-    this.record([a, b]);
-    return [a.rating, b.rating];
-  }
-
-  count(): number {
-    return this.accounts.size;
-  }
-
-  private storedBySecret(secret: string): StoredAccount | null {
-    const playerId = this.bySecretHash.get(hash(secret));
-    if (playerId === undefined) return null;
-    return this.accounts.get(playerId) ?? null;
-  }
-
-  private get path(): string {
-    return join(this.dir, "accounts.jsonl");
-  }
-
-  /** 全体を 1 つの配列として持っていた頃のファイル。読み込みのときだけ見る。 */
-  private get legacyPath(): string {
-    return join(this.dir, "accounts.json");
-  }
-
-  private load(): void {
-    if (existsSync(this.path)) {
-      const text = readFileSync(this.path, "utf8");
-      for (const line of text.split("\n")) {
-        if (line.trim() === "") continue;
-        let row: StoredAccount;
-        try {
-          row = JSON.parse(line) as StoredAccount;
-        } catch {
-          // 追記の途中で落ちれば書きかけの行が残る。1 行のために全員を失わない。
-          this.broken++;
-          continue;
-        }
-        this.remember(row);
-        this.lines++;
-      }
-      if (this.broken > 0) console.warn(`${this.path}: 読めない行を ${this.broken} 行とばした`);
+    const outcomes = [score, 1 - score].map((own) => ({
+      wins: own === 1 ? 1 : 0,
+      losses: own === 0 ? 1 : 0,
+      draws: own !== 1 && own !== 0 ? 1 : 0,
+    }));
+    try {
+      await this.enqueue(() =>
+        this.db.batch([
+          ...alongside,
+          ...[a, b].map((stored, seat) =>
+            this.db
+              .prepare(
+                `UPDATE players SET rating = ?, games = games + 1, wins = wins + ?,
+                 losses = losses + ?, draws = draws + ?, last_seen_at = ? WHERE player_id = ?`,
+              )
+              .bind(
+                ratings[seat],
+                outcomes[seat]!.wins,
+                outcomes[seat]!.losses,
+                outcomes[seat]!.draws,
+                at,
+                stored.playerId,
+              ),
+          ),
+        ]),
+      );
+    } catch (error) {
       /**
-       * **読み飛ばすだけでは足りない。書き直して、行の切れ目で終わらせる。**
-       * 途中で落ちた追記は、改行の無い半端な行をファイルの末尾に残す。そこへ次の 1 行を
-       * 足すと 2 つの行が 1 行に繋がり、**どちらも読めなくなる。** 飛ばした側だけでなく、
-       * そのとき作ったアカウントも次の起動で消える。サーバはシークレットを持たないので、
-       * その人はもう戻れない。
+       * **書けたかどうかは分からない。** 通ってから応答だけが落ちることもある。レーティングは
+       * メモリの値から計算した値をそのまま書くので、古い値を残すと次の対戦で D1 の値を巻き戻す。
+       * メモリから捨てて、次は D1 から読み直す。
        */
-      if (this.broken > 0 || (text !== "" && !text.endsWith("\n"))) this.compact();
-      return;
+      this.forget(a);
+      this.forget(b);
+      throw error;
     }
-    if (!existsSync(this.legacyPath)) return;
-    for (const row of JSON.parse(readFileSync(this.legacyPath, "utf8")) as StoredAccount[]) {
-      this.remember(row);
+    for (const [seat, stored] of [a, b].entries()) {
+      stored.rating = ratings[seat]!;
+      stored.games += 1;
+      stored.wins += outcomes[seat]!.wins;
+      stored.losses += outcomes[seat]!.losses;
+      stored.draws += outcomes[seat]!.draws;
+      stored.lastSeenAt = at;
     }
-    this.compact();
+    return ratings;
   }
 
-  private remember(row: StoredAccount): void {
-    // 同じ playerId があとから出てきたら、あとのほうが新しい。
-    this.accounts.set(row.playerId, row);
-    this.bySecretHash.set(row.secretHash, row.playerId);
+  /** 出した書き込みが全部済むまで待つ。 */
+  async settled(): Promise<void> {
+    await this.queue;
+  }
+
+  private async loadById(playerId: string): Promise<StoredAccount | null> {
+    const stored = this.cached.get(playerId);
+    if (stored !== undefined) {
+      this.cached.delete(playerId);
+      this.cached.set(playerId, stored);
+      return stored;
+    }
+    return this.load("player_id", playerId);
+  }
+
+  private async load(
+    column: "player_id" | "secret_hash",
+    value: string,
+  ): Promise<StoredAccount | null> {
+    const row = await this.enqueue(() =>
+      this.db.prepare(`SELECT * FROM players WHERE ${column} = ?`).bind(value).first<PlayerRow>(),
+    );
+    if (row === null) return null;
+    // 読んでいる間に、同じプレイヤーを別の要求が覚えていれば、メモリのほうが新しい。
+    return this.cached.get(row.player_id) ?? this.remember(fromRow(row));
   }
 
   /**
-   * 変わったアカウントだけを 1 行ずつ足す。
-   *
-   * 全体を書き直していたときは、`POST /api/account` を繰り返されるだけで 1 回の書き込みが
-   * 登録数に比例して伸びた。同期で書くので、その間イベントループが止まり、対戦中の手も
-   * 持ち時間のスイープも遅れる。追記なら 1 回のコストが登録数に依らない。
+   * メモリにあれば書き換え、D1 へは列に並べて書く。メモリに無くても D1 へは書く。
+   * 次に読み直すときは同じ列の後ろに並ぶので、この書き込みを追い越さない。
    */
-  private record(rows: StoredAccount[]): void {
-    mkdirSync(this.dir, { recursive: true });
-    appendFileSync(this.path, rows.map((row) => `${JSON.stringify(row)}\n`).join(""), "utf8");
-    this.lines += rows.length;
-    // 追記だけでは古い版が残り続ける。増えたぶんが実体を超えたら書き直して捨てる。
-    if (this.lines > COMPACT_FLOOR && this.lines > this.accounts.size * COMPACT_RATIO) {
-      this.compact();
-    }
+  private update(
+    playerId: string,
+    assignments: string,
+    values: string[],
+    change: (stored: StoredAccount) => void,
+  ): void {
+    const stored = this.cached.get(playerId);
+    if (stored !== undefined) change(stored);
+    this.enqueue(() =>
+      this.db
+        .prepare(`UPDATE players SET ${assignments} WHERE player_id = ?`)
+        .bind(...values, playerId)
+        .run(),
+    ).catch((error: unknown) => {
+      console.error(`プレイヤーを書けなかった（${playerId}）:`, error);
+    });
   }
 
-  /** 最新の 1 版だけを書き直す。別名で書いてから差し替えるので、落ちても古い版が残る。 */
-  private compact(): void {
-    mkdirSync(this.dir, { recursive: true });
-    const temporary = `${this.path}.writing`;
-    const rows = [...this.accounts.values()].map((row) => `${JSON.stringify(row)}\n`).join("");
-    writeFileSync(temporary, rows, "utf8");
-    renameSync(temporary, this.path);
-    this.lines = this.accounts.size;
-    this.broken = 0;
+  private remember(stored: StoredAccount): StoredAccount {
+    this.cached.delete(stored.playerId);
+    this.cached.set(stored.playerId, stored);
+    this.bySecretHash.set(stored.secretHash, stored.playerId);
+    for (const oldest of this.cached.values()) {
+      if (this.cached.size <= this.capacity) break;
+      this.forget(oldest);
+    }
+    return stored;
   }
+
+  private forget(stored: StoredAccount): void {
+    this.cached.delete(stored.playerId);
+    this.bySecretHash.delete(stored.secretHash);
+  }
+
+  /** 前の書き込みが落ちても、列そのものは止めない。落ちた要求の呼び手にだけ投げる。 */
+  private enqueue<T>(task: () => Promise<T> | T): Promise<T> {
+    const run = this.queue.then(task);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+}
+
+function fromRow(row: PlayerRow): StoredAccount {
+  return {
+    playerId: row.player_id,
+    displayName: row.display_name,
+    rating: row.rating,
+    games: row.games,
+    wins: row.wins,
+    losses: row.losses,
+    draws: row.draws,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+    secretHash: row.secret_hash,
+  };
 }
 
 function publicOf(stored: StoredAccount): Account {

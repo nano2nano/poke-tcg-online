@@ -1,9 +1,11 @@
 node_modules/
 dist/
-# 対局ログとプレイヤー。実データは git の管理下に置かない。
+# `wrangler dev` の D1 と R2 の中身。プレイヤーのシークレットのハッシュを持っている。
+.wrangler/
+# R2 から落とした対局ログ（`docs/deploy.md`）。
+/matches/
+# Node で動かしていたころの対局ログとプレイヤー。シークレットのハッシュを丸ごと持っている。
 data/matches/
-# 書きかけの別名（`accounts.jsonl.writing`）と、旧形式の `accounts.json` も含める。
-# プロセスが落ちたときに残り、シークレットのハッシュを丸ごと持っている。
 data/accounts.*
 e2e-results/
 playwright-report/

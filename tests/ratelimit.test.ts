@@ -1,12 +1,7 @@
 /** 呼ぶ速さの上限（`docs/spec/battle-server.md` 7.2 節）。 */
 
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
-
-const dir = (): string => mkdtempSync(join(tmpdir(), "poke-rl-"));
+import { DEFAULT_ACCOUNT_LIMIT, optionsFromVars } from "../src/app.js";
 import { RateLimit } from "../src/ratelimit.js";
 
 describe("呼ぶ速さの上限", () => {
@@ -57,85 +52,35 @@ describe("呼ぶ速さの上限", () => {
 });
 
 /**
- * 設定を読み違えると、**信用しているつもりで信用していない**状態になる。
- * `TRUST_PROXY=true` のような書き方は数に直すと `NaN` で、比較がすべて偽になる。
+ * 上限は既定で掛ける。接続元は Cloudflare が付ける値で数えるので、来た人全員が 1 つに
+ * 数えられることはない。**読めない設定で上限を外さない。** 書き損じ 1 つで黙って外れる。
  */
-describe("プロキシの数の読み取り", () => {
-  it("数でない設定は 0 として扱い、警告を残す", async () => {
-    const { createApp } = await import("../src/app.js");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      process.env.TRUST_PROXY = "true";
-      const app = createApp({ logDir: dir(), accountDir: dir() });
-      await app.close();
-      expect(warn).toHaveBeenCalled();
-    } finally {
-      delete process.env.TRUST_PROXY;
-      warn.mockRestore();
-    }
+describe("配置先の設定の読み取り", () => {
+  it("置かなければ既定のまま", () => {
+    expect(optionsFromVars({})).toEqual({});
+    expect(optionsFromVars({ ACCOUNT_BURST: " " })).toEqual({});
   });
-});
 
-/**
- * 上限を掛けるかどうかは配置先で決まる。**既定で掛けると、プロキシの向こうを見分けられない
- * 設定のままの配置先で、来た人全員が 1 つとして数えられる。** クライアントは画面を開いた時点で
- * アカウントを作るので、それは全体がサイトを使えなくなるということである。
- */
-describe("アカウントを作れる速さの設定", () => {
-  const app = async (burst: string | undefined) => {
-    const { createApp } = await import("../src/app.js");
-    if (burst === undefined) delete process.env.ACCOUNT_BURST;
-    else process.env.ACCOUNT_BURST = burst;
-    const created = createApp({ logDir: dir(), accountDir: dir(), trustedProxies: 0 });
-    const port = await new Promise<number>((resolve) => {
-      created.http.listen(0, "127.0.0.1", () =>
-        resolve((created.http.address() as AddressInfo).port),
-      );
+  it("0 なら上限を外し、数ならその回数まで通す", () => {
+    expect(optionsFromVars({ ACCOUNT_BURST: "0" }).accountLimit).toBeNull();
+    expect(optionsFromVars({ ACCOUNT_BURST: "2" }).accountLimit).toEqual({
+      ...DEFAULT_ACCOUNT_LIMIT,
+      burst: 2,
     });
-    const create = (): Promise<Response> =>
-      fetch(`http://127.0.0.1:${port}/api/account`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ displayName: "いくつも" }),
-      });
-    return {
-      create,
-      close: async () => {
-        delete process.env.ACCOUNT_BURST;
-        await created.close();
-      },
-    };
-  };
-
-  it("設定を置かなければ掛からない", async () => {
-    const { create, close } = await app(undefined);
-    try {
-      for (let i = 0; i < 12; i++) expect((await create()).status).toBe(200);
-    } finally {
-      await close();
-    }
+    expect(optionsFromVars({ SILENCE_LIMIT_MS: "500" }).silenceLimitMs).toBe(500);
   });
 
-  it("設定を置けば、そのぶんだけ通る", async () => {
-    const { create, close } = await app("2");
-    try {
-      expect((await create()).status).toBe(200);
-      expect((await create()).status).toBe(200);
-      expect((await create()).status).toBe(429);
-    } finally {
-      await close();
-    }
-  });
-
-  /** 読めない設定を「掛けた」と思い込むより、掛けずに警告を残すほうが気付ける。 */
-  it("読めない設定は掛けず、警告を残す", async () => {
+  it("読めない設定は既定に倒し、警告を残す", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { create, close } = await app("たくさん");
     try {
-      for (let i = 0; i < 5; i++) expect((await create()).status).toBe(200);
-      expect(warn).toHaveBeenCalled();
+      for (const value of ["たくさん", "-1", "1.5", "true"]) {
+        expect(optionsFromVars({ ACCOUNT_BURST: value }), value).toEqual({});
+        expect(optionsFromVars({ SILENCE_LIMIT_MS: value }), value).toEqual({});
+      }
+      // 0 秒で切ると、繋がった接続が次の定期処理で全部切れる。
+      expect(optionsFromVars({ SILENCE_LIMIT_MS: "0" })).toEqual({});
+      expect(warn).toHaveBeenCalledTimes(9);
     } finally {
-      await close();
       warn.mockRestore();
     }
   });

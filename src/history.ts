@@ -6,12 +6,10 @@
  *
  * 局面を保存しないので、盤面は `createGame` から指し直して作る。1 手ずつ辿るたびに初手から
  * やり直さないよう、局面のキャッシュをメモリにだけ置く（`ReplayCache`）。
- * **どの対戦がどこにあるかは索引に引く**（`src/match-index.ts`）。
- * 唯一の情報源は JSONL のままで、索引もキャッシュもそこから作り直せる。
+ * 記録を引くのは `src/archive.ts` で、ここは引いた記録から盤面を作る。
  */
 
 import { createHash } from "node:crypto";
-import { closeSync, openSync, readSync } from "node:fs";
 import {
   applyMove,
   createGame,
@@ -27,23 +25,7 @@ import {
   type EngineFingerprint,
 } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
-import { listIndexed, locate, seatIn, syncIndex, type Located } from "./match-index.js";
 import { seedCommitmentHolds } from "./replay.js";
-import type { MatchResult } from "./match.js";
-
-/** 一覧に出す 1 行。局面は含まない。 */
-export interface MatchSummary {
-  matchId: string;
-  startedAt: string;
-  endedAt: string;
-  /** 読み手が座っていた側。 */
-  seat: Player;
-  opponentName: string;
-  /** 読み手から見た結果。 */
-  outcome: "win" | "loss" | "draw";
-  matchResult: MatchResult;
-  moveCount: number;
-}
 
 export interface ReplayFrame {
   matchId: string;
@@ -117,74 +99,6 @@ export function replayability(
     };
   }
   return { kind: "ok", engineCommitDiffers: record.engine.commit !== fingerprint.commit };
-}
-
-/** その人が指した対戦を、新しい順に返す。 */
-export function listMatches(dir: string, playerId: string): MatchSummary[] {
-  syncIndex(dir);
-  const summaries: MatchSummary[] = [];
-  for (const indexed of listIndexed(dir, playerId)) {
-    const seat = seatIn(indexed, playerId);
-    if (seat === null) continue;
-    summaries.push({
-      matchId: indexed.matchId,
-      startedAt: indexed.startedAt,
-      endedAt: indexed.endedAt,
-      seat,
-      opponentName: indexed.displayNames[seat === 0 ? 1 : 0],
-      outcome: outcomeFor(indexed.matchResult, seat),
-      matchResult: indexed.matchResult,
-      moveCount: indexed.moveCount,
-    });
-  }
-  return summaries;
-}
-
-/**
- * その人が指した 1 局を引く。指していない対戦は見つからないものとして扱う。
- *
- * 索引が 1 行ぶんの位置と長さを持っているので、**読むのはその 1 行だけである。**
- * 走査していた頃は、リプレイを 1 手進めるたびに全部の日を読み直していた
- * （24,000 局で 1 局あたり 0.4 秒）。その間ずっと進行中の対戦の手も持ち時間のスイープも止まる。
- */
-export function findMatch(dir: string, playerId: string, matchId: string): MatchRecord | null {
-  if (matchId.trim() === "") return null;
-  syncIndex(dir);
-  const found = locate(dir, matchId);
-  if (found === null) return null;
-  const record = readLine(found);
-  /**
-   * **読んだ行が、引いたはずの対戦であることを確かめる。** 索引が指すのはバイトの位置なので、
-   * ファイルが同じ大きさのまま別の中身に差し替わると、位置は合っていても別の対戦の行が読める。
-   * 索引は消しても作り直せるという建て付けなので、ここは索引を信じきらない側に倒す。
-   */
-  if (record === null || record.matchId !== matchId) return null;
-  return seatOf(record, playerId) === null ? null : record;
-}
-
-/** 索引が指す 1 行を読む。読めなければ null。 */
-function readLine(found: Located): MatchRecord | null {
-  const buffer = Buffer.alloc(found.length);
-  let file: number;
-  try {
-    file = openSync(found.path, "r");
-  } catch {
-    // 索引に載せてから消えたファイル。「その対戦は無い」に倒す。
-    return null;
-  }
-  let read = 0;
-  try {
-    read = readSync(file, buffer, 0, found.length, found.offset);
-  } catch {
-    return null;
-  } finally {
-    closeSync(file);
-  }
-  try {
-    return JSON.parse(buffer.subarray(0, read).toString("utf8")) as MatchRecord;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -375,15 +289,4 @@ export function frameAt(
     engineCommitDiffers: record.engine.commit !== fingerprint.commit,
     divergedAt,
   };
-}
-
-function seatOf(record: MatchRecord, playerId: string): Player | null {
-  if (record.seats[0].playerId === playerId) return 0;
-  if (record.seats[1].playerId === playerId) return 1;
-  return null;
-}
-
-function outcomeFor(result: MatchResult, seat: Player): "win" | "loss" | "draw" {
-  if (result.kind === "normal" && result.winner === null) return "draw";
-  return result.winner === seat ? "win" : "loss";
 }

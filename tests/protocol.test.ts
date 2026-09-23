@@ -6,27 +6,21 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
-import { createApp, type App } from "../src/app.js";
+import { startWorker, type TestWorker } from "./worker.js";
 import { ensureCards, legalDecks } from "./helpers.js";
 
-let app: App;
+let worker: TestWorker;
 let base: string;
 
 beforeAll(async () => {
   ensureCards();
-  const dir = mkdtempSync(join(tmpdir(), "poke-online-protocol-"));
-  app = createApp({ logDir: dir, accountDir: dir, accountLimit: null });
-  await new Promise<void>((resolve) => app.http.listen(0, "127.0.0.1", () => resolve()));
-  base = `127.0.0.1:${(app.http.address() as AddressInfo).port}`;
+  worker = await startWorker({ ACCOUNT_BURST: "0" });
+  base = worker.host;
 });
 
 afterAll(async () => {
-  await app.close();
+  await worker.close();
 });
 
 async function postJson(path: string, body: unknown): Promise<Record<string, any>> {
@@ -121,9 +115,8 @@ describe("座席から届く 1 通", () => {
       opened.socket.send(JSON.stringify(payload));
       const answer = await opened.next();
       /**
-       * **`null` の 1 通で落ちていた。** 読む側が `t` を見に行くので、`ws` の `message` の
-       * 中で例外が上がる。受け手がいないので Node はプロセスごと落とし、そのとき指していた
-       * 全員の対戦が巻き添えになる。ここで断らなければ、この行の前に落ちている。
+       * **`null` の 1 通で落ちていた。** 読む側が `t` を見に行くので、受け手の中で例外が上がる。
+       * ここで断らなければ、`error` は返ってこない。
        */
       expect(answer.t, JSON.stringify(payload)).toBe("error");
     }
