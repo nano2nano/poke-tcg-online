@@ -193,6 +193,7 @@ $("check-button").addEventListener("click", () => {
 $("card-search").addEventListener("input", renderSearch);
 
 $("import-button").addEventListener("click", () => {
+  if (deckEntries.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
   importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
 });
 
@@ -360,6 +361,7 @@ async function verifyShuffle(seated, ended) {
 
 /** 組んであればそのデッキ、空ならサンプルデッキ。通らなければ null。 */
 async function deckToSubmit() {
+  if (hasPendingText()) return null;
   if (deckEntries.length === 0) {
     showDeckStatus(["サンプルデッキで対戦します。"], "ok");
     return getJson("/api/sample-deck");
@@ -368,6 +370,7 @@ async function deckToSubmit() {
 }
 
 async function checkDeck() {
+  if (hasPendingText()) return null;
   if (deckEntries.length === 0) {
     showDeckStatus(["デッキにカードがありません。"], "ng");
     return null;
@@ -377,6 +380,24 @@ async function checkDeck() {
   if (outcome.ok) return deck;
   showDeckStatus(outcome.errors ?? ["デッキが通りませんでした。"], "ng");
   return null;
+}
+
+/**
+ * テキスト欄に、読み込んでいないリストが残っているか。
+ *
+ * 残したまま押されたら止める。組んだデッキだけを見て進めると、貼ったリストとは別のデッキ
+ * （空ならサンプルデッキ）で対戦が始まる。黙って読み込むと、組んだデッキが黙って消える。
+ */
+function hasPendingText() {
+  if ($("decklist").value.trim() === "") return false;
+  $("decklist").closest("details").open = true;
+  showDeckStatus(
+    [
+      "テキスト欄に読み込んでいないリストがあります。「読み込む」を押すか、テキストを消してください。",
+    ],
+    "ng",
+  );
+  return true;
 }
 
 function deckCards() {
@@ -406,6 +427,7 @@ async function importText() {
     else same.count += count;
   }
   setDeck(merged);
+  $("decklist").value = "";
   if (outcome.ok) showDeckStatus([`デッキは ${deckCards().length} 枚で、規則を通ります。`], "ok");
   else showDeckStatus(outcome.errors, "ng");
 }
@@ -451,7 +473,7 @@ function describeCard(card) {
     parts.push(card.basicEnergy ? "基本エネルギー" : (KINDS[card.kind] ?? card.kind));
   }
   if (card.aceSpec) parts.push("ACE SPEC");
-  if (card.set !== undefined) parts.push(`${card.set} ${card.number ?? ""}`.trim());
+  parts.push([card.set, card.number].filter(Boolean).join(" "));
   return parts.filter(Boolean).join(" / ");
 }
 
@@ -479,13 +501,12 @@ function loadDeck() {
     return [];
   }
   if (!Array.isArray(saved)) return [];
-  return saved.filter(
-    (entry) =>
-      typeof entry?.defId === "string" &&
-      Number.isInteger(entry.count) &&
-      entry.count > 0 &&
-      entry.count <= DECK_SIZE,
-  );
+  return saved
+    .filter(
+      (entry) =>
+        typeof entry?.defId === "string" && Number.isInteger(entry.count) && entry.count > 0,
+    )
+    .map((entry) => ({ defId: entry.defId, count: Math.min(entry.count, DECK_SIZE) }));
 }
 
 function setDeck(entries) {
@@ -581,21 +602,21 @@ function renderSearch() {
   if (words.length === 0) return;
   if (Object.keys(cards).length === 0) {
     box.append(noteLine("カードの一覧をまだ読めていません。"));
-    loadCardsThen(() => {
-      renderDeck();
-      renderSearch();
-    });
+    // 取り直すのは、取りに行っていないときだけ。空の表が届いたときに描き直しが止まらなくなる。
+    if (loadingCards === null) {
+      loadCardsThen(() => {
+        renderDeck();
+        renderSearch();
+      });
+    }
     return;
   }
   const first = words[0];
-  const found = searchRows()
-    .filter(({ text }) => words.every((word) => text.includes(word)))
-    .sort(
-      (a, b) =>
-        Number(!a.name.startsWith(first)) - Number(!b.name.startsWith(first)) ||
-        a.card.name.localeCompare(b.card.name, "ja") ||
-        (a.defId < b.defId ? -1 : 1),
-    );
+  const matched = searchRows().filter(({ text }) => words.every((word) => text.includes(word)));
+  const found = [
+    ...matched.filter(({ name }) => name.startsWith(first)),
+    ...matched.filter(({ name }) => !name.startsWith(first)),
+  ];
   if (found.length === 0) box.append(noteLine("見つかりません。"));
   for (const { defId } of found.slice(0, SEARCH_LIMIT)) {
     const row = cardRow(defId);
@@ -618,9 +639,10 @@ function renderSearch() {
   }
 }
 
-/** 検索で比べる形を、表ごとに 1 度だけ作る。打つたび、押すたびに全部を作り直さない。 */
+/** 検索で比べる形と名前の順を、表ごとに 1 度だけ作る。打つたび、押すたびに全部を作り直さない。 */
 function searchRows() {
   if (searchIndex?.from === cards) return searchIndex.rows;
+  const collator = new Intl.Collator("ja");
   const rows = Object.entries(cards).map(([defId, card]) => ({
     defId,
     card,
@@ -631,6 +653,7 @@ function searchRows() {
       ),
     ),
   }));
+  rows.sort((a, b) => collator.compare(a.card.name, b.card.name) || (a.defId < b.defId ? -1 : 1));
   searchIndex = { from: cards, rows };
   return rows;
 }

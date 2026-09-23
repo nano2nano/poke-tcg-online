@@ -958,19 +958,21 @@ test("相手のシェアが使われていなければ、そう出す", async ({
  */
 async function sampleDeckEntries(
   page: Page,
-): Promise<{ defId: string; name: string; count: number }[]> {
+): Promise<{ defId: string; name: string; count: number; set?: string; number?: string }[]> {
   const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
   const cards = (await (await page.request.get("/api/cards")).json()) as Record<
     string,
-    { name: string }
+    { name: string; set?: string; number?: string }
   >;
   const counts = new Map<string, number>();
   for (const defId of deck.cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
-  return [...counts].map(([defId, count]) => ({
-    defId,
-    count,
-    name: (cards[defId] as { name: string }).name,
-  }));
+  return [...counts].map(([defId, count]) => ({ defId, count, ...cards[defId] })) as {
+    defId: string;
+    name: string;
+    count: number;
+    set?: string;
+    number?: string;
+  }[];
 }
 
 /** カタカナをひらがなへ。人がひらがなで打っても当たることを見るのに使う。 */
@@ -988,7 +990,9 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
 
   const entries = await sampleDeckEntries(a);
   for (const entry of entries) {
-    await a.fill("#card-search", toHiragana(entry.name));
+    // 収録も打つ。名前だけだと、版の多いカードは表示の上限に隠れることがある。
+    const print = [entry.set, entry.number].filter(Boolean).join(" ");
+    await a.fill("#card-search", `${toHiragana(entry.name)} ${print}`);
     const add = a.locator(`#card-results .card-row[data-def-id="${entry.defId}"] button.add`);
     for (let i = 0; i < entry.count; i++) await add.click();
     // サンプルデッキのポケモンは同じ名前を 4 枚ずつ入れてある。60 枚に届く前でも 5 枚目は押せない。
@@ -1105,4 +1109,29 @@ test("カードの一覧を 1 度取れなくても、検索すると取り直�
   await expect.poll(() => failed).toBe(true);
   await page.fill("#card-search", name);
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
+});
+
+test("テキスト欄に読み込んでいないリストがあれば、対戦に入らない", async ({ page }) => {
+  const joins: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/join")) joins.push(request.url());
+  });
+  await page.goto("/");
+  await page.click(".deck-text summary");
+  await page.fill("#decklist", "貼ったまま 4");
+  await page.click("#join-button");
+
+  // 進めると、貼ったリストではなくサンプルデッキで対戦が始まる。
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+  await expect(page.locator("#join-status")).not.toBeEmpty();
+  expect(joins).toEqual([]);
+});
+
+test("カードの一覧が空で届いても、検索で固まらない", async ({ page }) => {
+  await page.route("**/api/cards", (route) => route.fulfill({ json: {} }));
+  await page.goto("/");
+  await page.fill("#card-search", "あ");
+  await expect(page.locator("#card-results .note")).toBeVisible();
+  // 描き直しが止まらないと、ページはこれに答えない。
+  expect(await page.evaluate(() => 1)).toBe(1);
 });
