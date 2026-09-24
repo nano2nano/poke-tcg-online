@@ -2204,6 +2204,15 @@ function crowdedSync(handSize: number): object {
   const hand = Array.from({ length: handSize }, (_, index) =>
     card([basic, stage2, energy, tool, item][index % 5] as string),
   );
+  const active = pokemon(stage2, 120, ["poisoned"]);
+  const benched = bench();
+  const targets = [active, ...benched].map((each) => (each as { inPlayId: string }).inPlayId);
+  // 手札の同じカードはエンジンが 1 枚に畳むので、つける手はつける先の数だけ並ぶ。
+  const first = (defId: string): string =>
+    (hand as { instanceId: string; defId: string }[]).find((each) => each.defId === defId)!
+      .instanceId;
+  const attach = (type: string, defId: string): object[] =>
+    targets.map((target) => ({ type, player: 0, cardInstanceId: first(defId), target }));
   return {
     t: "sync",
     matchId: "混んだ局面",
@@ -2222,8 +2231,8 @@ function crowdedSync(handSize: number): object {
         ...common,
         hand,
         deckCount: 20,
-        active: pokemon(stage2, 120, ["poisoned"]),
-        bench: bench(),
+        active,
+        bench: benched,
       },
       opponent: {
         ...common,
@@ -2234,9 +2243,10 @@ function crowdedSync(handSize: number): object {
       },
     },
     legalMoves: [
-      ...hand.map(() => ({ type: "AttachEnergy" })),
-      { type: "Attack", attackIndex: 0 },
-      { type: "EndTurn" },
+      ...attach("AttachEnergy", energy),
+      ...attach("AttachTool", tool),
+      { type: "Attack", player: 0, attackIndex: 0 },
+      { type: "EndTurn", player: 0 },
     ],
     setup: null,
     mulligans: [],
@@ -2288,12 +2298,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize(viewport);
-    await page.goto("/");
-    await page.evaluate(() =>
-      localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "混んだ局面" })),
-    );
-    await page.routeWebSocket(/\/ws\?/, (ws) => ws.send(JSON.stringify(crowdedSync(20))));
-    await page.reload();
+    await openWith(page, crowdedSync(20));
     await expect(page.locator("#self .zone.bench .card").first()).toBeVisible();
 
     const board = await visibleBoard(page, "#table");
@@ -2385,4 +2390,107 @@ test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる",
     .first()
     .boundingBox()) as Box;
   expect(overlaps(name, backs)).toBe(false);
+});
+
+interface HeldCard {
+  instanceId: string;
+  defId: string;
+}
+interface CrowdedSync {
+  view: {
+    choices: object[];
+    self: { hand: HeldCard[]; active: { inPlayId: string; attached: HeldCard[] } };
+  };
+  legalMoves: object[];
+}
+
+/** 局面を 1 通の `sync` で直に送る画面を開く。返す配列に、画面が送った手が溜まる。 */
+async function openWith(page: Page, sync: object): Promise<{ move: object; offered?: number[] }[]> {
+  const sent: { move: object; offered?: number[] }[] = [];
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "混んだ局面" })),
+  );
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    ws.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "move") sent.push(message);
+    });
+    ws.send(JSON.stringify(sync));
+  });
+  await page.reload();
+  return sent;
+}
+
+test("つける先だけが違う手は見出しで見分けられ、ボタンに載せると盤面のつける先を囲む", async ({
+  page,
+}) => {
+  const sync = crowdedSync(20) as CrowdedSync;
+  const sent = await openWith(page, sync);
+  const buttons = page.locator("#moves button");
+  await expect(buttons).toHaveCount(sync.legalMoves.length);
+  // ベンチの 5 匹は同じカードなので、名前だけでは見出しが重なる。
+  const labels = await buttons.allTextContents();
+  expect(new Set(labels).size).toBe(labels.length);
+
+  const { target } = sync.legalMoves[3] as { target: string };
+  await buttons.nth(3).hover();
+  const aimed = page.locator("#table .pokemon.aimed");
+  await expect(aimed).toHaveCount(1);
+  await expect(aimed).toHaveAttribute("data-in-play-id", target);
+  await buttons.last().hover();
+  await expect(aimed).toHaveCount(0);
+
+  // エネルギーとどうぐの 1 つ目は、どちらもバトル場へつける。片方から外れても、選んだ方の囲みは残す。
+  const { target: active } = sync.legalMoves[0] as { target: string };
+  await buttons.first().focus();
+  await buttons.nth(6).hover();
+  await buttons.last().hover();
+  await expect(aimed).toHaveCount(1);
+  await expect(aimed).toHaveAttribute("data-in-play-id", active);
+
+  // 1 つも畳んでいなければ、見せた手の位置は添えない。
+  await buttons.last().click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]?.offered).toBeUndefined();
+});
+
+test("手札の同じカードを選ぶ答えは 1 つに畳んで見せた手の位置を添え、場の同じカードは畳まずに見分ける", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync;
+  const choose = (cards: HeldCard[]): void => {
+    const choiceId = "カードを選ぶ";
+    sync.view.choices = [
+      {
+        choiceId,
+        owner: 0,
+        kind: "card-effect",
+        optional: false,
+        prompt: { kind: "selectCard", candidates: cards.map((card) => card.instanceId) },
+      },
+    ];
+    sync.legalMoves = cards.map((card) => ({
+      type: "AnswerChoice",
+      player: 0,
+      choiceId,
+      answer: { kind: "card", card: card.instanceId },
+    }));
+  };
+  const buttons = page.locator("#moves button");
+
+  // 手札は 5 種類を 2 枚ずつ持つ。
+  choose(sync.view.self.hand);
+  const sent = await openWith(page, sync);
+  await expect(buttons).toHaveCount(5);
+  await buttons.last().click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]).toMatchObject({ move: sync.legalMoves[4], offered: [0, 1, 2, 3, 4] });
+
+  // バトル場のポケモンには同じエネルギーが 3 枚つく。場のカードは個体ごとの記録を持ちうる。
+  choose(sync.view.self.active.attached);
+  await openWith(page, sync);
+  await expect(buttons).toHaveCount(4);
+  const labels = await buttons.allTextContents();
+  expect(new Set(labels).size).toBe(4);
 });

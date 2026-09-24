@@ -10,6 +10,7 @@
 
 export {
   applyMove,
+  availableAttacks,
   createGame,
   getCardDef,
   isBasicPokemon,

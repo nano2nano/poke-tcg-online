@@ -430,6 +430,11 @@ button.secondary {
   flex-direction: column;
   align-items: center;
 }
+/* 指せる手のボタンにマウスを載せると、その手が向かうポケモンを囲む。 */
+.pokemon.aimed > .card {
+  outline: 3px solid #d69e2e;
+  outline-offset: 2px;
+}
 /* 倒したカードが隣へはみ出さないよう、縦と横の差のぶんを空けておく。 */
 .zone.active .pokemon {
   padding: 0 calc(var(--w) * 0.2);
