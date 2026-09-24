@@ -201,13 +201,15 @@ describe("対戦準備をまとめて出す 1 通", () => {
     let seats: Opened[] = [];
     let syncs: Record<string, any>[] = [];
     // どちらが引き直すかは seed で決まる。片方だけがまとめて出せない対戦を探す。
+    // 最初の手札で両者ともたねが無いと、両者の引き直しがすでに済んでいるので、それも外す。
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const tokens = await seatTokens(`ひきなおし-${attempt}`);
       seats = await Promise.all(tokens.map((token) => open(token)));
       for (const seat of seats) seat.socket.send(JSON.stringify({ t: "hello" }));
       syncs = await Promise.all(seats.map((seat) => seat.next()));
       const kinds = syncs.map((sync) => sync.setup?.kind ?? null);
-      if (kinds.includes("choose") && kinds.includes(null)) break;
+      const fresh = syncs.every((sync) => sync.mulligans.length === 0);
+      if (kinds.includes("choose") && kinds.includes(null) && fresh) break;
       for (const seat of seats) seat.socket.close();
     }
     const ahead = syncs.findIndex((sync) => sync.setup?.kind === "choose");
