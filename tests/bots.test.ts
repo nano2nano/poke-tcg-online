@@ -47,9 +47,20 @@ afterAll(async () => {
   await storage.close();
 });
 
-/** 世代 0 の重み。出力の層が 0 なので、どの局面でも全候補が同じ確率になる。 */
+const generated = new Map<string, Uint8Array>();
+
+/**
+ * 世代 0 の重み。出力の層が 0 なので、どの局面でも全候補が同じ確率になる。
+ * 初期値の直交化は 1 本ごとに重く、テストの持ち時間を越えうるので、同じ組は 1 度だけ作る。
+ */
 function generationZero(label = "test-bot", knowledge: "tracked" | "zero" = "zero"): Uint8Array {
-  return encodePpoWeights(newPpoWeightsFile(label, undefined, undefined, knowledge));
+  const key = `${label}:${knowledge}`;
+  let bytes = generated.get(key);
+  if (bytes === undefined) {
+    bytes = encodePpoWeights(newPpoWeightsFile(label, undefined, undefined, knowledge));
+    generated.set(key, bytes);
+  }
+  return bytes;
 }
 
 /** 候補が 2 つ以上ある局面まで、先頭の合法手で進める。 */
