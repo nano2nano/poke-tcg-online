@@ -16,6 +16,7 @@ import {
   PPO_MAGIC,
   sampleFrom,
   softmax,
+  type CardDefId,
   type DeckList,
   type Move,
   type PlayerView,
@@ -222,14 +223,15 @@ export class BotStore {
 
 /**
  * AI が握れるデッキ。学習と評価に使っているデッキそのもので、表はエンジンが持つ。
- * 画面にはエンジンの表のラベルをそのまま出す。カード名はエンジンのデータなので、ここには持たない。
+ * 画面に出す名前は、看板のカード（`ace`）の名前をカードの表から引く。カード名はエンジンのデータなので、ここには持たない。
  */
 export interface DeckPreset {
   label: string;
+  ace: CardDefId;
 }
 
 export function deckPresets(): DeckPreset[] {
-  return metaDecks.map(({ label }) => ({ label }));
+  return metaDecks.map(({ label, ace }) => ({ label, ace }));
 }
 
 export function presetDeck(label: string): DeckList | null {
