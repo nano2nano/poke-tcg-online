@@ -108,6 +108,8 @@ export interface SyncMessage {
   setup: SetupView | null;
   /** 対戦準備で引き直すときに見せた手札。両座席に同じものが入る（2.4 節）。 */
   mulligans: MulliganReveal[];
+  /** 先攻。決めた `game-started` は対戦を作るときのイベントで、`delta` には載らない。 */
+  firstPlayer: Player;
   clock: ClockView;
   /** シャッフルの公正さのコミット（6.4 節）。対戦中に seed そのものは渡さない。 */
   seedCommit: string;
@@ -151,6 +153,7 @@ export interface SpectatorSyncMessage {
   t: "spectator-sync";
   stateVersion: number;
   view: SpectatorView;
+  firstPlayer: Player;
   clock: ClockView;
   /**
    * 公開 id は渡さない。観戦トークンは座席の外へ配られる値なので、それを持つだけで

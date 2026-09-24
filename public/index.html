@@ -93,8 +93,11 @@
         <div id="moves" class="moves"></div>
         <button id="concede-button" class="danger">投了する</button>
 
-        <h2>できごと</h2>
-        <ol id="events" class="events"></ol>
+        <!-- 結果は画面の上の端に出す。ここは見逃したものを後から辿るときと、不具合を調べるとき用。 -->
+        <details id="event-log" class="event-log">
+          <summary>できごとの記録</summary>
+          <ol id="events" class="events"></ol>
+        </details>
 
         <p class="note">
           観戦のリンク（渡された人は、両者の手札の中身を除いた盤面を見られます）
@@ -126,8 +129,10 @@
       </div>
 
       <div class="table-panel">
-        <h2>できごと</h2>
-        <ol id="watch-events" class="events"></ol>
+        <details id="watch-event-log" class="event-log">
+          <summary>できごとの記録</summary>
+          <ol id="watch-events" class="events"></ol>
+        </details>
         <p class="note table-hint">
           カードにマウスを載せる（タッチ端末では長押しする）と大きく出ます。押すと、進化前やついているカードもまとめて出ます。
         </p>
@@ -176,6 +181,9 @@
         </form>
       </div>
     </dialog>
+
+    <!-- コイントスやダメージなどの結果。対戦と観戦の両方の画面で使う。 -->
+    <div id="results" class="results" role="status"></div>
 
     <!-- 同じ説明は各カードが読み上げ用に持っている。二重に読ませない。 -->
     <div id="card-preview" class="card-preview" aria-hidden="true" hidden></div>

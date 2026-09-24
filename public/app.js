@@ -84,6 +84,20 @@ const TRAINER_KINDS = {
   stadium: "スタジアム",
 };
 const HALVES = { left: "左", right: "右" };
+const WIN_REASONS = {
+  "prizes-taken": "サイドを取りきった",
+  "no-pokemon": "場のポケモンがいなくなった",
+  "deck-out": "山札を引けなかった",
+  "effect-declared": "カードの効果",
+  "turn-limit": "手数の上限",
+};
+/** 手を断った理由（仕様 2.2 節）。 */
+const REJECT_REASONS = {
+  "not-your-turn": "あなたの番ではありません",
+  "stale-version": "盤面が先に進んでいました",
+  "illegal-move": "いまは指せない手です",
+  "match-over": "対戦は終わっています",
+};
 const CONDITIONS = {
   poisoned: "どく",
   burned: "やけど",
@@ -1228,6 +1242,8 @@ function backToJoin(text) {
   seat = null;
   $("table").hidden = true;
   $("join").hidden = false;
+  // 対戦の結果をマッチングの画面に重ねたままにしない。
+  $("results").replaceChildren();
   setStatus(text);
 }
 
@@ -1261,18 +1277,23 @@ function storedSeat() {
 function receive(message) {
   switch (message.t) {
     case "sync":
-    case "delta":
+    case "delta": {
       if (message.t === "sync") $("watch-link").value = watchUrl(message.spectatorToken);
       stateVersion = message.stateVersion;
-      if (message.events !== undefined) for (const event of message.events) addEvent(event.kind);
+      const events = message.events ?? [];
+      const results = describeResults(events, [message.view, lastView], seatName);
+      logEvents(events, results);
       renderView(message.view);
+      if (message.t === "sync") showFirstPlayer(message.matchId, message.firstPlayer, message.view);
+      showResults(results, $("table"));
       renderClock(message.clock);
       setupDraft.sent = false;
       renderMoves(message.legalMoves, true, message.setup);
       // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
       renderMulligans(message.mulligans ?? lastMulligans);
       return;
-    case "ended":
+    }
+    case "ended": {
       $("table").dataset.ended = "";
       // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
       forgetSeat();
@@ -1282,18 +1303,25 @@ function receive(message) {
       renderMoves(null, false);
       // 次の対戦で見せた手札を、この対戦のものと比べて「増えた」と読まない。
       lastMulligans = [];
-      addEvent(describeEnd(message));
+      const text = describeEnd(message);
+      addEvent(text);
+      showResult({ text, tone: endTone(message.matchResult) });
       $("clock").textContent = "対戦は終わりました";
       void showShuffleCheck(seatedNow, message);
       // 決着でレーティングが動く。開いた時点の値のまま置かない。
       refreshAccount().catch(() => {});
       return;
-    case "reject":
+    }
+    case "reject": {
       // 古い画面から押したときは、サーバが正しい局面を送り直してくる。
-      addEvent(`手が通りませんでした（${message.reason}）`);
+      const text = `手が通りませんでした（${REJECT_REASONS[message.reason] ?? message.reason}）`;
+      addEvent(text);
+      showResult({ text, tone: "attention" });
       return;
+    }
     case "error":
       addEvent(message.message);
+      showResult({ text: message.message, tone: "attention" });
       return;
     default:
       return;
@@ -1306,7 +1334,13 @@ function describeEnd(message) {
   if (result.kind === "concede") return `投了により ${mine}`;
   if (result.kind === "timeout") return `時間切れにより ${mine}`;
   if (result.winner === null) return "引き分け";
-  return `${mine}（${message.outcome?.reason ?? ""}）`;
+  const reason = message.outcome?.reason;
+  return `${mine}（${WIN_REASONS[reason] ?? reason ?? ""}）`;
+}
+
+function endTone(result) {
+  if (result.winner === null) return "neutral";
+  return result.winner === seat ? "positive" : "negative";
 }
 
 function renderView(view) {
@@ -1657,7 +1691,7 @@ function pokemonSlot(pokemon) {
   const marks = el("div", "marks");
   if (pokemon.damage > 0) marks.append(el("span", "damage", String(pokemon.damage)));
   for (const condition of pokemon.conditions) {
-    marks.append(el("span", "condition", CONDITIONS[condition.kind] ?? condition.kind));
+    marks.append(el("span", "condition", conditionName(condition)));
   }
 
   const body = el("div", "pokemon", face, marks);
@@ -1941,16 +1975,8 @@ function describeAnswer(answer, view) {
 
 /** 場のインスタンス ID から、いちばん上のカードの名前を引く。 */
 function inPlayName(inPlayId, view) {
-  if (!view) return inPlayId;
-  for (const side of [view.self, view.opponent]) {
-    for (const pokemon of [side.active, ...side.bench]) {
-      if (pokemon === null || pokemon.concealed === true) continue;
-      if (pokemon.inPlayId !== inPlayId) continue;
-      const own = side === view.self ? "自分の" : "相手の";
-      return own + nameOf(pokemon.stack[pokemon.stack.length - 1].defId);
-    }
-  }
-  return inPlayId;
+  const who = (player) => (player === view?.viewer ? "自分" : "相手");
+  return pokemonName(inPlayId, [view], who) ?? inPlayId;
 }
 
 /**
@@ -1975,10 +2001,218 @@ function ownCardName(instanceId, view) {
   return card === undefined ? instanceId : nameOf(card.defId);
 }
 
+/** 人に見せる文が無いイベントは、不具合を調べるときのために名前で残す。 */
+function logEvents(events, results, list = "events") {
+  for (const [index, event] of events.entries()) {
+    const result = results[index];
+    if (result?.repeated) continue;
+    addEvent(result?.text ?? event.kind, list);
+  }
+}
+
 function addEvent(text, list = "events") {
   const item = document.createElement("li");
   item.textContent = text;
   $(list).prepend(item);
+}
+
+/** 観戦の画面は代わりに `watchName` で座席の名前を使う。 */
+function seatName(player) {
+  return player === seat ? "あなた" : "相手";
+}
+
+/** 先攻のコイントスを見せた対戦。`sync` は繋ぎ直すたびに届くので、この画面で 2 度は出さない。 */
+let firstPlayerShownFor = null;
+
+/** 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。 */
+function showFirstPlayer(key, firstPlayer, view) {
+  if (firstPlayerShownFor === key || view.phase !== "setup") return;
+  firstPlayerShownFor = key;
+  const watching = view.viewer === "spectator";
+  const text = watching
+    ? `コイントスの結果、${watchName(firstPlayer)}が先攻です`
+    : firstPlayer === seat
+      ? "コイントスの結果、あなたが先攻です"
+      : "コイントスの結果、相手が先攻です（あなたは後攻）";
+  const results = [watching || firstPlayer === seat];
+  showResult({ text, coins: { results, faces: ["先攻", "後攻"] } });
+}
+
+/**
+ * 届いたイベントを、人に見せる結果へ直す。見せないイベントの位置は null にする。
+ * 名前は適用後と適用前の盤面から引く。きぜつしたポケモンは適用後の盤面にもういない。
+ */
+function describeResults(events, views, who) {
+  let previous = null;
+  return events.map((event) => {
+    const result = describeResult(event, views, who);
+    const repeated = result?.key !== undefined && result.key === previous?.key;
+    previous = result;
+    return repeated ? { ...result, repeated: true } : result;
+  });
+}
+
+function describeResult(event, views, who) {
+  const pokemon = (inPlayId) => pokemonName(inPlayId, views, who) ?? "ポケモン";
+  switch (event.kind) {
+    case "coin-flipped": {
+      const heads = event.results.filter(Boolean).length;
+      const tails = event.results.length - heads;
+      const summary =
+        event.results.length === 1
+          ? event.results[0]
+            ? "オモテ"
+            : "ウラ"
+          : `オモテ ${heads} 回・ウラ ${tails} 回`;
+      const cause =
+        event.source !== null
+          ? `（${nameOf(event.source.defId)}）`
+          : event.window.kind === "pokemon-check"
+            ? "（ポケモンチェック）"
+            : "";
+      return {
+        text: `${who(event.player)}のコイン${cause}: ${summary}`,
+        coins: { results: event.results, faces: ["オモテ", "ウラ"] },
+      };
+    }
+    case "damage-dealt":
+      return {
+        text: `${pokemon(event.target)}に ${event.amount} ダメージ`,
+        hit: { target: event.target, text: `-${event.amount}`, tone: "negative" },
+      };
+    case "damage-counters-placed": {
+      // 載せた数は HP で頭打ちになる。浮かべるのは実際に増えたダメージのほうにする。
+      const amount = event.afterDamage - event.beforeDamage;
+      return {
+        text: `${pokemon(event.target)}にダメカンを ${event.count} 個`,
+        ...(amount > 0
+          ? { hit: { target: event.target, text: `-${amount}`, tone: "negative" } }
+          : {}),
+      };
+    }
+    case "damage-healed":
+      return {
+        text: `${pokemon(event.target)}の HP を ${event.amount} 回復`,
+        tone: "positive",
+        hit: { target: event.target, text: `+${event.amount}`, tone: "positive" },
+      };
+    case "condition-applied":
+      return { text: `${pokemon(event.target)}が${conditionName(event.condition)}になった` };
+    case "condition-removed":
+      return { text: `${pokemon(event.target)}の${conditionName(event.condition)}が治った` };
+    case "pokemon-knocked-out":
+      return { text: `${pokemon(event.target)}がきぜつした`, tone: "attention" };
+    // まとめて取ると 1 枚ごとのイベントが続けて並ぶ。選んで取るときは 1 枚ずつ別の局面で届くので、
+    // 枚数は `count`（今回取る総数）ではなく残りで伝え、続いたものは 1 つに畳む。
+    case "prize-taken":
+    case "prize-taken-hidden": {
+      const side = sidesOf(views[0]).find(([player]) => player === event.player)?.[1];
+      const left = side === undefined ? "" : `（残り ${side.prizeCount} 枚）`;
+      return { text: `${who(event.player)}がサイドを取った${left}`, key: `prize-${event.player}` };
+    }
+    case "mulligan-taken":
+      return { text: `${who(event.player)}の手札にたねポケモンが無く、引き直した` };
+    case "turn-started":
+      return { text: `${who(event.player)}の番`, tone: "turn" };
+    default:
+      return null;
+  }
+}
+
+function conditionName(condition) {
+  return CONDITIONS[condition.kind] ?? condition.kind;
+}
+
+/** 場のポケモンを「持ち主の名前」で呼ぶ。見つからなければ null。 */
+function pokemonName(inPlayId, views, who) {
+  for (const view of views) {
+    for (const [player, side] of sidesOf(view)) {
+      for (const pokemon of [side.active, ...side.bench]) {
+        if (pokemon == null || pokemon.concealed === true || pokemon.inPlayId !== inPlayId)
+          continue;
+        return `${who(player)}の${nameOf(pokemon.stack[pokemon.stack.length - 1].defId)}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** 座席の番号と、その座席の場の組。座席と観戦で盤面の形が違う。 */
+function sidesOf(view) {
+  if (!view) return [];
+  if (view.viewer === "spectator") return view.players.map((side, player) => [player, side]);
+  return [
+    [view.viewer, view.self],
+    [1 - view.viewer, view.opponent],
+  ];
+}
+
+/** 盤面を描き直したあとに呼ぶ。数字を浮かべる先のポケモンは、描き直しで作り直されている。 */
+function showResults(results, board) {
+  for (const result of results) {
+    if (result === null || result.repeated) continue;
+    showResult(result);
+    if (result.hit !== undefined) floatHit(board, result.hit);
+  }
+}
+
+/**
+ * 同時に出しておく結果の数。溢れたら古いものから消すが、コインは残す。1 つの手でもコイン、
+ * ダメージ、特殊状態、きぜつ、番の交代と重なりうるので、古い順だとコインから先に消える。
+ */
+const RESULT_LIMIT = 5;
+const RESULT_MS = 4_000;
+/** コインは回り終えてから読むので、そのぶん長く残す。 */
+const COIN_RESULT_MS = 6_000;
+
+function showResult({ text, tone = "neutral", coins }) {
+  const item = el("div", "result");
+  item.dataset.tone = tone;
+  if (coins !== undefined) item.append(coinRow(coins));
+  item.append(el("p", "result-text", text));
+  const box = $("results");
+  box.append(item);
+  while (box.childElementCount > RESULT_LIMIT) {
+    const older = [...box.children].filter((child) => child !== item);
+    (older.find((child) => child.querySelector(".coin") === null) ?? older[0]).remove();
+  }
+  setTimeout(() => item.remove(), coins === undefined ? RESULT_MS : COIN_RESULT_MS);
+}
+
+/** 読み上げには結果の文が同じことを言うので、コインの絵は読ませない。 */
+function coinRow({ results, faces }) {
+  const row = el("div", "coins");
+  row.setAttribute("aria-hidden", "true");
+  for (const [index, heads] of results.entries()) {
+    const coin = el(
+      "span",
+      "coin",
+      el(
+        "span",
+        "coin-inner",
+        el("span", "coin-face heads", faces[0]),
+        el("span", "coin-face tails", faces[1]),
+      ),
+    );
+    coin.dataset.face = heads ? "heads" : "tails";
+    coin.style.setProperty("--order", String(index));
+    row.append(coin);
+  }
+  return row;
+}
+
+/** 盤面の外に置く。盤面は局面が届くたびに作り直すので、中に置くと次の局面で消える。 */
+function floatHit(board, { target, text, tone }) {
+  const pokemon = board.querySelector(`.pokemon[data-in-play-id="${CSS.escape(target)}"]`);
+  if (pokemon === null) return;
+  const rect = pokemon.getBoundingClientRect();
+  const hit = el("span", "hit", text);
+  hit.dataset.tone = tone;
+  hit.setAttribute("aria-hidden", "true");
+  hit.style.left = `${rect.left + rect.width / 2}px`;
+  hit.style.top = `${rect.top + rect.height / 3}px`;
+  document.body.append(hit);
+  setTimeout(() => hit.remove(), RESULT_MS);
 }
 
 function watchUrl(spectatorToken) {
@@ -2022,21 +2256,29 @@ function openWatch(token) {
           $("watch-status").textContent = "";
           watchSeats = message.seats;
           renderWatch(message.view);
+          showFirstPlayer(token, message.firstPlayer, message.view);
           renderWatchClock(message.clock);
           return;
-        case "spectator-delta":
-          for (const played of message.events) addEvent(played.kind, "watch-events");
+        case "spectator-delta": {
+          const results = describeResults(message.events, [message.view, lastWatchView], watchName);
+          logEvents(message.events, results, "watch-events");
           renderWatch(message.view);
+          showResults(results, $("watch"));
           renderWatchClock(message.clock);
           return;
+        }
         case "spectator-ended":
           ended = true;
           renderWatch(message.view);
           $("watch-clock").textContent = describeWatchEnd(message.matchResult);
+          showResult({ text: describeWatchEnd(message.matchResult) });
           return;
         case "error":
           refusal = message.message;
-          if (synced) addEvent(message.message, "watch-events");
+          if (synced) {
+            addEvent(message.message, "watch-events");
+            showResult({ text: message.message, tone: "attention" });
+          }
           return;
         default:
           return;
