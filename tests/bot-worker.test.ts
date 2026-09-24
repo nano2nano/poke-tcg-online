@@ -46,6 +46,17 @@ describe("AI と対戦する", () => {
     expect(body.decks.length).toBeGreaterThan(0);
   });
 
+  it("デッキの名前は、看板のカードの名前をカードの表から引ける", async () => {
+    const { decks } = (await (await fetch(`http://${worker.host}/api/bots`)).json()) as JsonBody;
+    const cards = (await (await fetch(`http://${worker.host}/api/cards`)).json()) as JsonBody;
+    for (const deck of decks as JsonBody[]) {
+      expect(cards[deck.ace]?.name, deck.label).toEqual(expect.any(String));
+    }
+    // 名前が重なると、選択肢のどれがどのデッキか画面で見分けられない。
+    const names = (decks as JsonBody[]).map((deck) => cards[deck.ace].name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
   it("置いていない AI は断る", async () => {
     const { secret } = (await postJson("/api/account", { displayName: "ひと" })).body;
     const outcome = await postJson("/api/join-bot", {

@@ -256,6 +256,7 @@ function redraw() {
   const restore = focusedRowButton();
   renderDeck();
   renderSearch();
+  renderBotDecks();
   restore();
   if (lastView !== null) {
     renderView(lastView);
@@ -449,13 +450,31 @@ async function loadBots() {
     element.textContent = text;
     return element;
   };
+  botDecks = decks;
   $("bot").replaceChildren(...bots.map((bot) => option(bot.name, bot.name)));
-  $("bot-deck").replaceChildren(...decks.map((deck) => option(deck.label, deck.label)));
-  $("own-deck").append(...decks.map((deck) => option(deck.label, deck.label)));
+  $("bot-deck").replaceChildren(...decks.map((deck) => option(deck.label, deckName(deck))));
+  $("own-deck").append(...decks.map((deck) => option(deck.label, deckName(deck))));
   defaultOwnDeck();
   syncJoinButtons();
   $("bot-status").textContent =
     bots.length === 0 ? "サーバに AI が置かれていません（README の「AI と対戦する」）。" : "";
+}
+
+/**
+ * AI が握れるデッキの表。名前は看板のカード（`ace`）の名前で出す。
+ * 名前の表が届く前はラベルで出し、届いたら `redraw` から出し直す。
+ */
+let botDecks = [];
+
+const deckName = (deck) => cards[deck.ace]?.name ?? deck.label;
+
+function renderBotDecks() {
+  for (const select of [$("bot-deck"), $("own-deck")]) {
+    for (const option of select.options) {
+      const deck = botDecks.find((each) => each.label === option.value);
+      if (deck !== undefined) option.textContent = deckName(deck);
+    }
+  }
 }
 
 /** 組みかけのデッキが無ければ表の先頭のデッキを、あれば組んだデッキを選ぶ。人が選んだあとは触らない。 */
