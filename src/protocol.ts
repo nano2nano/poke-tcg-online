@@ -14,7 +14,7 @@ import type {
   PlayerView,
   SpectatorView,
 } from "./engine.js";
-import type { MatchResult, SeatInfo, SetupView } from "./match.js";
+import type { MatchResult, MulliganReveal, SeatInfo, SetupView } from "./match.js";
 import type { SeedShares } from "./fingerprint.js";
 
 /**
@@ -106,6 +106,8 @@ export interface SyncMessage {
   legalMoves: Move[] | null;
   /** 対戦準備でまとめて出せる候補か、出した答え（2.4 節）。準備の外では null。 */
   setup: SetupView | null;
+  /** 対戦準備で引き直すときに見せた手札。両座席に同じものが入る（2.4 節）。 */
+  mulligans: MulliganReveal[];
   clock: ClockView;
   /** シャッフルの公正さのコミット（6.4 節）。対戦中に seed そのものは渡さない。 */
   seedCommit: string;
@@ -121,6 +123,7 @@ export interface DeltaMessage {
   view: PlayerView;
   legalMoves: Move[] | null;
   setup: SetupView | null;
+  mulligans: MulliganReveal[];
   clock: ClockView;
 }
 

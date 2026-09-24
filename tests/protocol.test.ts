@@ -166,7 +166,7 @@ describe("対戦準備をまとめて出す 1 通", () => {
   it("手番でない座席からも受け取り、両座席がそろったところで局面が動く", async () => {
     let seats: Opened[] = [];
     let syncs: Record<string, any>[] = [];
-    // マリガンの追加ドローがあると、まとめて出せるのはそれを答えてからになる。無い対戦を使う。
+    // 片方だけが引き直す対戦では、引き直す側はまだまとめて出せない。両座席が出せる対戦を使う。
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const tokens = await seatTokens(`まとめて-${attempt}`);
       seats = await Promise.all(tokens.map((token) => open(token)));
@@ -176,6 +176,9 @@ describe("対戦準備をまとめて出す 1 通", () => {
       for (const seat of seats) seat.socket.close();
     }
     expect(syncs.map((sync) => sync.setup?.kind)).toEqual(["choose", "choose"]);
+    // 引き直しで見せた手札は、局面と一緒に両座席へ届く。
+    expect(syncs[0]!.mulligans).toEqual(syncs[1]!.mulligans);
+    expect(Array.isArray(syncs[0]!.mulligans)).toBe(true);
 
     const mover = syncs.findIndex((sync) => sync.legalMoves !== null);
     const waiter = 1 - mover;

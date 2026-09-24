@@ -29,7 +29,7 @@ import {
 } from "./helpers.js";
 
 /**
- * 座席へ実際に出る値をそのまま組み立てる。`hub.ts` の `syncFor` と同じ 4 つで、
+ * 座席へ実際に出る値をそのまま組み立てる。`hub.ts` の `syncFor` と同じ組み合わせで、
  * 片方だけ直しても気づけるよう、**中身ではなく組み合わせ**を検査の対象にする。
  */
 function seatPayload(match: Match, seat: Player): string {
@@ -37,6 +37,7 @@ function seatPayload(match: Match, seat: Player): string {
     view: viewFor(match, seat),
     legalMoves: legalMovesFor(match, seat),
     setup: setupViewFor(match, seat),
+    mulligans: match.mulligans,
     clock: clockView(match, 0),
   });
 }

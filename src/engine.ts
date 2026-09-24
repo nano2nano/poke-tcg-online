@@ -37,6 +37,7 @@ export type { CardDef } from "../engine/src/cards.js";
 export type {
   ApplyResult,
   CardDefId,
+  CardInstance,
   DeckList,
   DomainEvent,
   GameOutcome,

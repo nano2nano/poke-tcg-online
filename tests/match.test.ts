@@ -174,9 +174,10 @@ describe("決着", () => {
  * エンジンが順を変えたら、案内も書き直す。
  */
 describe("対戦準備", () => {
-  it("先攻、後攻の順にバトル場を選び終えてから、ベンチを選ぶ", () => {
+  it("両者にたねがあれば、先攻、後攻の順にバトル場を選び終えてから、ベンチを選ぶ", () => {
     ensureCards();
-    for (const nonce of ["setup-order-1", "setup-order-2", "setup-order-3"]) {
+    // 1 と 4 はどちらかが引き直す対戦なので使わない（1 は下のテストで使う）。
+    for (const nonce of ["setup-order-2", "setup-order-3", "setup-order-5"]) {
       const match = newMatch(nonce);
       const placements: string[] = [];
       while (match.state.phase === "setup") {
@@ -193,6 +194,40 @@ describe("対戦準備", () => {
         "setup-place-active 後攻",
       ]);
       expect(placements.slice(2).every((each) => each.startsWith("setup-place-bench"))).toBe(true);
+      expect(match.mulligans).toEqual([]);
     }
+  });
+
+  /**
+   * 公式ルールガイド「G 対戦準備」5.b〜5.d と手順 7。たねのある側は、相手が引き直す前にサイドまで進み、
+   * 相手の引き直しが済んでから追加で引く。エンジンがこの順を変えたら、まとめて出す答えの扱いを見直す。
+   */
+  it("片方だけにたねが無ければ、ある側がベンチまで出してから相手が引き直し、追加ドローは最後に来る", () => {
+    ensureCards();
+    const match = newMatch("setup-order-1");
+    const steps: string[] = [];
+    let revealsBeforeBonus = -1;
+    while (match.state.phase === "setup") {
+      const top = match.state.choices.at(-1);
+      if (top !== undefined) {
+        steps.push(`${top.kind} ${top.owner === match.state.turnPlayer ? "先攻" : "後攻"}`);
+        if (top.kind === "setup-bonus-draw") revealsBeforeBonus = match.mulligans.length;
+      }
+      const mover = toMove(match) as Player;
+      expect(submitMove(match, mover, match.version, firstLegal(match), 0).ok).toBe(true);
+    }
+    expect(steps).toEqual([
+      "setup-place-active 先攻",
+      "setup-place-bench 先攻",
+      "setup-place-active 後攻",
+      "setup-place-bench 後攻",
+      "setup-bonus-draw 先攻",
+    ]);
+    // 引き直した手札は両座席に見せる形で残り、追加ドローより前にそろっている。
+    expect(match.mulligans.map((reveal) => reveal.player)).toEqual([
+      (1 - match.state.turnPlayer) as Player,
+    ]);
+    expect(match.mulligans[0]?.cards).toHaveLength(7);
+    expect(revealsBeforeBonus).toBe(1);
   });
 });

@@ -24,6 +24,7 @@ import {
 } from "./engine.js";
 import type {
   CardDefId,
+  CardInstance,
   DeckList,
   DomainEvent,
   GameOutcome,
@@ -111,6 +112,11 @@ export interface Match {
    * 手番の起点（`turnStartedAtMs`）とは別に持つ。
    */
   setupSinceMs: [number, number];
+  /**
+   * 対戦準備で引き直すときに見せた手札（2.4 節）。公開の情報だが、引き直しは座席の手の外
+   * （対戦の開始や相手の手の途中）で起きるので、イベントだけでは届かない座席がある。
+   */
+  mulligans: MulliganReveal[];
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
   version: number;
   clocks: [Clock, Clock];
@@ -151,6 +157,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     state: created.state,
     setupPlans: [null, null],
     setupSinceMs: [options.nowMs, options.nowMs],
+    mulligans: revealedHands(created.events),
     version: 0,
     clocks: [createClock(options.bankMs), createClock(options.bankMs)],
     moves: [],
@@ -231,6 +238,11 @@ function record(
   match.clocks[seat] = consume(match.clocks[seat], timing.chargedMs);
   match.turnStartedAtMs = timing.nowMs;
   match.setupSinceMs[seat] = timing.nowMs;
+  match.mulligans.push(...revealedHands(applied.events));
+  // 引き直した座席は、新しい手札が来てから考え始める。
+  for (const event of applied.events) {
+    if (event.kind === "mulligan-taken") match.setupSinceMs[event.player] = timing.nowMs;
+  }
 
   if (match.state.phase === "gameover") {
     finish(match, { kind: "normal", winner: match.state.outcome?.winner ?? null }, timing.nowMs);
@@ -256,6 +268,12 @@ export interface SetupPlan {
   /** 答えを出すのに掛かった時間。記録には最初に流す 1 手へ載せる。 */
   elapsedMs: number;
   started: boolean;
+}
+
+/** 引き直すときに相手へ見せた手札（3.2 節の `mulligans`）。 */
+export interface MulliganReveal {
+  player: Player;
+  cards: CardDefId[];
 }
 
 /** 座席の画面に出す準備の状態（3.2 節の `setup`）。 */
@@ -326,7 +344,18 @@ function planStart(match: Match, seat: Player): GameState | null {
   const ahead = lookahead(match.state, seat);
   const top = ahead?.choices.at(-1);
   if (ahead === null || top?.kind !== "setup-place-active" || top.optional) return null;
+  if (!sameHand(match.state.players[seat].hand, ahead.players[seat].hand)) return null;
   return ahead;
+}
+
+/**
+ * 先読みの途中で手札が変わったか。変わるのはその座席が引き直すときで、引き直しはまだ起きていない。
+ * 先読みの手札で選ばせると、見せる前の手札を渡すことになる。
+ */
+function sameHand(now: readonly CardInstance[], ahead: readonly CardInstance[]): boolean {
+  if (now.length !== ahead.length) return false;
+  const ids = new Set(now.map((card) => card.instanceId));
+  return ahead.every((card) => ids.has(card.instanceId));
 }
 
 export function setupViewFor(match: Match, seat: Player): SetupView | null {
@@ -526,6 +555,15 @@ function normalizeOffered(offered: number[] | null, candidates: number): number[
     .filter((index) => Number.isInteger(index) && index >= 0 && index < candidates)
     .sort((a, b) => a - b);
   return kept.length === candidates ? null : kept;
+}
+
+/** 引き直しで見せた手札。見せる理由は引き直しのほかに無いので、準備の中の手札の公開で拾う。 */
+function revealedHands(events: DomainEvent[]): MulliganReveal[] {
+  return events.flatMap((event) =>
+    event.kind === "cards-revealed" && event.zone.kind === "hand" && event.window.kind === "setup"
+      ? [{ player: event.player, cards: event.cards.map((card) => card.defId) }]
+      : [],
+  );
 }
 
 /** `game-started` が運ぶ先攻を読む。イベントの語彙が唯一の出どころである。 */
