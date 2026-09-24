@@ -229,6 +229,7 @@ describe("シェアの開示", () => {
       shareCommits: [commitShare(SHARE_A), null],
       shares: [null, null],
       deadlineMs: SHARE_REVEAL_DEADLINE_MS,
+      bot: null,
     };
     arena.registry.addPending(pending);
     const socket = recorder();

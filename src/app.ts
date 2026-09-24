@@ -13,6 +13,7 @@ import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { resolveOfficialDeck } from "./official-deck.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub, type SeatSocket } from "./hub.js";
+import { deckPresets, presetDeck, type BotLoad, type BotStore } from "./bots.js";
 import { Lobby } from "./lobby.js";
 import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
 import type { MatchArchive } from "./archive.js";
@@ -21,6 +22,7 @@ import { clientMessageSchema } from "./protocol.js";
 import {
   createAccountSchema,
   deckListSchema,
+  joinBotRequestSchema,
   joinRequestSchema,
   officialDeckSchema,
   replayRequestSchema,
@@ -70,6 +72,10 @@ const MALFORMED = "送られた中身の形が違う";
 export interface AppOptions {
   accounts: AccountStore;
   archive: MatchArchive;
+  /** AI の重みの置き場（7.3 節）。無ければ AI とは対戦できない。 */
+  bots?: BotStore | null;
+  /** AI が手を指すまでの間。テストが待たずに済むように置く。 */
+  botDelayMs?: number;
   now?: () => number;
   /** アカウントを作れる速さ。`null` なら掛けない。 */
   accountLimit?: RateLimitOptions | null;
@@ -108,6 +114,8 @@ export interface AppVars {
   ACCOUNT_BURST?: string;
   /** 黙ったままの接続を切るまでのミリ秒。テストが待たずに済むように置く。 */
   SILENCE_LIMIT_MS?: string;
+  /** AI が手を指すまでのミリ秒。テストが待たずに済むように置く。 */
+  BOT_DELAY_MS?: string;
 }
 
 /**
@@ -116,14 +124,16 @@ export interface AppVars {
  */
 export function optionsFromVars(
   vars: AppVars,
-): Pick<AppOptions, "accountLimit" | "silenceLimitMs"> {
-  const options: Pick<AppOptions, "accountLimit" | "silenceLimitMs"> = {};
+): Pick<AppOptions, "accountLimit" | "silenceLimitMs" | "botDelayMs"> {
+  const options: Pick<AppOptions, "accountLimit" | "silenceLimitMs" | "botDelayMs"> = {};
   const burst = readCount("ACCOUNT_BURST", vars.ACCOUNT_BURST);
   if (burst !== null)
     options.accountLimit = burst === 0 ? null : { ...DEFAULT_ACCOUNT_LIMIT, burst };
   const silence = readCount("SILENCE_LIMIT_MS", vars.SILENCE_LIMIT_MS);
   if (silence !== null && silence > 0) options.silenceLimitMs = silence;
   else if (silence === 0) console.warn("SILENCE_LIMIT_MS は 1 以上にする。既定を使う。");
+  const botDelay = readCount("BOT_DELAY_MS", vars.BOT_DELAY_MS);
+  if (botDelay !== null) options.botDelayMs = botDelay;
   return options;
 }
 
@@ -150,7 +160,9 @@ export function createApp(options: AppOptions): App {
     registry,
     now,
     onFinish: (record) => void archive.settle(record),
+    ...(options.botDelayMs === undefined ? {} : { botDelayMs: options.botDelayMs }),
   });
+  const bots = options.bots ?? null;
   /** 接続 → 最後に何か届いた時刻。 */
   const lastHeard = new Map<AppSocket, number>();
   const connections = new Map<AppSocket, Connection>();
@@ -166,6 +178,8 @@ export function createApp(options: AppOptions): App {
           registry,
           accounts,
           archive,
+          bots,
+          hub,
           now,
           accountLimit,
         });
@@ -256,12 +270,14 @@ interface RouteContext {
   registry: MatchRegistry;
   accounts: AccountStore;
   archive: MatchArchive;
+  bots: BotStore | null;
+  hub: MatchHub;
   now: () => number;
   accountLimit: RateLimit | null;
 }
 
 async function route(request: Request, origin: string, context: RouteContext): Promise<Response> {
-  const { lobby, registry, accounts, archive, now, accountLimit } = context;
+  const { lobby, registry, accounts, archive, bots, hub, now, accountLimit } = context;
   const url = new URL(request.url);
 
   /**
@@ -392,6 +408,43 @@ async function route(request: Request, origin: string, context: RouteContext): P
     await archive.settled();
     const outcome = lobby.join(body, await accounts.find(body.secret));
     return json(outcome.ok ? 200 : 400, outcome);
+  }
+  // AI の一覧と、AI が握れるデッキ（7.3 節）。
+  if (request.method === "GET" && url.pathname === "/api/bots") {
+    return json(200, { bots: bots === null ? [] : await bots.list(), decks: deckPresets() });
+  }
+  if (request.method === "POST" && url.pathname === "/api/join-bot") {
+    const body = parseBody(joinBotRequestSchema, await readBody(request));
+    await archive.settled();
+    const deck = body.deck ?? presetDeck(body.deckPreset ?? "");
+    const botDeck = presetDeck(body.botDeck);
+    if (deck === null || botDeck === null) {
+      return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
+    }
+    const joining = {
+      secret: body.secret,
+      deck,
+      ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+      ...(body.seedShareCommit === undefined ? {} : { seedShareCommit: body.seedShareCommit }),
+    };
+    const known = await accounts.find(body.secret);
+    // 重みを読むのは、断る理由が無いと分かってからにする。読み込みのあいだ、ほかの対戦も止まる。
+    const refusal = lobby.refuseBot(joining, known, botDeck);
+    if (refusal !== null || known === null) return json(400, refusal);
+    if (bots === null) return json(400, { ok: false, errors: ["AI を置く場所が無い"] });
+    // 読み込みを待つあいだ、同じ人の次の要求は `refuseBot` が断る。
+    lobby.holdBotJoin(known.playerId);
+    let loaded: BotLoad;
+    try {
+      loaded = await bots.load(body.bot);
+    } finally {
+      lobby.releaseBotJoin(known.playerId);
+    }
+    if (!loaded.ok) return json(400, { ok: false, errors: [loaded.error] });
+    const outcome = lobby.joinBot(joining, known, loaded.bot, botDeck);
+    if (!outcome.ok || !("seat" in outcome)) return json(400, outcome);
+    hub.wakeBot(outcome.seat.seatToken);
+    return json(200, outcome);
   }
   if (request.method === "GET" && url.pathname === "/api/claim") {
     return json(200, lobby.claim(url.searchParams.get("ticket") ?? ""));
