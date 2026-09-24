@@ -714,34 +714,35 @@ function everyAnswerStacks(
     });
 }
 
+/** `disguised` が山札のほかに混ぜるもの。 */
+interface DisguiseScope {
+  /** 自分のウラのサイドを山札と一緒に混ぜる。座席はどちらに何があるかを見ていない。 */
+  ownPrizes?: boolean;
+  /** 相手の手札・山札・ウラのサイドをまとめて混ぜる。 */
+  rival?: boolean;
+}
+
 /**
  * 選ぶ座席に見えないカードの並びと、乱数の種を差し替えた局面。`kept` はその位置に残す。
- * 既定では自分の山札だけを混ぜる。`wide` なら、自分の山札とウラのサイドを（どちらに何があるかが
- * 見えないので）まとめて混ぜ、相手の手札・山札・ウラのサイドもまとめて混ぜる。ゾーンごとの枚数は変えない。
+ * 既定では自分の山札だけを混ぜる。ゾーンごとの枚数は変えない。
  */
-function disguised(
+export function disguised(
   state: GameState,
   seat: Player,
   kept: readonly CardInstance[],
-  wide = false,
+  scope: DisguiseScope = {},
 ): GameState {
   let rng = createRng(randomBytes(16).toString("hex"));
   const players: GameState["players"] = [state.players[0], state.players[1]];
   for (const player of [0, 1] as const) {
     const side = state.players[player];
-    const zones =
-      player === seat
-        ? { hand: side.hand, deck: [...side.deck], prizes: wide ? [...side.prizes] : side.prizes }
-        : wide
-          ? { hand: [...side.hand], deck: [...side.deck], prizes: [...side.prizes] }
-          : null;
-    if (zones === null) continue;
+    const own = player === seat;
+    if (!own && scope.rival !== true) continue;
+    const zones = { hand: [...side.hand], deck: [...side.deck], prizes: [...side.prizes] };
+    const pooled = own
+      ? [zones.deck, ...(scope.ownPrizes === true ? [zones.prizes] : [])]
+      : [zones.deck, zones.prizes, zones.hand];
     const fixed = new Set([...kept.map((card) => card.instanceId), ...side.revealedPrizes]);
-    const pooled = [
-      zones.deck,
-      ...(wide ? [zones.prizes] : []),
-      ...(wide && player !== seat ? [zones.hand] : []),
-    ];
     const slots = pooled.flatMap((zone) =>
       zone.flatMap((card, index) => (fixed.has(card.instanceId) ? [] : [{ zone, index }])),
     );
@@ -868,12 +869,19 @@ export function answerDestinationsOf(
   if (choice?.source == null) return null;
   const shown = reveals !== null && continuesEffect(reveals, choice) ? reveals.cards : [];
   const known = knownTo(state, choice.owner, shown);
+  // 見せたカードは座席が位置も知っているので動かさない。あとの選択までたどり、その先で山札の外の
+  // 見えないカードに触れうるので、相手のカードも混ぜる。自分の山札から選んでいるあいだは座席が
+  // 山札を見ているので、サイドと混ぜると、選べないカードを選べることにしてしまう。
+  const prompt = choice.prompt;
+  const looking =
+    prompt.kind === "selectFromHiddenZone" &&
+    prompt.zone.kind === "deck" &&
+    prompt.zone.player === choice.owner;
+  const scope: DisguiseScope = { ownPrizes: !looking, rival: true };
   const legal = legalMoves(state);
   let found: (AnswerDestination | null)[] = legal.map(() => null);
   for (let tried = 0; tried < DISGUISE_TRIES; tried++) {
-    // 見せたカードは座席が位置も知っているので動かさない。あとの選択までたどり、その先で山札の外の
-    // 見えないカードに触れうるので、差し替えは広く取る。
-    const current = disguised(state, choice.owner, shown, true);
+    const current = disguised(state, choice.owner, shown, scope);
     const each = legal.map((move, index) =>
       tried > 0 && found[index] === null ? null : destinationOf(state, current, move, known),
     );
@@ -993,7 +1001,7 @@ function movedTo(
   return null;
 }
 
-function ownsDestination(state: GameState, seat: Player, moved: MovedDestination): boolean {
+export function ownsDestination(state: GameState, seat: Player, moved: MovedDestination): boolean {
   if ("player" in moved) return moved.player === seat;
   const side = state.players[seat];
   return [side.active, ...side.bench].some((pokemon) => pokemon?.inPlayId === moved.target);

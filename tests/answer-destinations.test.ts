@@ -12,6 +12,7 @@ import {
   legalMoves,
   loadGeneratedCards,
   type CardDefId,
+  type CardInstance,
   type GameState,
   type Move,
   type Player,
@@ -21,6 +22,8 @@ import {
   answerDestinationsFor,
   answerDestinationsOf,
   createMatch,
+  disguised,
+  ownsDestination,
   submitMove,
   toMove,
   type AnswerDestination,
@@ -47,14 +50,17 @@ function twoBasicEnergies(): [CardDefId, CardDefId] {
   return [first.defId, second.defId];
 }
 
-/** 山札の多くをそのトレーナーズにして、最初に使える番で使ったところ。使えなければ null。 */
-function afterPlaying(trainer: CardDefId): Played | null {
+/**
+ * 山札の多くをそのトレーナーズにして、最初に使える番で使ったところ。使えなければ null。
+ * 2 種類目の基本エネルギーは `second` 枚入れる。
+ */
+function afterPlaying(trainer: CardDefId, second = 12): Played | null {
   const [deck] = legalDecks();
   const [energyA, energyB] = twoBasicEnergies();
   const basics = deck.cards.slice(0, 12);
   const cards = [...basics];
   while (cards.length < 36) cards.push(trainer);
-  while (cards.length < 48) cards.push(energyA);
+  while (cards.length < 60 - second) cards.push(energyA);
   while (cards.length < 60) cards.push(energyB);
   const match = createMatch({
     matchId: `destination-${trainer}`,
@@ -280,5 +286,110 @@ describe("効果の選択で選んだカードの行き先", () => {
       },
     });
     expect(shown).toEqual([]);
+  });
+});
+
+/** ゾーンに並ぶインスタンス ID。 */
+function ids(cards: readonly CardInstance[]): string[] {
+  return cards.map((card) => card.instanceId);
+}
+
+describe("行き先を求めるときの差し替え", () => {
+  /** 最初の 1 枚を選んで見せたところ。見せたカードはまだ山札にある。 */
+  function afterFirstPick(): { state: GameState; seat: Player; shown: CardInstance[] } {
+    const played = afterPlaying(handThenAttach()) as Played;
+    const { match, seat } = played;
+    const pick = legalMoves(match.state).find(
+      (move) => move.type === "AnswerChoice" && move.answer.kind !== "decline",
+    ) as Move;
+    submitMove(match, seat, match.version, pick, 0);
+    const shown = match.effectReveals?.cards ?? [];
+    expect(shown).toHaveLength(1);
+    // ウラのサイドを 1 枚表にしておき、それも動かないことを確かめる。
+    const side = match.state.players[seat];
+    const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
+    players[seat] = { ...side, revealedPrizes: [(side.prizes[0] as CardInstance).instanceId] };
+    return { state: { ...match.state, players }, seat, shown };
+  }
+
+  it("自分の山札とウラのサイド、相手の手札・山札・サイドをまとめて混ぜ、見せたカードと表のサイドは動かさない", () => {
+    const { state, seat, shown } = afterFirstPick();
+    const own = state.players[seat];
+    const rival = state.players[(1 - seat) as Player];
+    const [kept] = shown as [CardInstance];
+    const keptAt = own.deck.findIndex((card) => card.instanceId === kept.instanceId);
+    let ownPrizesMoved = false;
+    let rivalHandMoved = false;
+    for (let tried = 0; tried < 20; tried++) {
+      const after = disguised(state, seat, shown, { ownPrizes: true, rival: true });
+      const mine = after.players[seat];
+      const theirs = after.players[(1 - seat) as Player];
+      // 見えているゾーンは変えず、ゾーンごとの枚数も変えない。
+      expect(ids(mine.hand)).toEqual(ids(own.hand));
+      expect(mine.discard).toBe(own.discard);
+      expect(mine.active).toBe(own.active);
+      expect([mine.deck.length, mine.prizes.length]).toEqual([own.deck.length, own.prizes.length]);
+      expect([theirs.hand.length, theirs.deck.length, theirs.prizes.length]).toEqual([
+        rival.hand.length,
+        rival.deck.length,
+        rival.prizes.length,
+      ]);
+      // 混ぜる範囲の中身は変わらない。
+      expect(ids([...mine.deck, ...mine.prizes]).sort()).toEqual(
+        ids([...own.deck, ...own.prizes]).sort(),
+      );
+      expect(ids([...theirs.hand, ...theirs.deck, ...theirs.prizes]).sort()).toEqual(
+        ids([...rival.hand, ...rival.deck, ...rival.prizes]).sort(),
+      );
+      expect(mine.deck[keptAt]?.instanceId).toBe(kept.instanceId);
+      expect(mine.prizes[0]?.instanceId).toBe(own.prizes[0]?.instanceId);
+      ownPrizesMoved ||= ids(mine.prizes).some((id) => !ids(own.prizes).includes(id));
+      rivalHandMoved ||= ids(theirs.hand).some((id) => !ids(rival.hand).includes(id));
+    }
+    expect(ownPrizesMoved).toBe(true);
+    expect(rivalHandMoved).toBe(true);
+  });
+
+  it("自分の山札から選んでいるあいだは、山札とサイドを混ぜず、選べないカードを選べることにしない", () => {
+    // 2 種類目のエネルギーをウラのサイドに置く。座席は山札を見て、それが無いことを知っている。
+    const { match, seat } = afterPlaying(handThenAttach(), 1) as Played;
+    const [, energyB] = twoBasicEnergies();
+    const side = match.state.players[seat];
+    const at = side.deck.findIndex((card) => card.defId === energyB);
+    const prize = side.prizes.findIndex((card) => card.defId !== energyB);
+    if (at < 0 || prize < 0) throw new Error("2 種類目のエネルギーが山札に無い");
+    const deck = [...side.deck];
+    const prizes = [...side.prizes];
+    [deck[at], prizes[prize]] = [prizes[prize] as CardInstance, deck[at] as CardInstance];
+    const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
+    players[seat] = { ...side, deck, prizes };
+    const state = { ...match.state, players };
+    const [destination] = answerDestinationsOf(state, null) ?? [];
+    expect(destination).toEqual({ to: "later", options: ["hand"] });
+  });
+
+  it("既定では自分の山札だけを混ぜる", () => {
+    const { state, seat, shown } = afterFirstPick();
+    const after = disguised(state, seat, shown);
+    expect(ids(after.players[seat].prizes)).toEqual(ids(state.players[seat].prizes));
+    expect(after.players[(1 - seat) as Player]).toBe(state.players[(1 - seat) as Player]);
+  });
+});
+
+describe("あとの選択でたどる行き先の持ち主", () => {
+  it("自分のゾーンと自分のポケモンだけを座席の行き先とみなす", () => {
+    const { match, seat } = afterPlaying(handThenAttach()) as Played;
+    const rival = (1 - seat) as Player;
+    const own = match.state.players[seat].active;
+    const theirs = match.state.players[rival].active;
+    if (own === null || theirs === null) throw new Error("バトル場にポケモンがいない");
+    expect(ownsDestination(match.state, seat, { to: "hand", player: seat })).toBe(true);
+    expect(ownsDestination(match.state, seat, { to: "hand", player: rival })).toBe(false);
+    expect(
+      ownsDestination(match.state, seat, { to: "attached", target: own.inPlayId, cards: [] }),
+    ).toBe(true);
+    expect(
+      ownsDestination(match.state, seat, { to: "attached", target: theirs.inPlayId, cards: [] }),
+    ).toBe(false);
   });
 });
