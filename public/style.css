@@ -569,15 +569,16 @@ button.secondary {
 }
 
 /*
- * 結果は画面の端に重ねて出す。真ん中はバトル場で、ダメージの数字もそこに浮かぶ。
+ * 結果は画面の上の端に重ねて出す。真ん中のバトル場とダメージの数字は隠さない。
  * 押す場所を塞がないよう、触っても下の盤面へ通す。カードのプレビューは結果の上に出す。
  */
 .results {
   position: fixed;
   top: 16px;
-  right: 16px;
+  left: 50%;
   z-index: 9;
   width: min(320px, calc(100vw - 32px));
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   gap: 6px;
