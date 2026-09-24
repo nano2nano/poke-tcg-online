@@ -26,7 +26,7 @@ function matchReadyForPlans(prefix: string): Match {
 }
 
 /**
- * 片方だけ最初の手札にたねが無く、1 度の引き直しでたねが来る対戦。どちらになるかは seed で決まるので、
+ * 片方だけ最初の手札にたねが無く、1 度のマリガンでたねが来る対戦。どちらになるかは seed で決まるので、
  * 同じ nonce の対戦で先に確かめてから返す。
  */
 function oneSidedMulligan(prefix: string): { match: Match; ahead: Player; lacker: Player } {
@@ -204,7 +204,7 @@ describe("対戦準備をまとめて出す", () => {
       reason: "not-your-turn",
     });
 
-    // たねのある側の答えは、相手の引き直しを待たずに流れる。
+    // たねのある側の答えは、相手のマリガンを待たずに流れる。
     const plan = planOf(match, ahead);
     const outcome = submitSetup(match, ahead, plan.active, plan.bench, 10_000);
     expect(outcome.ok && outcome.events.length > 0).toBe(true);
@@ -223,7 +223,7 @@ describe("対戦準備をまとめて出す", () => {
       if (candidate.mulligans.length >= 2) match = candidate;
     }
     if (match === undefined) throw new Error("おたがいに引き直して始まる対戦が見つからない");
-    // おたがいの引き直しは両者が同時に見せる。
+    // おたがいのマリガンは両者が同時に見せる。
     expect(new Set(match.mulligans.slice(0, 2).map((reveal) => reveal.player))).toEqual(
       new Set([0, 1]),
     );

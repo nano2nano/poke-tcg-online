@@ -220,7 +220,7 @@ describe("対戦準備をまとめて出す 1 通", () => {
     const deltas = await Promise.all(seats.map((seat) => seat.next()));
     for (const delta of deltas) expect(delta.t).toBe("delta");
     expect(deltas[0]!.mulligans).toEqual(deltas[1]!.mulligans);
-    // 引き直しが 1 度で済むとは限らないが、見せるのは引き直す側だけである。
+    // マリガンが 1 度で済むとは限らないが、見せるのは引き直す側だけである。
     const shown = deltas[0]!.mulligans.map((reveal: { player: number }) => reveal.player);
     expect(shown.length).toBeGreaterThan(0);
     expect(shown.every((player: number) => player === lacker)).toBe(true);

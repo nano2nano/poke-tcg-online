@@ -113,7 +113,7 @@ export interface Match {
    */
   setupSinceMs: [number, number];
   /**
-   * 対戦準備で引き直すときに見せた手札（2.4 節）。公開の情報だが、引き直しは座席の手の外
+   * 対戦準備で引き直すときに見せた手札（2.4 節）。公開の情報だが、マリガンは座席の手の外
    * （対戦の開始や相手の手の途中）で起きるので、イベントだけでは届かない座席がある。
    */
   mulligans: MulliganReveal[];
@@ -351,7 +351,7 @@ function planStart(match: Match, seat: Player): GameState | null {
 }
 
 /**
- * 先読みの途中で手札が変わったか。変わるのはその座席が引き直すときで、引き直しはまだ起きていない。
+ * 先読みの途中で手札が変わったか。変わるのはその座席が引き直すときで、マリガンはまだ起きていない。
  * 先読みの手札で選ばせると、見せる前の手札を渡すことになる。
  */
 function sameHand(now: readonly CardInstance[], ahead: readonly CardInstance[]): boolean {
@@ -560,7 +560,7 @@ function normalizeOffered(offered: number[] | null, candidates: number): number[
 }
 
 /**
- * 引き直しで見せた手札。準備の中で自分の手札を全員に見せる理由は引き直しのほかに無いので、それで拾う。
+ * マリガンで見せた手札。準備の中で自分の手札を全員に見せる理由はマリガンのほかに無いので、それで拾う。
  * 両座席へ送るので、見せる相手が限られた公開は拾わない。
  */
 function revealedHands(events: DomainEvent[]): MulliganReveal[] {

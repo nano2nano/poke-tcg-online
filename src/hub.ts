@@ -394,7 +394,7 @@ export class MatchHub {
       view: viewFor(match, seat),
       legalMoves: legalMovesFor(match, seat),
       setup: setupViewFor(match, seat),
-      // 引き直しは準備の中でしか起きないので、対戦が始まったあとは送り直さない。
+      // マリガンは準備の中でしか起きないので、対戦が始まったあとは送り直さない。
       ...(match.state.phase === "setup" ? { mulligans: match.mulligans } : {}),
       clock: clockView(match, this.now()),
     };
