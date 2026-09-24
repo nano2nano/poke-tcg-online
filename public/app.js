@@ -1610,15 +1610,16 @@ function renderSide(container, side, mirrored) {
     zone("deck", "山札", side.deckCount, side.deckCount > 0 ? cardBack() : emptySlot()),
     pileZone("discard", "トラッシュ", side.discard),
   );
-  if (side.lostZone.length > 0) piles.append(pileZone("lost", "ロストゾーン", side.lostZone));
-
-  const mat = el(
+  const prizeSide = el(
     "div",
-    mirrored ? "mat mirrored" : "mat",
+    "prize-side",
     zone("prizes", "サイド", side.prizeCount, el("div", "prize-grid", ...prizes)),
-    field,
-    piles,
   );
+  if (side.lostZone.length > 0) {
+    prizeSide.prepend(pileZone("lost", "ロストゾーン", side.lostZone));
+  }
+
+  const mat = el("div", mirrored ? "mat mirrored" : "mat", prizeSide, field, piles);
 
   const hand =
     side.hand === undefined

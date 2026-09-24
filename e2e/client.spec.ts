@@ -2091,7 +2091,7 @@ async function expectInside(page: Page, selector: string, bounds: Box): Promise<
   }
 }
 
-/** 盤面の欄の枠と表示域の重なり。盤面が表示域より長くても、欄より広くても、はみ出た部分は見えない。 */
+/** 盤面の欄の枠とビューポートの重なり。盤面がビューポートより長くても、欄より広くても、はみ出た部分は見えない。 */
 async function visibleBoard(page: Page, section: string): Promise<Box> {
   const board = (await page.locator(`${section} .board`).boundingBox()) as Box;
   const viewport = page.viewportSize() as { width: number; height: number };
@@ -2106,15 +2106,16 @@ async function visibleBoard(page: Page, section: string): Promise<Box> {
 const ZONES = ["hand", "prizes", "active", "bench", "deck", "discard", "lost"];
 
 /**
- * FHD のモニターでブラウザを最大化したときの表示域、同じモニターを 125% に拡大したときの表示域、
- * 縦に置いた FHD のモニター。どれでも、ページを送らずに両者の盤面と手札、指せる手、時計が見えていること。
+ * FHD のモニターでブラウザを最大化し、ブックマークバーまで出したときのビューポート、同じモニターを
+ * 125% に拡大したときのビューポート、縦に置いた FHD のモニター。どれでも、ページをスクロールせずに両者の盤面と手札、
+ * 指せる手、時計が見えていること。
  */
 for (const viewport of [
-  { width: 1920, height: 950 },
+  { width: 1920, height: 900 },
   { width: 1536, height: 730 },
   { width: 1080, height: 1800 },
 ]) {
-  test(`${viewport.width}×${viewport.height} の表示域に、両者の盤面と手札が収まる`, async ({
+  test(`${viewport.width}×${viewport.height} のビューポートに、両者の盤面と手札が収まる`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -2174,7 +2175,7 @@ for (const viewport of [
 }
 
 test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる", async ({ page }) => {
-  const viewport = { width: 1920, height: 950 };
+  const viewport = { width: 1920, height: 900 };
   await page.setViewportSize(viewport);
   const { view, clock } = crowdedSync(20) as {
     view: { self: { hand: unknown[] }; opponent: object; stadium: object };

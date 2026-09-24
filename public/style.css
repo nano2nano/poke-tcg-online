@@ -250,9 +250,17 @@ button.secondary {
 .mat.mirrored {
   grid-template-areas: "piles field prizes";
 }
-.mat > .prizes {
+/* ロストゾーンは卓と同じくサイドの隣に置く。バトル場の側に来るよう、向かいの側では上下を返す。 */
+.mat > .prize-side {
   grid-area: prizes;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   --w: 40px;
+}
+.mat.mirrored > .prize-side {
+  flex-direction: column-reverse;
 }
 .mat > .field {
   grid-area: field;
@@ -545,7 +553,7 @@ button.secondary {
     justify-content: center;
     --w: 44px;
   }
-  .mat > .prizes {
+  .mat > .prize-side {
     --w: 30px;
   }
   .zone.active {
@@ -587,7 +595,7 @@ button.secondary {
   .table-status {
     grid-area: status;
   }
-  /* 対戦準備で引き直しの手札と選ぶボタンが並ぶと縦に入りきらないことがあり、そのときは欄の中で送る。 */
+  /* 対戦準備で引き直しの手札と選ぶボタンが並ぶと縦に入りきらないことがあり、そのときは欄の中でスクロールする。 */
   .table-panel {
     grid-area: panel;
     display: flex;
@@ -667,36 +675,21 @@ button.secondary {
     gap: 8px;
     padding: 8px 16px;
   }
-  .table .mat > .prizes {
+  .table .mat > .prize-side {
     justify-self: start;
     --w: calc(var(--b) * 0.5);
   }
   .table .mat > .piles {
     justify-self: end;
-    display: grid;
-    grid-template-areas:
-      "deck ."
-      "discard lost";
     --w: calc(var(--b) * 0.72);
   }
-  .table .mat.mirrored > .prizes {
+  .table .mat.mirrored > .prize-side {
     justify-self: end;
   }
-  /* 向かいの山札は卓の中央寄り、ロストゾーンは外側に来る。 */
+  /* 山札はバトル場の側、トラッシュは手前に置く。向かいの側では上下を返す。 */
   .table .mat.mirrored > .piles {
     justify-self: start;
-    grid-template-areas:
-      "lost discard"
-      ". deck";
-  }
-  .table .piles > [data-zone="deck"] {
-    grid-area: deck;
-  }
-  .table .piles > [data-zone="discard"] {
-    grid-area: discard;
-  }
-  .table .piles > [data-zone="lost"] {
-    grid-area: lost;
+    flex-direction: column-reverse;
   }
   .table .field {
     gap: 8px;
@@ -723,7 +716,7 @@ button.secondary {
 
   /*
    * 手札は 1 段に並べ、入りきらないぶんだけ重ねる。`--cards` は描くときに枚数を入れてある。
-   * 見出しはカードの右に置く。
+   * `--label` を rem で持つのは、見出しとカードで文字の大きさが違い、em では幅が食い違うため。
    */
   .table .board .zone.hand {
     --w: var(--b);
