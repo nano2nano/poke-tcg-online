@@ -123,7 +123,8 @@ export interface DeltaMessage {
   view: PlayerView;
   legalMoves: Move[] | null;
   setup: SetupView | null;
-  mulligans: MulliganReveal[];
+  /** 対戦準備のあいだだけ載せる。無ければ、前に届いたものから変わっていない。 */
+  mulligans?: MulliganReveal[];
   clock: ClockView;
 }
 

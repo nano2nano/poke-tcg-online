@@ -27,6 +27,8 @@ let lastMoves = { moves: null, playing: false, setup: null };
 let setupDraft = { active: null, bench: [], sent: false };
 /** 対戦準備で引き直すときに見せた手札。名前の表が遅れて届いたら描き直す。 */
 let lastMulligans = [];
+/** 前に描いたときに準備の中だったか。欄を開け閉めするのは、準備が終わったときと増えたときだけにする。 */
+let mulligansInSetup = false;
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 /**
@@ -1266,7 +1268,8 @@ function receive(message) {
       renderClock(message.clock);
       setupDraft.sent = false;
       renderMoves(message.legalMoves, true, message.setup);
-      renderMulligans(message.mulligans ?? []);
+      // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
+      renderMulligans(message.mulligans ?? lastMulligans);
       return;
     case "ended":
       // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
@@ -1275,6 +1278,8 @@ function receive(message) {
       $("watch-link").value = "";
       renderView(message.view);
       renderMoves(null, false);
+      // 次の対戦で見せた手札を、この対戦のものと比べて「増えた」と読まない。
+      lastMulligans = [];
       addEvent(describeEnd(message));
       $("clock").textContent = "対戦は終わりました";
       void showShuffleCheck(seatedNow, message);
@@ -1775,14 +1780,19 @@ function renderSetupForm(offer) {
 }
 
 /**
- * 引き直すときに見せた手札を、見せた順に並べる。準備のあいだは開いておき、対戦が始まったら畳む。
+ * 引き直すときに見せた手札を、見せた順に並べる。準備のあいだに増えたら開き、対戦が始まったら畳む。
  * 相手が引き直したことは、相手に番が回る前に起きるので、できごとの欄だけでは見落とす。
+ * それ以外の局面では開け閉めしない。プレイヤーが開いた欄を、次の局面で閉じてしまう。
  */
 function renderMulligans(mulligans) {
+  const grew = mulligans.length > lastMulligans.length;
   lastMulligans = mulligans;
+  const inSetup = lastView?.phase === "setup";
   const details = $("mulligans");
   details.hidden = mulligans.length === 0;
-  details.open = lastView?.phase === "setup";
+  if (grew && inSetup) details.open = true;
+  if (mulligansInSetup && !inSetup) details.open = false;
+  mulligansInSetup = inSetup;
   const counts = [0, 0];
   $("mulligan-list").replaceChildren(
     ...mulligans.map(({ player, cards: shown }) => {

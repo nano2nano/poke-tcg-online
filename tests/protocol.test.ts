@@ -176,9 +176,6 @@ describe("対戦準備をまとめて出す 1 通", () => {
       for (const seat of seats) seat.socket.close();
     }
     expect(syncs.map((sync) => sync.setup?.kind)).toEqual(["choose", "choose"]);
-    // 引き直しで見せた手札は、局面と一緒に両座席へ届く。
-    expect(syncs[0]!.mulligans).toEqual(syncs[1]!.mulligans);
-    expect(Array.isArray(syncs[0]!.mulligans)).toBe(true);
 
     const mover = syncs.findIndex((sync) => sync.legalMoves !== null);
     const waiter = 1 - mover;
@@ -197,6 +194,37 @@ describe("対戦準備をまとめて出す 1 通", () => {
       expect(delta.view.phase).not.toBe("setup");
       expect(delta.setup).toBeNull();
     }
+    for (const seat of seats) seat.socket.close();
+  });
+
+  it("片方だけが引き直す対戦では、見せた手札が両座席へ同じ形で届く", async () => {
+    let seats: Opened[] = [];
+    let syncs: Record<string, any>[] = [];
+    // どちらが引き直すかは seed で決まる。片方だけがまとめて出せない対戦を探す。
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const tokens = await seatTokens(`ひきなおし-${attempt}`);
+      seats = await Promise.all(tokens.map((token) => open(token)));
+      for (const seat of seats) seat.socket.send(JSON.stringify({ t: "hello" }));
+      syncs = await Promise.all(seats.map((seat) => seat.next()));
+      const kinds = syncs.map((sync) => sync.setup?.kind ?? null);
+      if (kinds.includes("choose") && kinds.includes(null)) break;
+      for (const seat of seats) seat.socket.close();
+    }
+    const ahead = syncs.findIndex((sync) => sync.setup?.kind === "choose");
+    const lacker = 1 - ahead;
+    expect(syncs[lacker]!.setup).toBeNull();
+    expect(syncs.map((sync) => sync.mulligans)).toEqual([[], []]);
+
+    const plan = syncs[ahead]!.setup;
+    seats[ahead]!.socket.send(JSON.stringify({ t: "setup", active: plan.active[0], bench: [] }));
+    const deltas = await Promise.all(seats.map((seat) => seat.next()));
+    for (const delta of deltas) expect(delta.t).toBe("delta");
+    expect(deltas[0]!.mulligans).toEqual(deltas[1]!.mulligans);
+    // 引き直しが 1 度で済むとは限らないが、見せるのは引き直す側だけである。
+    const shown = deltas[0]!.mulligans.map((reveal: { player: number }) => reveal.player);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.every((player: number) => player === lacker)).toBe(true);
+
     for (const seat of seats) seat.socket.close();
   });
 });

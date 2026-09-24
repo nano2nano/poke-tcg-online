@@ -269,7 +269,7 @@ async function advance(a: Page, b: Page, seen: () => Seen | null): Promise<void>
 
 /**
  * `page` の座席が準備をまとめて出せるところまで進める。引き直す座席なら、たねのある相手が
- * 先にサイドまで進んでから引き直すので（公式ルールガイド「G 対戦準備」5.b）、相手に先に出させる。
+ * 先にサイドまで進んでから引き直すので（公式ルールガイド「G 対戦準備」5.b）、手番の側に先に出させる。
  */
 async function untilChoose(
   page: Page,
@@ -281,8 +281,9 @@ async function untilChoose(
   await expect.poll(() => seenOther()?.phase).toBe("setup");
   while (seen()?.setup !== "choose") {
     const before = seen()?.stateVersion ?? -1;
-    await expect(other.locator("#setup-submit, #moves button").first()).toBeVisible();
-    expect(await playOne(other)).toBe(true);
+    const mover = seen()?.choice?.owner === seen()?.viewer ? page : other;
+    await expect(mover.locator("#setup-submit:visible, #moves button").first()).toBeVisible();
+    expect(await playOne(mover)).toBe(true);
     await expect.poll(() => seen()?.stateVersion ?? -1).toBeGreaterThan(before);
   }
 }
@@ -462,6 +463,12 @@ test("引き直しで見せた手札は、準備のあいだ開いた欄に並�
   while (seenA.last?.phase === "setup") await advance(a, b, () => seenA.last);
   await expect(panel).toBeVisible();
   await expect(panel).not.toHaveAttribute("open", "");
+
+  // 対戦が始まってから開いた欄は、次の局面が届いても開いたままにする。
+  await panel.locator("summary").click();
+  await expect(panel).toHaveAttribute("open", "");
+  await advance(a, b, () => seenA.last);
+  await expect(panel).toHaveAttribute("open", "");
 
   await close();
 });

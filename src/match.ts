@@ -292,6 +292,8 @@ const LOOKAHEAD_LIMIT = 64;
  *
  * 準備の選択肢は、その座席の手札と、その座席がそれまでに出した答えだけで決まる。
  * 相手の答えを何にしても `seat` の選択肢は変わらないので、仮の答えで先へ進めてよい。
+ * ただし先読みの途中で `seat` 自身が引き直すと、戻り値の手札はまだ見せていないものになる。
+ * 座席に候補を見せる側（`planStart`）が手札の一致を確かめる。
  * バトル場の仮の答えに「出さない」は使わない。出さないとマリガンになり、山札を切り直す。
  */
 function lookahead(state: GameState, seat: Player): GameState | null {
@@ -557,11 +559,18 @@ function normalizeOffered(offered: number[] | null, candidates: number): number[
   return kept.length === candidates ? null : kept;
 }
 
-/** 引き直しで見せた手札。見せる理由は引き直しのほかに無いので、準備の中の手札の公開で拾う。 */
+/**
+ * 引き直しで見せた手札。準備の中で自分の手札を全員に見せる理由は引き直しのほかに無いので、それで拾う。
+ * 両座席へ送るので、見せる相手が限られた公開は拾わない。
+ */
 function revealedHands(events: DomainEvent[]): MulliganReveal[] {
   return events.flatMap((event) =>
-    event.kind === "cards-revealed" && event.zone.kind === "hand" && event.window.kind === "setup"
-      ? [{ player: event.player, cards: event.cards.map((card) => card.defId) }]
+    event.kind === "cards-revealed" &&
+    event.audience === "public" &&
+    event.zone.kind === "hand" &&
+    event.zone.player === event.player &&
+    event.window.kind === "setup"
+      ? [{ player: event.zone.player, cards: event.cards.map((card) => card.defId) }]
       : [],
   );
 }
