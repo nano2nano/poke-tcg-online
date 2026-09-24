@@ -1630,7 +1630,7 @@ function renderSide(container, side, mirrored) {
           ...side.hand.map((card) => zoomable(cardFace(card.defId), "手札", [card.defId])),
         );
   // 入りきらない枚数のときに、どれだけ重ねるかを CSS が決める。
-  hand.style.setProperty("--cards", hand.dataset.count);
+  hand.style.setProperty("--cards", String(side.hand?.length ?? side.handCount));
   container.replaceChildren(...(mirrored ? [hand, mat] : [mat, hand]));
 }
 

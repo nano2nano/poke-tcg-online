@@ -2058,7 +2058,7 @@ function crowdedSync(handSize: number): object {
       },
       opponent: {
         ...common,
-        handCount: 12,
+        handCount: 30,
         deckCount: 20,
         active: pokemon(stage2, 90, ["asleep"]),
         bench: bench(),
@@ -2077,13 +2077,42 @@ function crowdedSync(handSize: number): object {
   };
 }
 
+/** 要素の枠がすべて `bounds` の中にあること。スクロールで隠れた部分も枠は返るので、見えているかをこれで見る。 */
+async function expectInside(page: Page, selector: string, bounds: Box): Promise<void> {
+  const boxes = await page
+    .locator(selector)
+    .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().toJSON() as Box));
+  expect(boxes.length, selector).toBeGreaterThan(0);
+  for (const box of boxes) {
+    expect(box.x, selector).toBeGreaterThanOrEqual(bounds.x);
+    expect(box.y, selector).toBeGreaterThanOrEqual(bounds.y);
+    expect(box.x + box.width, selector).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect(box.y + box.height, selector).toBeLessThanOrEqual(bounds.y + bounds.height);
+  }
+}
+
+/** 盤面の欄の枠と表示域の重なり。盤面が表示域より長くても、欄より広くても、はみ出た部分は見えない。 */
+async function visibleBoard(page: Page, section: string): Promise<Box> {
+  const board = (await page.locator(`${section} .board`).boundingBox()) as Box;
+  const viewport = page.viewportSize() as { width: number; height: number };
+  return {
+    x: Math.max(board.x, 0),
+    y: Math.max(board.y, 0),
+    width: Math.min(board.x + board.width, viewport.width) - Math.max(board.x, 0),
+    height: Math.min(board.y + board.height, viewport.height) - Math.max(board.y, 0),
+  };
+}
+
+const ZONES = ["hand", "prizes", "active", "bench", "deck", "discard", "lost"];
+
 /**
- * FHD のモニターでブラウザを最大化したときの表示域と、同じモニターを 125% に拡大したときの表示域。
- * どちらでも、ページを送らずに両者の盤面と手札、指せる手、時計が見えていること。
+ * FHD のモニターでブラウザを最大化したときの表示域、同じモニターを 125% に拡大したときの表示域、
+ * 縦に置いた FHD のモニター。どれでも、ページを送らずに両者の盤面と手札、指せる手、時計が見えていること。
  */
 for (const viewport of [
   { width: 1920, height: 950 },
   { width: 1536, height: 730 },
+  { width: 1080, height: 1800 },
 ]) {
   test(`${viewport.width}×${viewport.height} の表示域に、両者の盤面と手札が収まる`, async ({
     page,
@@ -2097,33 +2126,93 @@ for (const viewport of [
     await page.reload();
     await expect(page.locator("#self .zone.bench .card").first()).toBeVisible();
 
-    const inside = async (selector: string): Promise<void> => {
-      for (const box of await page
-        .locator(selector)
-        .evaluateAll((nodes) =>
-          nodes.map((node) => node.getBoundingClientRect().toJSON() as Box & { bottom: number }),
-        )) {
-        expect(box.x, selector).toBeGreaterThanOrEqual(0);
-        expect(box.y, selector).toBeGreaterThanOrEqual(0);
-        expect(box.x + box.width, selector).toBeLessThanOrEqual(viewport.width);
-        expect(box.y + box.height, selector).toBeLessThanOrEqual(viewport.height);
-      }
-    };
+    const board = await visibleBoard(page, "#table");
     for (const side of ["#opponent", "#self"]) {
-      for (const zone of ["hand", "prizes", "active", "bench", "deck", "discard", "lost"]) {
-        await inside(`${side} [data-zone="${zone}"] .card`);
-      }
+      for (const zone of ZONES)
+        await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
     }
-    await inside('#stadium [data-zone="stadium"] .card');
-    await inside("#clock");
-    await inside("#concede-button");
-    await inside("#moves button >> nth=0");
+    await expectInside(page, '#stadium [data-zone="stadium"] .card', board);
+    const screen = { x: 0, y: 0, ...viewport };
+    for (const selector of ["#clock", "#concede-button", "#moves button >> nth=0", "#events"]) {
+      await expectInside(page, selector, screen);
+    }
 
-    // 手札は多くても 1 段に並べ、重ねて収める。
-    const tops = await page
-      .locator('#self [data-zone="hand"] .card')
-      .evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top)));
+    // 手札は枚数の見出しまで含めて、名前のために空けた幅の内側に収める。中身の見えない側も同じ。
+    for (const side of ["#opponent", "#self"]) {
+      const edges = await page.locator(`${side} [data-zone="hand"]`).evaluate((zone) => {
+        // この tsconfig は DOM の型を読まないので、ページの側から引く。
+        const style = Reflect.get(globalThis, "getComputedStyle") as (node: unknown) => {
+          paddingRight: string;
+        };
+        return {
+          label: zone.querySelector(".zone-label")!.getBoundingClientRect().right,
+          inner: zone.getBoundingClientRect().right - parseFloat(style(zone).paddingRight),
+        };
+      });
+      expect(edges.label, side).toBeLessThanOrEqual(edges.inner + 0.5);
+    }
+
+    // ベンチは狭くても折り返さない。
+    for (const side of ["#opponent", "#self"]) {
+      const benchTops = await page
+        .locator(`${side} [data-zone="bench"] > .pokemon`)
+        .evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top)));
+      expect(benchTops).toHaveLength(5);
+      expect(new Set(benchTops).size, side).toBe(1);
+    }
+
+    // 手札は多くても 1 段に並べ、重ねて収める。名前の上には重ねない。
+    const hand = page.locator('#self [data-zone="hand"] .card');
+    const tops = await hand.evaluateAll((nodes) =>
+      nodes.map((node) => Math.round(node.getBoundingClientRect().top)),
+    );
     expect(tops).toHaveLength(20);
     expect(new Set(tops).size).toBe(1);
+    const name = (await page.locator("#table .board-side:last-child > h2").boundingBox()) as Box;
+    expect(overlaps(name, (await hand.first().boundingBox()) as Box)).toBe(false);
   });
 }
+
+test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる", async ({ page }) => {
+  const viewport = { width: 1920, height: 950 };
+  await page.setViewportSize(viewport);
+  const { view, clock } = crowdedSync(20) as {
+    view: { self: { hand: unknown[] }; opponent: object; stadium: object };
+    clock: object;
+  };
+  const { hand, ...shown } = view.self;
+  await page.routeWebSocket(/\/ws\?/, (ws) =>
+    ws.send(
+      JSON.stringify({
+        t: "spectator-sync",
+        view: {
+          ...view,
+          viewer: "spectator",
+          players: [{ ...shown, handCount: hand.length }, view.opponent],
+        },
+        seats: [
+          { displayName: "長い名前を付けたプレイヤー".repeat(3), rating: 1500 },
+          { displayName: "ななし", rating: 1500 },
+        ],
+        clock,
+      }),
+    ),
+  );
+  await page.goto("/?watch=観戦");
+  await expect(page.locator("#watch-side-0 .zone.bench .card").first()).toBeVisible();
+
+  const board = await visibleBoard(page, "#watch");
+  for (const side of ["#watch-side-1", "#watch-side-0"]) {
+    for (const zone of ZONES)
+      await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
+  }
+  await expectInside(page, '#watch-stadium [data-zone="stadium"] .card', board);
+  await expectInside(page, "#watch-clock", { x: 0, y: 0, ...viewport });
+  // 長い名前は省いて、手札に重ねない。
+  const name = (await page.locator("#watch-name-0").boundingBox()) as Box;
+  const backs = (await page
+    .locator('#watch-side-0 [data-zone="hand"] .card')
+    .first()
+    .boundingBox()) as Box;
+  expect(overlaps(name, backs)).toBe(false);
+});
