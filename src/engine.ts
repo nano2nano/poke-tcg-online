@@ -52,11 +52,13 @@ export type {
   PlayerView,
   SpectatorView,
   Viewer,
-  Zone,
 } from "../engine/src/index.js";
 
-/** これも `src/index.ts` が公開していない。対戦準備で、ベンチの枠をエンジンと同じ値で出すのに要る。 */
-export { benchCapacity } from "../engine/src/engine/query.js";
+/**
+ * これも `src/index.ts` が公開していない。対戦準備で、ベンチの枠をエンジンと同じ値で出すのと、
+ * 選択の候補のゾーンをエンジンと同じ読み方で引くのに要る。
+ */
+export { benchCapacity, cardsInZone } from "../engine/src/engine/query.js";
 export { classifyDefId, listUnimplementedDefIds } from "../engine/src/coverage.js";
 export { registerPoolCards } from "../engine/src/cardpool/index.js";
 export { loadGeneratedCards } from "../engine/src/cardpool/generated-cards.js";

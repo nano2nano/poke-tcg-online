@@ -2267,16 +2267,20 @@ function answerCardName(answer, view) {
   return answer.kind === "card" ? cardWithPlace(answer.card, view) : nameOf(answer.defId);
 }
 
-const LATER_PHRASES = {
-  hand: "手札に加える",
-  attached: "ポケモンにつける",
-  evolved: "進化させる",
-  discard: "トラッシュする",
-  lostZone: "ロストゾーンに置く",
-  deck: "山札にもどす",
-  prizes: "サイドに置く",
-  active: "バトル場に出す",
-  bench: "ベンチに出す",
+/**
+ * 行き先ごとの言い方。`whose` は、相手のゾーンなら「相手の」、自分のなら空文字。
+ * 並びは、あとで決まる行き先を並べる順でもある（手札に加えるが先）。サーバは名前順で送る。
+ */
+const DESTINATION_PHRASES = {
+  hand: (whose) => `${whose}手札に加える`,
+  attached: () => "ポケモンにつける",
+  evolved: () => "進化させる",
+  discard: (whose) => (whose === "" ? "トラッシュする" : "相手のトラッシュに置く"),
+  lostZone: (whose) => `${whose}ロストゾーンに置く`,
+  deck: (whose) => `${whose}山札にもどす`,
+  prizes: (whose) => `${whose}サイドに置く`,
+  active: (whose) => `${whose}バトル場に出す`,
+  bench: (whose) => `${whose}ベンチに出す`,
 };
 
 /**
@@ -2293,39 +2297,25 @@ function destinationText(answer, destination, view) {
   }
   if (answer.kind !== "card" && answer.kind !== "cardDef") return null;
   const card = answerCardName(answer, view);
-  const whose =
-    destination.player === undefined || destination.player === view?.viewer ? "" : "相手の";
   switch (destination.to) {
-    case "hand":
-      return `${card} を${whose}手札に加える`;
-    case "discard":
-      return whose === "" ? `${card} をトラッシュする` : `${card} を相手のトラッシュに置く`;
-    case "lostZone":
-      return `${card} を${whose}ロストゾーンに置く`;
-    case "deck":
-      return `${card} を${whose}山札にもどす`;
-    case "prizes":
-      return `${card} を${whose}サイドに置く`;
-    case "active":
-      return `${card} を${whose}バトル場に出す`;
-    case "bench":
-      return `${card} を${whose}ベンチに出す`;
     case "attached":
       return `${card} を ${pokemonLabel(destination.target, view, false)} につける`;
     case "evolved":
       return `${pokemonLabel(destination.target, view, false)} を ${card} に進化させる`;
     case "later": {
-      // サーバは名前順で送るので、`LATER_PHRASES` の順に並べ直す（手札に加えるが先）。
-      const phrases = Object.keys(LATER_PHRASES)
+      const phrases = Object.keys(DESTINATION_PHRASES)
         .filter((to) => destination.options.includes(to))
-        .map((to) => LATER_PHRASES[to]);
-      if (phrases.length !== destination.options.length) return null;
+        .map((to) => DESTINATION_PHRASES[to](""));
+      if (phrases.length === 0 || phrases.length !== destination.options.length) return null;
       return phrases.length === 1
         ? `${card} を選ぶ（あとで${phrases[0]}）`
         : `${card} を選ぶ（${phrases.join("か、")}かは、あとで選ぶ）`;
     }
-    default:
-      return null;
+    default: {
+      const phrase = DESTINATION_PHRASES[destination.to];
+      if (phrase === undefined) return null;
+      return `${card} を${phrase(destination.player === view?.viewer ? "" : "相手の")}`;
+    }
   }
 }
 
