@@ -75,6 +75,14 @@ button[aria-pressed="true"] {
 .moves button {
   text-align: left;
 }
+.event-log {
+  margin: 16px 0 0;
+  font-size: 0.85rem;
+}
+.event-log summary {
+  cursor: pointer;
+  opacity: 0.7;
+}
 .events {
   max-height: 260px;
   overflow-y: auto;
@@ -557,5 +565,162 @@ button.secondary {
   }
   .zone.hand {
     --w: 52px;
+  }
+}
+
+/*
+ * 結果は画面の上の端に重ねて出す。真ん中のバトル場とダメージの数字は隠さない。
+ * 押す場所を塞がないよう、触っても下の盤面へ通す。カードのプレビューは結果の上に出す。
+ */
+.results {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  z-index: 9;
+  width: min(320px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.result {
+  padding: 8px 12px;
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  background: Canvas;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+  animation: result-in 0.2s ease-out;
+}
+.result[data-tone="turn"] {
+  border-left-color: #2b6cb0;
+}
+.result[data-tone="attention"] {
+  border-left-color: #b7791f;
+}
+.result[data-tone="positive"] {
+  border-left-color: #1d6b3a;
+}
+.result[data-tone="negative"] {
+  border-left-color: #c0392b;
+}
+.result-text {
+  margin: 0;
+}
+@keyframes result-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+.coins {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  perspective: 400px;
+}
+.coin {
+  width: 56px;
+  height: 56px;
+}
+.coin-inner {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  animation: coin-spin 1s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  animation-delay: calc(var(--order) * 150ms);
+}
+/* 回り終えた向きを、アニメーションが無くても同じにしておく。 */
+.coin[data-face="tails"] .coin-inner {
+  transform: rotateY(180deg);
+  --turns: 1980deg;
+}
+.coin[data-face="heads"] .coin-inner {
+  --turns: 1800deg;
+}
+.coin-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1c2530;
+  backface-visibility: hidden;
+}
+.coin-face.heads {
+  background: radial-gradient(circle at 35% 30%, #fff3b0, #d4a017 70%);
+  box-shadow: inset 0 0 0 3px #b8860b;
+}
+.coin-face.tails {
+  background: radial-gradient(circle at 35% 30%, #f4f6f8, #9aa5b1 70%);
+  box-shadow: inset 0 0 0 3px #6b7785;
+  transform: rotateY(180deg);
+}
+@keyframes coin-spin {
+  from {
+    transform: rotateY(0deg) translateY(0);
+  }
+  50% {
+    transform: rotateY(calc(var(--turns) / 2)) translateY(-16px);
+  }
+  to {
+    transform: rotateY(var(--turns)) translateY(0);
+  }
+}
+
+.hit {
+  position: fixed;
+  z-index: 9;
+  transform: translate(-50%, -50%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  animation: hit-rise 1.6s ease-out forwards;
+}
+.hit[data-tone="negative"] {
+  background: #c0392b;
+}
+.hit[data-tone="positive"] {
+  background: #1d6b3a;
+}
+@keyframes hit-rise {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -20%) scale(1.4);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -150%);
+  }
+}
+
+/* 狭い画面には盤面の横に空きが無く、どこに出しても盤面に重なる。スマートフォンのトーストにならって下に出す。 */
+@media (max-width: 640px) {
+  .results {
+    top: auto;
+    bottom: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result,
+  .coin-inner,
+  .hit {
+    animation: none;
   }
 }

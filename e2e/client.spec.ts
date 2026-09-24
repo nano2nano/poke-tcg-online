@@ -185,6 +185,7 @@ interface Seen {
   stateVersion: number;
   phase: string;
   viewer: number;
+  turnPlayer: number;
   choice: { owner: number; kind: string } | undefined;
   /** サーバが送った準備の状態（`choose` か `submitted`）。 */
   setup: string | null;
@@ -208,6 +209,7 @@ function seenIn(message: {
   view?: {
     phase: string;
     viewer: number;
+    turnPlayer: number;
     choices: { owner: number; kind: string }[];
     self: {
       hand: { instanceId: string; defId: string }[];
@@ -222,6 +224,7 @@ function seenIn(message: {
     stateVersion: message.stateVersion ?? -1,
     phase: view.phase,
     viewer: view.viewer,
+    turnPlayer: view.turnPlayer,
     choice: view.choices.at(-1),
     setup: message.setup?.kind ?? null,
     hand: view.self.hand,
@@ -416,13 +419,14 @@ test("自分の番の途中で相手が選んでいるあいだは、相手の�
   await seatPair(a, b, room);
   await expect.poll(() => seen()?.choice?.kind).toBeDefined();
 
-  // 最初にバトル場を選ぶのは手番のプレイヤー（先攻）である。
-  while (seen()?.choice?.kind !== "setup-place-active") await advance(a, b, seen);
-  const [first, second] = seen()?.choice?.owner === seen()?.viewer ? [a, b] : [b, a];
+  // どちらが先に選ぶかは引き直しで変わる（公式ルールガイド「G 対戦準備」5.b）ので、選択の持ち主で待つ。
+  while (seen()?.choice?.owner !== seen()?.turnPlayer) await advance(a, b, seen);
+  const [first, second] = seen()?.turnPlayer === seen()?.viewer ? [a, b] : [b, a];
   await expect(second.locator("#moves .waiting")).toHaveAttribute("data-state", "their-turn");
 
-  // 先攻が出すと、先攻の番のまま後攻が選ぶ。
-  await advance(a, b, seen);
+  // 準備のあいだ番は先攻のままで、後攻が選ぶ局面が来る。
+  while (seen()?.choice?.owner === seen()?.turnPlayer) await advance(a, b, seen);
+  expect(seen()?.choice).toBeDefined();
   await expect(first.locator("#moves .waiting")).toHaveAttribute("data-state", "their-choice");
 
   await close();
@@ -469,6 +473,142 @@ test("引き直しで見せた手札は、準備のあいだ開いた欄に並�
   await expect(panel).toHaveAttribute("open", "");
   await advance(a, b, () => seenA.last);
   await expect(panel).toHaveAttribute("open", "");
+
+  await close();
+});
+
+test("先攻を決めたコイントスが盤面の上に出て、できごとの記録は畳んである", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `せんこう-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const synced = [firstSync(a), firstSync(b)];
+  await seatPair(a, b, room);
+
+  // コインの向きは座席ごとに先攻か後攻かを表す。両座席で食い違えば、どちらかが違う先攻を見ている。
+  const faces = [];
+  for (const [index, page] of [a, b].entries()) {
+    const coin = page.locator("#results .coin");
+    await expect(coin).toHaveCount(1);
+    const sync = synced[index]!();
+    expect(sync).not.toBeNull();
+    const face = sync!.seat === sync!.firstPlayer ? "heads" : "tails";
+    await expect(coin).toHaveAttribute("data-face", face);
+    faces.push(face);
+    await expect(page.locator("#event-log")).not.toHaveAttribute("open");
+  }
+  expect(faces.sort()).toEqual(["heads", "tails"]);
+
+  await close();
+});
+
+function firstSync(page: Page): () => { seat: number; firstPlayer: number } | null {
+  let seen: { seat: number; firstPlayer: number } | null = null;
+  page.on("websocket", (socket) => {
+    socket.on("framereceived", ({ payload }) => {
+      const message = JSON.parse(String(payload));
+      if (message.t === "sync" && seen === null) {
+        seen = { seat: message.seat, firstPlayer: message.firstPlayer };
+      }
+    });
+  });
+  return () => seen;
+}
+
+test("コインを投げたイベントが届くと投げた数だけコインが出て、ダメージは受けたポケモンの上に浮かぶ", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `こいん-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  // 盤面に合ったイベントを作るため、最後に届いた局面を覚えておき、それに載せて送る。
+  const held: { last: Record<string, any> | null; client: WebSocketRoute | null } = {
+    last: null,
+    client: null,
+  };
+  await a.routeWebSocket(/\/ws\?/, (route) => {
+    held.client = route;
+    const server = route.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "sync" || message.t === "delta") held.last = message;
+      route.send(raw);
+    });
+  });
+  const seenA = lastSeen(a);
+  await seatPair(a, b, room);
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  while (seenA()?.phase === "setup") await advance(a, b, seenA);
+
+  const view = held.last!.view;
+  const target = view.self.active.inPlayId as string;
+  const base = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
+  held.client!.send(
+    JSON.stringify({
+      ...held.last,
+      t: "delta",
+      events: [
+        {
+          ...base,
+          actor: view.viewer,
+          source: null,
+          kind: "coin-flipped",
+          player: view.viewer,
+          results: [true, false, true],
+        },
+        {
+          ...base,
+          actor: 1 - view.viewer,
+          source: null,
+          kind: "damage-dealt",
+          target,
+          amount: 30,
+          beforeDamage: 0,
+          afterDamage: 30,
+          cause: { kind: "damage-counter" },
+        },
+        // 結果を溢れさせる。古いものから消すときに、コインを先に消さない。
+        ...Array.from({ length: 4 }, () => ({
+          ...base,
+          actor: null,
+          source: null,
+          kind: "turn-started",
+          player: view.turnPlayer,
+        })),
+      ],
+    }),
+  );
+
+  const coins = a
+    .locator("#results .result")
+    .filter({ has: a.locator(".coin") })
+    .last()
+    .locator(".coin");
+  await expect(coins).toHaveCount(3);
+  expect(
+    await coins.evaluateAll((all) => all.map((coin) => coin.getAttribute("data-face"))),
+  ).toEqual(["heads", "tails", "heads"]);
+  await expect(a.locator(".hit")).toHaveCount(1);
+
+  // コインで埋まっていても、あとから届いた結果は出す。続けて取ったサイドは記録でも 1 行に畳む。
+  const logged = await a.locator("#events li").count();
+  const opponent = 1 - view.viewer;
+  const coin = { ...base, actor: opponent, source: null, kind: "coin-flipped", player: opponent };
+  const prize = { ...base, actor: opponent, source: null, kind: "prize-taken-hidden" };
+  held.client!.send(
+    JSON.stringify({
+      ...held.last,
+      t: "delta",
+      events: [
+        ...Array.from({ length: 5 }, () => ({ ...coin, results: [false] })),
+        { ...prize, player: opponent, count: 2 },
+        { ...prize, player: opponent, count: 2 },
+      ],
+    }),
+  );
+  await expect(a.locator("#events li")).toHaveCount(logged + 6);
+  await expect(a.locator("#results .result").last().locator(".coin")).toHaveCount(0);
 
   await close();
 });

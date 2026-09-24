@@ -181,15 +181,15 @@ Durable Object はメモリから降ろされ、生きている対戦ごと消�
 
 サーバ → クライアント
 
-| `t`       | 中身                                                                                                                   | 意味                                                                                                     |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `mulligans`, `clock`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る |
-| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `mulligans`, `clock`                                          | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                     |
-| `reject`  | `reason`, `stateVersion`                                                                                               | 手を受理しなかった。理由は 2.2 節の 3 値                                                                 |
-| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                    | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                        |
-| `pending` | なし                                                                                                                   | 席は取れたが、シェアがそろわず対戦がまだ始まっていない（6.4 節）                                         |
-| `pong`    | なし                                                                                                                   |                                                                                                          |
-| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                            | 受け取れなかった。接続は切らない                                                                         |
+| `t`       | 中身                                                                                                                                  | 意味                                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `mulligans`, `firstPlayer`, `clock`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る |
+| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `mulligans`, `clock`                                                         | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                     |
+| `reject`  | `reason`, `stateVersion`                                                                                                              | 手を受理しなかった。理由は 2.2 節の 3 値                                                                 |
+| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                                   | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                        |
+| `pending` | なし                                                                                                                                  | 席は取れたが、シェアがそろわず対戦がまだ始まっていない（6.4 節）                                         |
+| `pong`    | なし                                                                                                                                  |                                                                                                          |
+| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                                           | 受け取れなかった。接続は切らない                                                                         |
 
 **形の違う 1 通は、受け手へ渡す前に断る。** 【決定】
 座席に就いた相手は、対戦が終わるまで何度でも送れる。`t` を読むだけで落ちる値（`null` など）を
@@ -337,11 +337,11 @@ Cloudflare Workers にはサーバから WebSocket の ping を送る手段が�
 
 サーバ → 観戦者
 
-| `t`               | 中身                                      | 意味                           |
-| ----------------- | ----------------------------------------- | ------------------------------ |
-| `spectator-sync`  | `stateVersion`, `view`, `clock`, `seats`  | 局面一式。繋いだ直後と `hello` |
-| `spectator-delta` | `stateVersion`, `events`, `view`, `clock` | 1 手が適用された               |
-| `spectator-ended` | `matchResult`, `outcome`, `view`          | 対戦が終わった。送ったら閉じる |
+| `t`               | 中身                                                    | 意味                           |
+| ----------------- | ------------------------------------------------------- | ------------------------------ |
+| `spectator-sync`  | `stateVersion`, `view`, `firstPlayer`, `clock`, `seats` | 局面一式。繋いだ直後と `hello` |
+| `spectator-delta` | `stateVersion`, `events`, `view`, `clock`               | 1 手が適用された               |
+| `spectator-ended` | `matchResult`, `outcome`, `view`                        | 対戦が終わった。送ったら閉じる |
 
 `seats` は座席ごとの表示名とレーティングで、**公開 id を含めない。** `matchId` も渡さない。
 観戦トークンは座席の外へ配られる値なので、それを持つだけで対局ログと人を結び付けられる形にしない。
