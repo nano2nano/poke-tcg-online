@@ -503,7 +503,6 @@ test("先攻を決めたコイントスが盤面の上に出て、できごと�
   await close();
 });
 
-/** 座席に最初に届いた `sync` の座席と先攻。 */
 function firstSync(page: Page): () => { seat: number; firstPlayer: number } | null {
   let seen: { seat: number; firstPlayer: number } | null = null;
   page.on("websocket", (socket) => {
@@ -592,7 +591,7 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
   ).toEqual(["heads", "tails", "heads"]);
   await expect(a.locator(".hit")).toHaveCount(1);
 
-  // コインで埋まっていても、あとから届いた結果は出す。同じ回のサイドは記録でも 1 行に畳む。
+  // コインで埋まっていても、あとから届いた結果は出す。続けて取ったサイドは記録でも 1 行に畳む。
   const logged = await a.locator("#events li").count();
   const opponent = 1 - view.viewer;
   const coin = { ...base, actor: opponent, source: null, kind: "coin-flipped", player: opponent };

@@ -2015,7 +2015,7 @@ function addEvent(text, list = "events") {
   $(list).prepend(item);
 }
 
-/** 座席から見た呼び名。観戦の画面は代わりに `watchName` で座席の名前を使う。 */
+/** 観戦の画面は代わりに `watchName` で座席の名前を使う。 */
 function seatName(player) {
   return player === seat ? "あなた" : "相手";
 }
@@ -2101,13 +2101,14 @@ function describeResult(event, views, who) {
       return { text: `${pokemon(event.target)}の${conditionName(event.condition)}が治った` };
     case "pokemon-knocked-out":
       return { text: `${pokemon(event.target)}がきぜつした`, tone: "attention" };
-    // 1 回に取ったサイドの枚数ぶん、同じ `count` のイベントが続けて並ぶ。続いたものは 1 つに畳む。
+    // まとめて取ると 1 枚ごとのイベントが続けて並ぶ。選んで取るときは 1 枚ずつ別の局面で届くので、
+    // 枚数は `count`（今回取る総数）ではなく残りで伝え、続いたものは 1 つに畳む。
     case "prize-taken":
-    case "prize-taken-hidden":
-      return {
-        text: `${who(event.player)}がサイドを ${event.count} 枚取った`,
-        key: `prize-${event.player}`,
-      };
+    case "prize-taken-hidden": {
+      const side = sidesOf(views[0]).find(([player]) => player === event.player)?.[1];
+      const left = side === undefined ? "" : `（残り ${side.prizeCount} 枚）`;
+      return { text: `${who(event.player)}がサイドを取った${left}`, key: `prize-${event.player}` };
+    }
     case "mulligan-taken":
       return { text: `${who(event.player)}の手札にたねポケモンが無く、引き直した` };
     case "turn-started":
@@ -2121,18 +2122,10 @@ function conditionName(condition) {
   return CONDITIONS[condition.kind] ?? condition.kind;
 }
 
-/** 場のポケモンを「持ち主の名前」で呼ぶ。見つからなければ null。座席と観戦で盤面の形が違う。 */
+/** 場のポケモンを「持ち主の名前」で呼ぶ。見つからなければ null。 */
 function pokemonName(inPlayId, views, who) {
   for (const view of views) {
-    if (!view) continue;
-    const sides =
-      view.viewer === "spectator"
-        ? view.players.map((side, player) => [player, side])
-        : [
-            [view.viewer, view.self],
-            [1 - view.viewer, view.opponent],
-          ];
-    for (const [player, side] of sides) {
+    for (const [player, side] of sidesOf(view)) {
       for (const pokemon of [side.active, ...side.bench]) {
         if (pokemon == null || pokemon.concealed === true || pokemon.inPlayId !== inPlayId)
           continue;
@@ -2141,6 +2134,16 @@ function pokemonName(inPlayId, views, who) {
     }
   }
   return null;
+}
+
+/** 座席の番号と、その座席の場の組。座席と観戦で盤面の形が違う。 */
+function sidesOf(view) {
+  if (!view) return [];
+  if (view.viewer === "spectator") return view.players.map((side, player) => [player, side]);
+  return [
+    [view.viewer, view.self],
+    [1 - view.viewer, view.opponent],
+  ];
 }
 
 /** 盤面を描き直したあとに呼ぶ。数字を浮かべる先のポケモンは、描き直しで作り直されている。 */
@@ -2153,8 +2156,8 @@ function showResults(results, board) {
 }
 
 /**
- * 同時に出しておく結果の数。溢れたら古いものから消すが、コインは残す。ワザ 1 回でも
- * コイン、ダメージ、きぜつ、サイドと続けて届くので、古い順だとコインから先に消える。
+ * 同時に出しておく結果の数。溢れたら古いものから消すが、コインは残す。1 つの手でもコイン、
+ * ダメージ、特殊状態、きぜつ、番の交代と重なりうるので、古い順だとコインから先に消える。
  */
 const RESULT_LIMIT = 5;
 const RESULT_MS = 4_000;
@@ -2197,7 +2200,7 @@ function coinRow({ results, faces }) {
   return row;
 }
 
-/** ダメージや回復の量を、そのポケモンの上に少しのあいだ浮かべる。盤面の配置には入らない。 */
+/** 盤面の外に置く。盤面は局面が届くたびに作り直すので、中に置くと次の局面で消える。 */
 function floatHit(board, { target, text, tone }) {
   const pokemon = board.querySelector(`.pokemon[data-in-play-id="${CSS.escape(target)}"]`);
   if (pokemon === null) return;
