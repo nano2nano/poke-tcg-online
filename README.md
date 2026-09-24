@@ -37,6 +37,21 @@ Cloudflare へ出す手順は `docs/deploy.md` にある。
 横に広い画面では、両者の盤面と手札をスクロールせずに見られるよう、指せる手とできごとを右の欄へ寄せ、
 カードの大きさを画面の高さと盤面の幅から決める。
 
+## AI と対戦する
+
+学習した方策（`poke-tcg-engine` の `harness/train.ts` が書く重み）と、画面の「AI と対戦する」から指せる。
+重みは R2 の `bots/` に置き、キーの `bots/` より後ろが画面に出る名前になる（仕様 7.3 節）。
+AI との対戦はレーティングを動かさない。
+
+```sh
+# 手元（npm run dev）へ置く
+npx wrangler r2 object put poke-tcg-online-matches/bots/s0-g50 --file ../poke-tcg-engine/runs/ppo/s0/ppo-clip-g50.weights --local
+# Cloudflare へ置く
+npx wrangler r2 object put poke-tcg-online-matches/bots/s0-g50 --file ../poke-tcg-engine/runs/ppo/s0/ppo-clip-g50.weights --remote
+```
+
+重みは、`engine/` と同じ特徴の語彙を持つエンジンで作ったものしか読めない。語彙が違うと、選んだときに断られる。
+
 ## 検査
 
 ```sh

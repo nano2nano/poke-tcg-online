@@ -208,6 +208,14 @@ button.secondary {
   margin: 8px 0;
 }
 
+.bot-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 8px 0;
+}
+
 .deck-code {
   display: flex;
   flex-wrap: wrap;

@@ -43,6 +43,7 @@ import { randomBytes } from "node:crypto";
 import { consume, createClock, isTimedOut, moveRemainingMs, type Clock } from "./clock.js";
 import { commitSeed, noShares, type SeedCommitment, type SeedShares } from "./fingerprint.js";
 import type { ClockView, RejectReason } from "./protocol.js";
+import type { Bot, BotIdentity } from "./bots.js";
 
 export interface SeatInfo {
   /** サーバが発行した識別子。対戦をまたいで同じ人を指す（7.2 節）。 */
@@ -52,8 +53,17 @@ export interface SeatInfo {
    * 対戦を始めた時点のレーティング。あとから座席と人を結び直すことはできないので、
    * ここで持たなければこの対戦には二度と付けられない。
    * 終わったあとのレーティングは、対戦の並びから導けるので持たない。
+   * AI の座席は null である。AI はレーティングを持たず、AI との対戦はレーティングを動かさない（7.3 節）。
    */
-  rating: number;
+  rating: number | null;
+  /** AI の座席だけが持つ。どの重みが指したか（7.3 節）。 */
+  bot?: BotIdentity;
+}
+
+/** AI が座る座席と、その AI。 */
+export interface BotSeat {
+  seat: Player;
+  bot: Bot;
 }
 
 /**
@@ -70,8 +80,8 @@ export interface LoggedMove {
   move: Move;
   /** その手を選ぶのに掛かった時間。自己対戦では手に入らない量である。 */
   elapsedMs: number;
-  /** 手の出どころ。今は人間だけだが、混ざったときに見分けられるよう欄を先に置く。 */
-  source: "human";
+  /** 手の出どころ。AI の座席の手は `bot` である（7.3 節）。 */
+  source: "human" | "bot";
   /**
    * そのとき規則が許していた手の数と、選ばれた手のその中での位置。
    *
@@ -105,6 +115,8 @@ export interface Match {
   readonly startedAt: string;
   /** 先攻。seed から決まる導出値で、再生の入力ではない。先攻の偏りを測るために残す。 */
   readonly firstPlayer: Player;
+  /** AI の座席。人どうしの対戦では null。 */
+  readonly bot: BotSeat | null;
   state: GameState;
   /**
    * 対戦準備で、座席がまとめて出したバトル場とベンチ（2.4 節）。エンジンの順番が来るまで預かる。
@@ -153,6 +165,7 @@ export interface CreateMatchOptions {
   seedCommitment?: SeedCommitment;
   seedShareCommits?: SeedShares;
   bankMs?: number;
+  bot?: BotSeat | null;
 }
 
 export function createMatch(options: CreateMatchOptions): Match {
@@ -168,6 +181,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     spectatorToken: options.spectatorToken,
     startedAt: options.startedAt,
     firstPlayer: firstPlayerOf(created.events),
+    bot: options.bot ?? null,
     state: created.state,
     setupPlans: [null, null],
     setupSinceMs: [options.nowMs, options.nowMs],
@@ -209,6 +223,7 @@ export function submitMove(
   move: Move,
   nowMs: number,
   offered: number[] | null = null,
+  source: LoggedMove["source"] = "human",
 ): SubmitOutcome {
   const mover = toMove(match);
   if (mover === null) return { ok: false, reason: "match-over" };
@@ -227,6 +242,7 @@ export function submitMove(
     chargedMs: elapsedMs,
     nowMs,
     offered: normalizeOffered(offered, legal.length),
+    source,
   });
   return { ok: true, events: [...events, ...drainSetupPlans(match, nowMs)] };
 }
@@ -238,7 +254,13 @@ function record(
   move: Move,
   legal: Move[],
   chosen: number,
-  timing: { elapsedMs: number; chargedMs: number; nowMs: number; offered: number[] | null },
+  timing: {
+    elapsedMs: number;
+    chargedMs: number;
+    nowMs: number;
+    offered: number[] | null;
+    source: LoggedMove["source"];
+  },
 ): DomainEvent[] {
   const answered = move.type === "AnswerChoice" ? match.state.choices.at(-1) : undefined;
   const applied = applyMove(match.state, move);
@@ -249,7 +271,7 @@ function record(
   match.moves.push({
     move,
     elapsedMs: timing.elapsedMs,
-    source: "human",
+    source: timing.source,
     candidates: legal.length,
     chosen,
     offered: timing.offered,
@@ -484,6 +506,7 @@ function drainSetupPlans(match: Match, nowMs: number): DomainEvent[] {
         chargedMs: first ? Math.min(running, plan.elapsedMs) : 0,
         nowMs,
         offered: null,
+        source: "human",
       }),
     );
   }

@@ -125,8 +125,49 @@ let deckEntries = loadDeck();
 
 const nameOf = (defId) => cards[defId]?.name ?? defId;
 
-$("join-button").addEventListener("click", () => {
-  join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
+/**
+ * 走っている入り方。`kind` の `queue` は相手さがし（待っているあいだも含む）、`bot` は AI との対戦の用意である。
+ *
+ * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
+ * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
+ * 終わったときに外すのは、自分が置いたものだけにする。相手さがしを押し直すと前の待ちが先に終わり、
+ * それが外すと、次の待ちが続いているのに AI のボタンが押せるようになる。
+ */
+let joining = null;
+
+function syncJoinButtons() {
+  $("bot-button").disabled = joining !== null || $("bot").options.length === 0;
+  $("join-button").disabled = joining?.kind === "bot";
+}
+
+function runJoin(kind, task) {
+  const mine = { kind };
+  joining = mine;
+  syncJoinButtons();
+  task()
+    .catch((error) => setStatus(`つながらなかった: ${error.message}`))
+    .finally(() => {
+      if (joining === mine) joining = null;
+      syncJoinButtons();
+    });
+}
+
+/**
+ * AI との対戦を頼んだときのシェア。返事が届かずに押し直したとき、サーバは続いている対戦の席を返すが、
+ * その席のシェアはこの画面が作ったものである。覚えていないと、シェアを開けないまま入り直すことになる。
+ */
+let botShare = null;
+
+$("join-button").addEventListener("click", () => runJoin("queue", join));
+$("bot-button").addEventListener("click", () => runJoin("bot", joinBot));
+
+/**
+ * 自分のデッキの欄を人が選んだか。選んでいなければ、デッキを組んだかどうかで既定を選び直す。
+ * 読み込んだときの既定のままにすると、あとで組んだデッキではなく表のデッキで対戦が始まる。
+ */
+let ownDeckTouched = false;
+$("own-deck").addEventListener("change", () => {
+  ownDeckTouched = true;
 });
 
 /**
@@ -156,6 +197,9 @@ if (watchToken !== null) {
   resumeSeat();
   renderDeck();
   loadCardsForJoin();
+  loadBots().catch((error) => {
+    $("bot-status").textContent = `AI の一覧を読めませんでした: ${error.message}`;
+  });
 }
 
 /**
@@ -371,11 +415,7 @@ async function join() {
 
   const outcome = await postJson("/api/join", request);
   if (!outcome.ok) {
-    // 断られる理由はデッキとは限らない。アカウントが見つからないこともここへ来る。
-    // そのときは、この画面が覚えているアカウントがもう無い。読み直しに行かせる。
-    // シークレットを捨ててよいかの判断は `/api/account` の経路が持っているので、ここでは忘れるだけにする。
-    if (outcome.code === "account-not-found") loadingAccount = null;
-    setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
+    refused(outcome);
     return;
   }
   const seedShare = contribution?.share ?? null;
@@ -385,6 +425,96 @@ async function join() {
   }
   setStatus("相手を待っています");
   await waitForOpponent(outcome.ticket, seedShare);
+}
+
+/** 対戦に入るのを断られた。 */
+function refused(outcome) {
+  // 断られる理由はデッキとは限らない。アカウントが見つからないこともここへ来る。
+  // そのときは、この画面が覚えているアカウントがもう無い。読み直しに行かせる。
+  // シークレットを捨ててよいかの判断は `/api/account` の経路が持っているので、ここでは忘れるだけにする。
+  if (outcome.code === "account-not-found") loadingAccount = null;
+  setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
+}
+
+/**
+ * AI の一覧と、AI が握れるデッキを読む（仕様 7.3 節）。AI が 1 つも置かれていなければ、ボタンを押せないままにする。
+ * 自分のデッキは、組みかけのデッキが無ければ表のデッキを先に選んでおく（`defaultOwnDeck`）。空のまま押すと
+ * サンプルデッキになり、AI が学んだことの無い相手になる。
+ */
+async function loadBots() {
+  const { bots, decks } = await getJson("/api/bots");
+  const option = (value, text) => {
+    const element = document.createElement("option");
+    element.value = value;
+    element.textContent = text;
+    return element;
+  };
+  $("bot").replaceChildren(...bots.map((bot) => option(bot.name, bot.name)));
+  $("bot-deck").replaceChildren(...decks.map((deck) => option(deck.label, deck.label)));
+  $("own-deck").append(...decks.map((deck) => option(deck.label, deck.label)));
+  defaultOwnDeck();
+  syncJoinButtons();
+  $("bot-status").textContent =
+    bots.length === 0 ? "サーバに AI が置かれていません（README の「AI と対戦する」）。" : "";
+}
+
+/** 組みかけのデッキが無ければ表の先頭のデッキを、あれば組んだデッキを選ぶ。人が選んだあとは触らない。 */
+function defaultOwnDeck() {
+  const select = $("own-deck");
+  if (ownDeckTouched || select.options.length < 2) return;
+  select.value = deckEntries.length === 0 ? select.options[1].value : "";
+}
+
+async function joinBot() {
+  setStatus("AI との対戦を用意しています");
+  await loadCards();
+  await ensureAccount();
+  const request = {
+    secret: storedSecret(),
+    bot: $("bot").value,
+    botDeck: $("bot-deck").value,
+  };
+  const preset = $("own-deck").value;
+  if (preset !== "") {
+    request.deckPreset = preset;
+  } else {
+    const deck = await deckToSubmit();
+    if (deck === null) {
+      setStatus("デッキを直してから、もう一度おしてください。");
+      return;
+    }
+    request.deck = { cards: deck.cards };
+  }
+  const contribution = await newSeedShare();
+  if (contribution !== null) request.seedShareCommit = contribution.commit;
+  if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
+
+  const earlier = botShare;
+  botShare = contribution;
+  const outcome = await postJson("/api/join-bot", request);
+  // 終わっていない AI との対戦があれば、サーバがその席を返す。この画面が席を失っていても、そこへ戻る。
+  if (!outcome.ok && outcome.code === "bot-match-live" && outcome.seat !== undefined) {
+    openMatch({ ...outcome.seat, seedShare: shareFor(outcome.seat, earlier) });
+    return;
+  }
+  if (!outcome.ok) {
+    refused(outcome);
+    return;
+  }
+  openMatch({ ...outcome.seat, seedShare: contribution?.share ?? null });
+}
+
+/**
+ * 戻る席に出したシェア。覚えている席か、前に頼んだときのシェアのうち、その席のコミットに合うもの。
+ * どちらにも無ければ null で、シェアを開かずに入る（シャッフルの検算はそのことを出す）。
+ */
+function shareFor(seated, earlier) {
+  const stored = storedSeat();
+  if (stored?.seatToken === seated.seatToken && typeof stored.seedShare === "string") {
+    return stored.seedShare;
+  }
+  const commit = seated.seedShareCommits?.[seated.seat];
+  return earlier !== null && earlier.commit === commit ? earlier.share : null;
 }
 
 /**
@@ -461,7 +591,11 @@ async function verifyShuffle(seated, ended) {
   if (problems.length > 0) {
     return ["mismatch", `シャッフルの検算が合いません: ${problems.join("、")}`];
   }
-  if (typeof seated.seedShare === "string" && shares[seated.seat] !== seated.seedShare) {
+  // シェアを覚えていない画面（入り直した画面など）でも、コミットしたシェアが開かれなかったことは分かる。
+  if (
+    (typeof seated.seedShare === "string" && shares[seated.seat] !== seated.seedShare) ||
+    (shares[seated.seat] === null && seated.seedShareCommits[seated.seat] !== null)
+  ) {
     return [
       "share-unused",
       "シャッフルに自分のシェアが使われていません。席に着くのが期限に間に合わなかったか、サーバがシェアを捨てています。",
@@ -885,6 +1019,7 @@ function countInDeck(defId) {
 }
 
 function renderDeck() {
+  defaultOwnDeck();
   const total = deckEntries.reduce((sum, entry) => sum + entry.count, 0);
   const count = $("deck-count");
   count.textContent = total === 0 ? "デッキは空です。" : `${total} / ${DECK_SIZE} 枚`;
@@ -2507,7 +2642,9 @@ function renderWatch(view) {
   for (const seat of [0, 1]) {
     const info = watchSeats?.[seat];
     $(`watch-name-${seat}`).textContent =
-      info === undefined ? `座席 ${seat}` : `${info.displayName}（${info.rating}）`;
+      info === undefined
+        ? `座席 ${seat}`
+        : `${info.displayName}（${info.rating === null ? "AI" : info.rating}）`;
     renderSide($(`watch-side-${seat}`), view.players[seat], seat === 1);
   }
   renderStadium($("watch-stadium"), view.stadium);

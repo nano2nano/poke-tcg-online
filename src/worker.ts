@@ -25,6 +25,7 @@ import {
   type Connection,
 } from "./app.js";
 import { MatchArchive } from "./archive.js";
+import { BotStore } from "./bots.js";
 import { cardImageRoute } from "./card-image.js";
 import { ensureSchema } from "./database.js";
 import { registerPoolCards } from "./engine.js";
@@ -74,6 +75,7 @@ export class Server {
     this.app = createApp({
       accounts,
       archive,
+      bots: new BotStore(env.ARCHIVE),
       ...optionsFromVars(env),
     });
     // 表が揃うまでは要求を受けない。揃ってから、書き損ねた対戦を拾う。

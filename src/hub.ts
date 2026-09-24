@@ -23,6 +23,7 @@ import {
   submitSetup,
   toMove,
   viewFor,
+  type BotSeat,
   type Match,
 } from "./match.js";
 import {
@@ -58,7 +59,15 @@ export interface HubOptions {
   now?: () => number;
   /** 対戦が終わってレジストリを離れたあとに 1 度だけ呼ぶ。記録を残し、レーティングを動かすのはここである。 */
   onFinish?: (record: MatchRecord) => void;
+  /** AI が手を指すまでの間。既定は `BOT_DELAY_MS`。 */
+  botDelayMs?: number;
 }
+
+/**
+ * AI が手を指すまでの間（7.3 節）。AI が手を選ぶ時間は人が画面を追う時間よりずっと短いので、
+ * 間を置かないと番が回ってきた瞬間に何手も進み、人は画面で何が起きたかを追えない。
+ */
+export const BOT_DELAY_MS = 700;
 
 export class MatchHub {
   /** 対戦 ID → 座席 → 接続。1 座席に 1 本だけ持つ。 */
@@ -68,9 +77,13 @@ export class MatchHub {
   /** 観戦者の接続 → 対戦 ID。観戦者の数はこの大きさで数え、別の数え方を持たない。 */
   private readonly spectatorOf = new Map<SeatSocket, string>();
   private readonly now: () => number;
+  /** 対戦 ID → AI が次の手を指すタイマー。1 局に 1 つだけ持つ。 */
+  private readonly botTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly botDelayMs: number;
 
   constructor(private readonly options: HubOptions) {
     this.now = options.now ?? (() => Date.now());
+    this.botDelayMs = options.botDelayMs ?? BOT_DELAY_MS;
   }
 
   /**
@@ -96,6 +109,8 @@ export class MatchHub {
     }
     this.seatSocket(ref.match.matchId, ref.seat, socket);
     send(socket, this.syncFor(ref.match, ref.seat));
+    // シェアを出さずに入った対戦は、ロビーの中で始まっている。AI が先に指すなら、ここで動かす。
+    this.driveBot(ref.match);
     return true;
   }
 
@@ -145,6 +160,7 @@ export class MatchHub {
       const socket = perMatch?.get(seat);
       if (socket !== undefined) send(socket, this.syncFor(match, seat));
     }
+    this.driveBot(match);
   }
 
   /** 溢れたら断る。座席と違い、観戦は断っても誰も負けない。 */
@@ -287,8 +303,82 @@ export class MatchHub {
     }
   }
 
+  /**
+   * その座席トークンの対戦で AI の番なら、AI を動かす。
+   *
+   * シェアを出さずに入った対戦はロビーの中で始まり、ハブを通らない。AI が先に選ぶ局面から始まると、
+   * 人が繋ぐまで誰も AI を動かさず、AI の持ち時間だけが流れる。席を渡した直後に呼ぶ。
+   */
+  wakeBot(seatToken: string): void {
+    const ref = this.options.registry.bySeatToken(seatToken);
+    if (ref !== undefined) this.driveBot(ref.match);
+  }
+
+  /**
+   * AI の番なら、間を置いて AI に 1 手指させる（7.3 節）。何度呼んでも、待っている手は 1 局に 1 つである。
+   * 局面が動くところ（対戦の開始、手を受理したあと）と、座席が就いたところから呼ぶ。
+   */
+  private driveBot(match: Match): void {
+    const bot = match.bot;
+    if (bot === null || this.botTimers.has(match.matchId) || !isToMove(match, bot.seat)) return;
+    const timer = setTimeout(() => {
+      this.botTimers.delete(match.matchId);
+      try {
+        this.botMove(match, bot);
+      } catch (error) {
+        console.error(`AI の手を進められなかった。投了で終える（${match.matchId}）:`, error);
+        this.botResigns(match, bot.seat);
+      }
+    }, this.botDelayMs);
+    this.botTimers.set(match.matchId, timer);
+  }
+
+  /**
+   * AI の 1 手。AI に渡すのは座席の射影と合法手だけで、人の座席に届くものと同じである（1 節の S-2）。
+   *
+   * **AI が指せなかったら、AI の投了で終える。** 方策が投げたときも、手が断られたときも同じである。
+   * 代わりに一様に選んだ手を指すと、方策が選んでいない手が `source: "bot"` として記録に混ざる。
+   * 止めたまま待たせると、人は AI の持ち時間が尽きるまで待たされる。
+   */
+  private botMove(match: Match, { seat, bot }: BotSeat): void {
+    // 待っているあいだに終わった対戦（投了、時間切れ）には指さない。
+    if (this.options.registry.bySeatToken(match.seatTokens[seat])?.match !== match) return;
+    const legal = legalMovesFor(match, seat);
+    if (legal === null) return;
+    let move: Move | undefined;
+    try {
+      move = legal[bot.choose(viewFor(match, seat), legal)];
+    } catch (error) {
+      console.error(
+        `AI ${bot.identity.name} が手を選べなかった。投了で終える（${match.matchId}）:`,
+        error,
+      );
+    }
+    if (move === undefined) {
+      this.botResigns(match, seat);
+      return;
+    }
+    const outcome = submitMove(match, seat, match.version, move, this.now(), null, "bot");
+    if (!outcome.ok) {
+      console.error(`AI の手が断られた。投了で終える（${match.matchId}）: ${outcome.reason}`);
+      this.botResigns(match, seat);
+      return;
+    }
+    this.broadcastDelta(match, outcome.events);
+    if (match.result !== null) this.endMatch(match);
+  }
+
+  /** AI の投了で終える。もう終わっている対戦には何もしない。 */
+  private botResigns(match: Match, seat: Player): void {
+    if (this.options.registry.bySeatToken(match.seatTokens[seat])?.match !== match) return;
+    if (concede(match, seat, this.now())) this.endMatch(match);
+  }
+
   /** 決着を両座席と観戦者へ伝え、レジストリから外す。 */
   endMatch(match: Match): void {
+    const botTimer = this.botTimers.get(match.matchId);
+    if (botTimer !== undefined) clearTimeout(botTimer);
+    this.botTimers.delete(match.matchId);
     const perMatch = this.sockets.get(match.matchId);
     for (const seat of [0, 1] as Player[]) {
       const socket = perMatch?.get(seat);
@@ -364,6 +454,7 @@ export class MatchHub {
       const socket = perMatch?.get(seat);
       if (socket !== undefined) send(socket, this.deltaFor(match, seat, events));
     }
+    this.driveBot(match);
     const watching = this.spectators.get(match.matchId);
     if (watching === undefined) return;
     // 観戦者はみな同じ値を受けるので、組み立ても JSON にするのも 1 度で足りる。
