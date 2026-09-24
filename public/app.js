@@ -1631,8 +1631,8 @@ function renderSide(container, side, mirrored) {
   });
 
   // ベンチの枠の数はスタジアムで変わり、射影には載っていない。空いた枠は描かない。
-  const benched = side.bench.filter((pokemon) => pokemon !== null);
-  const bench = benched.length === 0 ? [emptySlot()] : benched.map(pokemonSlot);
+  const inBench = benched(side);
+  const bench = inBench.length === 0 ? [emptySlot()] : inBench.map(pokemonSlot);
   const field = el(
     "div",
     "field",
@@ -1753,17 +1753,20 @@ function renderMoves(moves, playing = true, setup = null) {
     const button = document.createElement("button");
     button.textContent = describeMove(move);
     button.addEventListener("click", () => send({ t: "move", stateVersion, move, ...offered }));
-    aimAt(button, moveTargets(move));
+    button.dataset.aim = JSON.stringify(moveTargets(move));
+    for (const type of ["pointerenter", "pointerleave", "focus", "blur"]) {
+      button.addEventListener(type, refreshAim);
+    }
     container.append(button);
   }
 }
 
 /**
- * 人から見て同じ手を 1 つに畳み、残した手と `legalMoves` での位置を返す。
+ * 自分の手札の同じカードを選ぶ手を 1 つに畳み、残した手と `legalMoves` での位置を返す。
  *
- * エンジンが畳むのは手札の同じカードだけで、選択の候補（トラッシュするエネルギーなど）は
- * 1 枚ずつ並ぶ。同じ場所にある同じカードはどれを選んでも同じなので、場所と `defId` で見分ける。
- * 場所の分からないカードは畳まない。
+ * エンジンは番の中の手では手札の同じカードを畳むが、選択の候補（手札からトラッシュするカードなど）は
+ * 1 枚ずつ並べる。畳むのはエンジンと同じく手札だけにする。場やトラッシュのカードは、
+ * 同じ `defId` でも個体ごとの記録（どうぐの使用済み、ワザでトラッシュしたエネルギーなど）を持ちうる。
  */
 function foldMoves(moves, view) {
   const seen = new Set();
@@ -1784,7 +1787,7 @@ const CARD_FIELDS = new Set(["cardInstanceId", "right", "left", "card"]);
 
 function cardKey(instanceId, view) {
   const found = locateCard(instanceId, view);
-  return found === null ? null : `${found.key} ${found.defId}`;
+  return found?.own && found.zone === "hand" ? `hand ${found.defId}` : null;
 }
 
 /** 手が狙う場のポケモン。ボタンにマウスを載せるか選ぶと、盤面のそのポケモンを囲む。 */
@@ -1793,17 +1796,15 @@ function moveTargets(move) {
   return [move.target, move.to, move.source, answer.target].filter((id) => typeof id === "string");
 }
 
-function aimAt(button, inPlayIds) {
-  if (inPlayIds.length === 0) return;
-  const mark = (on) => {
-    for (const id of inPlayIds) {
-      $("table")
-        .querySelector(`.pokemon[data-in-play-id="${CSS.escape(id)}"]`)
-        ?.classList.toggle("aimed", on);
+/** 同じポケモンを狙うボタンが 2 つあっても消し合わないよう、載っているボタンと選んだボタンから数え直す。 */
+function refreshAim() {
+  const table = $("table");
+  for (const pokemon of table.querySelectorAll(".pokemon.aimed")) pokemon.classList.remove("aimed");
+  for (const button of $("moves").querySelectorAll("button:hover, button:focus")) {
+    for (const id of JSON.parse(button.dataset.aim ?? "[]")) {
+      table.querySelector(`.pokemon[data-in-play-id="${CSS.escape(id)}"]`)?.classList.add("aimed");
     }
-  };
-  for (const type of ["pointerenter", "focus"]) button.addEventListener(type, () => mark(true));
-  for (const type of ["pointerleave", "blur"]) button.addEventListener(type, () => mark(false));
+  }
 }
 
 /**
@@ -1988,8 +1989,12 @@ function describeMove(move, view = lastView) {
       return `にげて、${target(move.to)} をバトル場に出す`;
     case "DiscardOwnPokemon":
       return `${target(move.target)} をトラッシュする`;
-    case "Attack":
-      return `ワザ「${attackName(move, view)}」を使う`;
+    case "Attack": {
+      const name = attackName(move, view);
+      return name === undefined
+        ? `${move.attackIndex + 1} 番目のワザを使う`
+        : `ワザ「${name}」を使う`;
+    }
     case "EndTurn":
       return "番を終わる";
     case "AnswerChoice":
@@ -2012,7 +2017,7 @@ function abilityName(defId, index) {
 function attackName(move, view) {
   const side = move.player === view?.viewer ? view?.self : view?.opponent;
   const top = side?.active?.stack?.at(-1);
-  return cards[top?.defId]?.attacks?.[move.attackIndex] ?? `${move.attackIndex + 1} 番目のワザ`;
+  return cards[top?.defId]?.attacks?.[move.attackIndex];
 }
 
 /**
@@ -2060,14 +2065,13 @@ function describeAnswer(answer, view) {
 }
 
 /**
- * 座席から見た両側。リプレイの盤面も同じ形にしてある（`readerBoard`）。
+ * 座席から見た両側と、それが自分の側か。リプレイの盤面も同じ形にしてある（`readerBoard`）。
  * 対戦中は相手の手札が `hand` を持たないので、自分の手札しか当たらない。
  */
 function seatSides(view) {
-  return [
-    [true, view?.self],
-    [false, view?.opponent],
-  ].filter(([, side]) => side != null);
+  return sidesOf(view)
+    .filter(([, side]) => side != null)
+    .map(([player, side]) => [player === view.viewer, side]);
 }
 
 /** 描いている順のベンチ。空いた枠は描かないので、左からの番号もこれで数える。 */
@@ -2101,34 +2105,34 @@ function pokemonLabel(inPlayId, view, withSide) {
 }
 
 /**
- * インスタンス ID から、カードと、それがある場所を引く。`key` は同じ場所を同じ文字列にする。
- * 盤面に無ければ null（山札の中など）。
+ * インスタンス ID から、カードと、それがある場所を引く。盤面に無ければ null（山札の中など）。
+ *
+ * 同じ場所に同じカードが何枚かあるときは、盤面で見分けられる順番を `place` に足す。
+ * ついているカードは左から描き、トラッシュとロストゾーンは大きく出すと上から並ぶ。
  */
 function locateCard(instanceId, view) {
   for (const [own, side] of seatSides(view)) {
     const who = own ? "自分の" : "相手の";
     const piles = [
-      ["hand", "手札", side.hand ?? []],
-      ["discard", "トラッシュ", side.discard ?? []],
-      ["lost", "ロストゾーン", side.lostZone ?? []],
+      ["hand", () => `${who}手札`, side.hand ?? [], "左から"],
+      ["discard", () => `${who}トラッシュ`, [...(side.discard ?? [])].reverse(), "上から"],
+      ["lost", () => `${who}ロストゾーン`, [...(side.lostZone ?? [])].reverse(), "上から"],
     ];
-    for (const [zone, label, pile] of piles) {
-      const card = pile.find((each) => each.instanceId === instanceId);
-      if (card !== undefined) {
-        return { defId: card.defId, own, zone, key: `${own} ${zone}`, place: `${who}${label}` };
-      }
-    }
     for (const pokemon of [side.active, ...benched(side)]) {
       if (pokemon == null || pokemon.concealed === true) continue;
-      for (const [part, pile] of [
-        ["stack", pokemon.stack],
-        ["attached", pokemon.attached],
-      ]) {
-        const card = pile.find((each) => each.instanceId === instanceId);
-        if (card === undefined) continue;
-        const place = pokemonLabel(pokemon.inPlayId, view, true);
-        return { defId: card.defId, own, zone: part, key: `${pokemon.inPlayId} ${part}`, place };
-      }
+      const holder = () => pokemonLabel(pokemon.inPlayId, view, true);
+      piles.push(
+        ["stack", holder, [...pokemon.stack].reverse(), "上から"],
+        ["attached", holder, pokemon.attached, "左から"],
+      );
+    }
+    for (const [zone, where, pile, from] of piles) {
+      const card = pile.find((each) => each.instanceId === instanceId);
+      if (card === undefined) continue;
+      const twins = pile.filter((each) => each.defId === card.defId);
+      const place =
+        twins.length > 1 ? `${where()}の${from} ${twins.indexOf(card) + 1} 枚目` : where();
+      return { defId: card.defId, own, zone, place };
     }
   }
   return null;
@@ -2156,10 +2160,9 @@ function handCardName(instanceId, view) {
 
 /** 手札か自分の場にある自分のカードの名前。出したあとのカードは手札から場へ移っている。 */
 function ownCardName(instanceId, view) {
-  const self = view?.self;
-  const inPlay = [self?.active, ...(self?.bench ?? [])].flatMap((pokemon) => pokemon?.stack ?? []);
-  const card = [...(self?.hand ?? []), ...inPlay].find((each) => each.instanceId === instanceId);
-  return card === undefined ? instanceId : nameOf(card.defId);
+  const found = locateCard(instanceId, view);
+  const mine = found?.own && (found.zone === "hand" || found.zone === "stack");
+  return mine ? nameOf(found.defId) : instanceId;
 }
 
 /** 人に見せる文が無いイベントは、不具合を調べるときのために名前で残す。 */
