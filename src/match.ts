@@ -32,6 +32,7 @@ import type {
   DomainEvent,
   GameOutcome,
   GameState,
+  InPlayId,
   Move,
   Player,
   PlayerEvent,
@@ -143,6 +144,10 @@ export interface Match {
    * 求めるときに乱数を使うので、送るたびに求め直すと、同じ局面の `delta` と `sync` で食い違いうる。
    */
   deckPlacement: DeckPlacementView | null;
+  /**
+   * 手番側の座席へ送る `answerDestinations`。`deckPlacement` と同じく、手を適用するたびに 1 度だけ求める。
+   */
+  answerDestinations: (AnswerDestination | null)[] | null;
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
   version: number;
   clocks: [Clock, Clock];
@@ -188,6 +193,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     mulligans: revealedHands(created.events),
     deckStack: null,
     deckPlacement: null,
+    answerDestinations: null,
     version: 0,
     clocks: [createClock(options.bankMs), createClock(options.bankMs)],
     moves: [],
@@ -267,6 +273,7 @@ function record(
   match.state = applied.state;
   match.deckStack = nextDeckStack(match.deckStack, answered, move, applied);
   match.deckPlacement = deckPlacementOf(match.state, match.deckStack);
+  match.answerDestinations = answerDestinationsOf(match.state);
   match.version += 1;
   match.moves.push({
     move,
@@ -762,6 +769,148 @@ function nextDeckStack(
   if (!continuesStack(current, next)) return null;
   const moved = chosenIntoDeck(move, applied.events, answered.owner);
   return moved === null ? current : { ...current, placed: [...current.placed, moved] };
+}
+
+/**
+ * 効果の選択への答えで、選んだカードがどこへ行くか（3.2 節の `answerDestinations`）。
+ * `attached` は、カードを選ぶ答えならそのカードを、場のポケモンを選ぶ答えならそこへついたカードを `cards` に持つ。
+ */
+export type AnswerDestination =
+  | {
+      to: "hand" | "discard" | "lostZone" | "deck" | "prizes" | "active" | "bench";
+      player: Player;
+    }
+  | { to: "revealed" }
+  | { to: "attached" | "evolved"; target: InPlayId; cards: CardDefId[] };
+
+/**
+ * 乱数の種と山札の並びを替えて試す回数。コインで行き先が変わる効果なら、たまたま全部の回で
+ * 同じ行き先になる確率が、回数だけ 2 分の 1 を掛け合わせたものになる。
+ */
+const DESTINATION_TRIES = 8;
+
+export function answerDestinationsFor(
+  match: Match,
+  seat: Player,
+): (AnswerDestination | null)[] | null {
+  return toMove(match) === seat ? match.answerDestinations : null;
+}
+
+/**
+ * 効果の選択のあいだ、合法手ごとの、その答えで選んだカードの行き先（`legalMoves` と同じ並び）。
+ * そのほかの局面と、行き先が 1 つも分からないときは null。
+ *
+ * エンジンの選択はカードかポケモンを選ばせるだけで、選んだものをどうするかを座席へ渡さない。
+ * 「手札に加える 1 枚」と「ポケモンにつける 1 枚」を同じ候補から続けて選ぶ効果では、
+ * それが無いとどちらを選んでいるのか分からない。名前でカードを特別扱いせず、答えてみて見分ける。
+ * 先読みは 1 手だけで、次の選択で行き先が決まるカードには付けない。
+ *
+ * `deckPlacementOf` と同じく、試すのは選ぶ座席に見えない山札の並びと乱数の種を差し替えた局面で、
+ * どの回でも同じ行き先になった答えにだけ付ける。
+ */
+export function answerDestinationsOf(state: GameState): (AnswerDestination | null)[] | null {
+  const choice = state.choices.at(-1);
+  if (choice?.source == null) return null;
+  const seat = choice.owner;
+  const legal = legalMoves(state);
+  try {
+    let found: (AnswerDestination | null)[] | undefined;
+    for (let tried = 0; tried < DESTINATION_TRIES; tried++) {
+      const current = disguised(state, seat, []);
+      const each = legal.map((move, index) =>
+        found !== undefined && found[index] === null ? null : destinationOf(current, move),
+      );
+      found =
+        found === undefined
+          ? each
+          : each.map((destination, index) =>
+              JSON.stringify(destination) === JSON.stringify(found?.[index]) ? destination : null,
+            );
+      if (found.every((destination) => destination === null)) return null;
+    }
+    return found ?? null;
+  } catch {
+    // `deckPlacementOf` と同じく、先読みの例外で指された手を止めない。
+    return null;
+  }
+}
+
+/**
+ * 座席が正体を知りうるカード。場のポケモンを選ぶ答えで、ついたカードの `defId` を渡してよいかの判定に使う。
+ * 山札は `disguised` で並びを替えてあるので、正体の分かっていないカードは試すたびに入れ替わって付かない。
+ * ウラのサイドと相手の手札・山札は並びを替えていないので、ここで外す。
+ */
+function knownTo(state: GameState, seat: Player): Set<string> {
+  const own = state.players[seat];
+  const known = [...own.hand, ...own.deck];
+  for (const side of state.players) {
+    known.push(...side.discard, ...side.lostZone);
+    for (const pokemon of [side.active, ...side.bench]) {
+      if (pokemon !== null) known.push(...pokemon.stack, ...pokemon.attached);
+    }
+  }
+  return new Set(known.map((card) => card.instanceId));
+}
+
+/** 答えを 1 つ適用して、選んだカードが最初に動いた先。動かずに公開されただけなら `revealed`。 */
+function destinationOf(state: GameState, move: Move): AnswerDestination | null {
+  if (move.type !== "AnswerChoice") return null;
+  const answer = move.answer;
+  const { events } = applyMove(state, move);
+  if (answer.kind === "inPlay") {
+    const attached = events.flatMap((event) =>
+      (event.kind === "energy-attached" || event.kind === "tool-attached") &&
+      event.target === answer.target
+        ? [event.card]
+        : [],
+    );
+    const known = knownTo(state, move.player);
+    if (attached.length === 0 || !attached.every((card) => known.has(card.instanceId))) return null;
+    return { to: "attached", target: answer.target, cards: attached.map((card) => card.defId) };
+  }
+  const chosen = (card: CardInstance): boolean =>
+    answer.kind === "card"
+      ? card.instanceId === answer.card
+      : answer.kind === "cardDef" && card.defId === answer.defId;
+  let revealed = false;
+  for (const event of events) {
+    switch (event.kind) {
+      case "card-moved":
+      case "pokemon-played":
+        if (!chosen(event.card)) break;
+        if (event.to.kind === "stadium") return null;
+        return { to: event.to.kind, player: event.to.player };
+      case "card-drawn":
+        if (chosen(event.card)) return { to: "hand", player: event.player };
+        break;
+      case "card-discarded":
+        if (chosen(event.card)) return { to: "discard", player: event.player };
+        break;
+      case "energy-attached":
+      case "tool-attached":
+        if (chosen(event.card)) {
+          return { to: "attached", target: event.target, cards: [event.card.defId] };
+        }
+        break;
+      case "pokemon-evolved":
+        if (chosen(event.card)) {
+          return { to: "evolved", target: event.target, cards: [event.card.defId] };
+        }
+        break;
+      case "cards-revealed":
+        // 相手のカードを見せる効果は「相手に見せる」と書けないので、自分のカードに限る。
+        if (
+          event.audience === "public" &&
+          event.zone.kind !== "stadium" &&
+          event.zone.player === move.player &&
+          event.cards.some(chosen)
+        ) {
+          revealed = true;
+        }
+        break;
+    }
+  }
+  return revealed ? { to: "revealed" } : null;
 }
 
 export function clockView(match: Match, nowMs: number): ClockView {

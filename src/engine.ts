@@ -44,6 +44,7 @@ export type {
   DomainEvent,
   GameOutcome,
   GameState,
+  InPlayId,
   Move,
   Player,
   PlayerEvent,

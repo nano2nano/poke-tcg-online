@@ -34,7 +34,7 @@
 コアの C-1 から C-5 を前提に、サーバ側で追加して守る性質である。
 
 - **S-1 権威はサーバが持つ `GameState` にある。** クライアントは盤面もダメージもサイドの枚数も申告しない（コア C-5 の運用側）。クライアントから来る値は「どの手を選んだか」だけである。
-- **S-2 クライアントへ出る値は、必ず射影を通る。** `ApplyResult.state` と `ApplyResult.events` をそのまま配信する経路を作らない。座席へ出てよいのは `playerView(state, seat)` と `projectEvents(events, seat)` の戻り値、および**手番側だけへ送る合法手**と、その座席の手札から導く対戦準備の状態（`setup`）、選んでいるカードを山札のどこへ置くか（`deckPlacement`）である（3.2 節）。観戦者へ出てよいのは `spectatorView(state)` と `projectEvents(events, "spectator")` の戻り値だけである（3.6 節）。この規律はコア §9.1 が明示的にサーバ側の責務としたものである。
+- **S-2 クライアントへ出る値は、必ず射影を通る。** `ApplyResult.state` と `ApplyResult.events` をそのまま配信する経路を作らない。座席へ出てよいのは `playerView(state, seat)` と `projectEvents(events, seat)` の戻り値、および**手番側だけへ送る合法手**と、その座席の手札から導く対戦準備の状態（`setup`）、選んでいるカードを山札のどこへ置くか（`deckPlacement`）、効果の選択で選んだカードの行き先（`answerDestinations`）である（3.2 節）。観戦者へ出てよいのは `spectatorView(state)` と `projectEvents(events, "spectator")` の戻り値だけである（3.6 節）。この規律はコア §9.1 が明示的にサーバ側の責務としたものである。
 - **S-3 seed は対戦が終わるまで公開しない。** seed はシャッフルを完全に決めるので、対戦中に渡すと相手の山札とサイドがすべて割れる。
 - **S-4 対局ログは seed と move 列で足りる。** 局面もイベントも保存しない。コア C-4（同一 seed ＋同一 move 列 → 同一の状態列とイベント列）がこれを保証する。
 - **S-5 エンジンへ時刻と通信を持ち込まない。** 持ち時間、切断、投了はすべてサーバの語彙であり、`Move` にも `GameState` にも `WinReason` にも足さない（コア D-3）。
@@ -182,15 +182,15 @@ Durable Object はメモリから降ろされ、生きている対戦ごと消�
 
 サーバ → クライアント
 
-| `t`       | 中身                                                                                                                                                   | 意味                                                                                                     |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `deckPlacement`, `mulligans`, `firstPlayer`, `clock`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る |
-| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `deckPlacement`, `mulligans`, `clock`                                                         | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                     |
-| `reject`  | `reason`, `stateVersion`                                                                                                                               | 手を受理しなかった。理由は 2.2 節の 3 値                                                                 |
-| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                                                    | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                        |
-| `pending` | なし                                                                                                                                                   | 席は取れたが、シェアがそろわず対戦がまだ始まっていない（6.4 節）                                         |
-| `pong`    | なし                                                                                                                                                   |                                                                                                          |
-| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                                                            | 受け取れなかった。接続は切らない                                                                         |
+| `t`       | 中身                                                                                                                                                                         | 意味                                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `mulligans`, `firstPlayer`, `clock`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る |
+| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `mulligans`, `clock`                                                         | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                     |
+| `reject`  | `reason`, `stateVersion`                                                                                                                                                     | 手を受理しなかった。理由は 2.2 節の 3 値                                                                 |
+| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                                                                          | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                        |
+| `pending` | なし                                                                                                                                                                         | 席は取れたが、シェアがそろわず対戦がまだ始まっていない（6.4 節）                                         |
+| `pong`    | なし                                                                                                                                                                         |                                                                                                          |
+| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                                                                                  | 受け取れなかった。接続は切らない                                                                         |
 
 **形の違う 1 通は、受け手へ渡す前に断る。** 【決定】
 座席に就いた相手は、対戦が終わるまで何度でも送れる。`t` を読むだけで落ちる値（`null` など）を
@@ -227,12 +227,24 @@ Durable Object はメモリから降ろされ、生きている対戦ごと消�
 どの回でも同じ端に並んだときだけ出す。途中で山札を切る効果では、並びが乱数で決まるからである。
 本物の局面でたどると、これから切る結果や山札の並びが、出すか出さないかに表れて座席へ漏れる。
 
+`answerDestinations` は、カード効果の選択のあいだだけ、選ぶ座席へ入れる。`legalMoves` と同じ並びで、
+その答えで選んだカードがどこへ行くかを運ぶ。手札やトラッシュなどのゾーン（`to` とその持ち主の `player`）、
+場のポケモンにつく・進化する（`attached` と `evolved`、`target` とそのカードの `cards`）、
+動かずに相手へ見せただけ（`revealed`）のいずれかで、分からない答えは `null` である。
+場のポケモンを選ぶ答えでは、そこへついたカードを `cards` に持つ。
+「手札に加える 1 枚」と「ポケモンにつける 1 枚」を同じ候補から続けて選ぶ効果では、エンジンの選択が
+カードの名前しか運ばないので、画面はこれが無いとどちらを選んでいるのか見分けられない。
+
+求め方は `deckPlacement` と同じで、山札の並びと乱数の種を差し替えた局面で答えを 1 つ適用し、
+種を替えて何度か試してどの回でも同じ行き先になった答えにだけ付ける（`src/match.ts` の `answerDestinationsOf`）。
+先読みは 1 手だけなので、次の選択で行き先が決まるカードには付かない。
+
 `mulligans` は、対戦準備で引き直すときに見せた手札を、見せた順に並べたものである（`player` と `defId` の列）。
 両座席に同じものを送り、`delta` には準備のあいだだけ載せる。マリガンは対戦の開始や相手の手の途中で
 起きるので、`events` だけでは届かない座席がある。インスタンス ID を入れないのは、見せたカードが山札へ
 戻るからである。山札のカードのインスタンス ID は座席へ出さない。
 
-`legalMoves` と `deckPlacement` は**手番側の座席へだけ**値を入れ、他方へは `null` を入れる（S-2）。
+`legalMoves`、`deckPlacement`、`answerDestinations` は**手番側の座席へだけ**値を入れ、他方へは `null` を入れる（S-2）。
 `view` は `playerView` の戻り値そのもの、`events` は `projectEvents` の戻り値そのものである。
 この 3 つを組み立てるのは `src/hub.ts` の `syncFor` と `deltaFor` だけとし、
 ほかの経路から座席へ値を送らない。
@@ -413,7 +425,7 @@ Cloudflare Workers にはサーバから WebSocket の ping を送る手段が�
 ### 4.1 座席ごとの payload 【決定】
 
 1 手ごとに、サーバは座席 `p` について次の 3 つを作る。これ以外の値を座席へ出さない
-（対戦準備の `setup` と `mulligans`、山札へ置く選択の `deckPlacement` は 3.2 節）。
+（対戦準備の `setup` と `mulligans`、山札へ置く選択の `deckPlacement`、選んだカードの行き先の `answerDestinations` は 3.2 節）。
 
 ```
 view       = playerView(state, p)

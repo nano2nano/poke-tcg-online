@@ -2495,6 +2495,76 @@ test("手札の同じカードを選ぶ答えは 1 つに畳んで見せた手�
   expect(new Set(labels).size).toBe(4);
 });
 
+test("効果の選択では、選んだカードの行き先をボタンに出す", async ({ page }) => {
+  const sync = crowdedSync(10) as CrowdedSync & { answerDestinations: object[] | null };
+  const defIds = [...new Set(sync.view.self.hand.map((card) => card.defId))].slice(0, 2);
+  const buttons = page.locator("#moves button");
+  const pickFromDeck = (): void => {
+    const choiceId = "山札から選ぶ";
+    sync.view.choices = [
+      {
+        choiceId,
+        owner: 0,
+        kind: "card-effect",
+        optional: false,
+        prompt: {
+          kind: "selectFromHiddenZone",
+          zone: { kind: "deck", player: 0 },
+          candidates: defIds,
+        },
+      },
+    ];
+    sync.legalMoves = defIds.map((defId) => ({
+      type: "AnswerChoice",
+      player: 0,
+      choiceId,
+      answer: { kind: "cardDef", defId },
+    }));
+  };
+  const labelsWith = async (destinations: object[] | null): Promise<string[]> => {
+    sync.answerDestinations = destinations;
+    await openWith(page, sync);
+    await expect(buttons).toHaveCount(sync.legalMoves.length);
+    return buttons.allTextContents();
+  };
+
+  // 同じ候補から、見せるカード、手札に加えるカードを続けて選ぶ。行き先が違えば見出しも違う。
+  pickFromDeck();
+  const plain = await labelsWith(null);
+  const revealed = await labelsWith(defIds.map(() => ({ to: "revealed" })));
+  const toHand = await labelsWith(defIds.map(() => ({ to: "hand", player: 0 })));
+  for (let index = 0; index < defIds.length; index++) {
+    expect(new Set([plain[index], revealed[index], toHand[index]]).size).toBe(3);
+  }
+
+  // 残りのカードをつけるポケモンを選ぶ。
+  const choiceId = "つける先を選ぶ";
+  const targets = [sync.view.self.active.inPlayId];
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt: { kind: "selectInPlay", candidates: targets },
+    },
+  ];
+  sync.legalMoves = targets.map((target) => ({
+    type: "AnswerChoice",
+    player: 0,
+    choiceId,
+    answer: { kind: "inPlay", target },
+  }));
+  const [pokemon] = await labelsWith(null);
+  const [attach] = await labelsWith(
+    targets.map((target) => ({ to: "attached", target, cards: [defIds[1]] })),
+  );
+  expect(attach).not.toBe(pokemon);
+  // 行き先の書けない組み合わせは、元の見出しに戻す。
+  const [unknown] = await labelsWith(targets.map(() => ({ to: "hand", player: 0 })));
+  expect(unknown).toBe(pokemon);
+});
+
 test("山札の上へ順に置く選択では、何枚目に置くかを案内とボタンに出す", async ({ page }) => {
   const sync = crowdedSync(10) as CrowdedSync & { deckPlacement: object | null };
   const choiceId = "山札の上に置く";
