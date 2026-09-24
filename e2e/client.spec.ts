@@ -185,6 +185,7 @@ interface Seen {
   stateVersion: number;
   phase: string;
   viewer: number;
+  turnPlayer: number;
   choice: { owner: number; kind: string } | undefined;
   /** サーバが送った準備の状態（`choose` か `submitted`）。 */
   setup: string | null;
@@ -208,6 +209,7 @@ function seenIn(message: {
   view?: {
     phase: string;
     viewer: number;
+    turnPlayer: number;
     choices: { owner: number; kind: string }[];
     self: {
       hand: { instanceId: string; defId: string }[];
@@ -222,6 +224,7 @@ function seenIn(message: {
     stateVersion: message.stateVersion ?? -1,
     phase: view.phase,
     viewer: view.viewer,
+    turnPlayer: view.turnPlayer,
     choice: view.choices.at(-1),
     setup: message.setup?.kind ?? null,
     hand: view.self.hand,
@@ -416,13 +419,14 @@ test("自分の番の途中で相手が選んでいるあいだは、相手の�
   await seatPair(a, b, room);
   await expect.poll(() => seen()?.choice?.kind).toBeDefined();
 
-  // 最初にバトル場を選ぶのは手番のプレイヤー（先攻）である。
-  while (seen()?.choice?.kind !== "setup-place-active") await advance(a, b, seen);
-  const [first, second] = seen()?.choice?.owner === seen()?.viewer ? [a, b] : [b, a];
+  // どちらが先に選ぶかは引き直しで変わる（公式ルールガイド「G 対戦準備」5.b）ので、選択の持ち主で待つ。
+  while (seen()?.choice?.owner !== seen()?.turnPlayer) await advance(a, b, seen);
+  const [first, second] = seen()?.turnPlayer === seen()?.viewer ? [a, b] : [b, a];
   await expect(second.locator("#moves .waiting")).toHaveAttribute("data-state", "their-turn");
 
-  // 先攻が出すと、先攻の番のまま後攻が選ぶ。
-  await advance(a, b, seen);
+  // 準備のあいだ番は先攻のままで、後攻が選ぶ局面が来る。
+  while (seen()?.choice?.owner === seen()?.turnPlayer) await advance(a, b, seen);
+  expect(seen()?.choice).toBeDefined();
   await expect(first.locator("#moves .waiting")).toHaveAttribute("data-state", "their-choice");
 
   await close();
