@@ -40,6 +40,7 @@ export type {
   CardDefId,
   CardInstance,
   Choice,
+  ChoiceAnswer,
   DeckList,
   DomainEvent,
   GameOutcome,
@@ -51,6 +52,7 @@ export type {
   PlayerView,
   SpectatorView,
   Viewer,
+  Zone,
 } from "../engine/src/index.js";
 
 /** これも `src/index.ts` が公開していない。対戦準備で、ベンチの枠をエンジンと同じ値で出すのに要る。 */

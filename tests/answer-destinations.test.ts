@@ -19,6 +19,7 @@ import {
 import { commitSeed } from "../src/fingerprint.js";
 import {
   answerDestinationsFor,
+  answerDestinationsOf,
   createMatch,
   submitMove,
   toMove,
@@ -207,6 +208,21 @@ describe("効果の選択で選んだカードの行き先", () => {
     expect(checked).toBeGreaterThanOrEqual(2);
     // 効果を終えたら出さない。
     expect(answerDestinationsFor(played.match, played.seat)).toBeNull();
+  });
+
+  it("ポケモンにつくカードは、この効果で山札から見せたものでなければ名前を渡さない", () => {
+    const played = afterPlaying(handThenAttach()) as Played;
+    let checked = false;
+    walk(played, ({ match, seat }) => {
+      const attaching = (answerDestinationsFor(match, seat) ?? []).some(
+        (each) => each?.to === "attached",
+      );
+      if (!attaching) return;
+      // 見せた記録が無い局面では、つくカードは座席に見えない山札のどれかでしかない。
+      expect(answerDestinationsOf(match.state, null)).toBeNull();
+      checked = true;
+    });
+    expect(checked).toBe(true);
   });
 
   it("効果の出どころを持たない選択（対戦準備など）と、選択の無い局面では出さない", () => {

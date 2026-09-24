@@ -28,6 +28,7 @@ import type {
   CardDefId,
   CardInstance,
   Choice,
+  ChoiceAnswer,
   DeckList,
   DomainEvent,
   GameOutcome,
@@ -39,6 +40,7 @@ import type {
   PlayerView,
   SpectatorView,
   Viewer,
+  Zone,
 } from "./engine.js";
 import { randomBytes } from "node:crypto";
 import { consume, createClock, isTimedOut, moveRemainingMs, type Clock } from "./clock.js";
@@ -144,8 +146,11 @@ export interface Match {
    * 求めるときに乱数を使うので、送るたびに求め直すと、同じ局面の `delta` と `sync` で食い違いうる。
    */
   deckPlacement: DeckPlacementView | null;
+  /** 効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード（`answerDestinations` で使う）。 */
+  effectReveals: EffectReveals | null;
   /**
    * 手番側の座席へ送る `answerDestinations`。`deckPlacement` と同じく、手を適用するたびに 1 度だけ求める。
+   * AI の座席では画面が無いので求めない。
    */
   answerDestinations: (AnswerDestination | null)[] | null;
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
@@ -193,6 +198,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     mulligans: revealedHands(created.events),
     deckStack: null,
     deckPlacement: null,
+    effectReveals: null,
     answerDestinations: null,
     version: 0,
     clocks: [createClock(options.bankMs), createClock(options.bankMs)],
@@ -273,7 +279,11 @@ function record(
   match.state = applied.state;
   match.deckStack = nextDeckStack(match.deckStack, answered, move, applied);
   match.deckPlacement = deckPlacementOf(match.state, match.deckStack);
-  match.answerDestinations = answerDestinationsOf(match.state);
+  match.effectReveals = nextEffectReveals(match.effectReveals, applied);
+  match.answerDestinations =
+    toMove(match) === match.bot?.seat
+      ? null
+      : answerDestinationsOf(match.state, match.effectReveals);
   match.version += 1;
   match.moves.push({
     move,
@@ -603,10 +613,11 @@ export interface DeckPlacementView {
 const PLACEMENT_LOOKAHEAD_LIMIT = 16;
 
 /**
- * 乱数の種と山札の並びを替えて試す回数。山札を切る効果では、置いたカードがたまたま端に並ぶ確率が
- * 1 回ごとにおよそ山札の枚数分の 1 で、コインで行き先が変わる効果なら 2 分の 1 で、回数だけ掛け合わさる。
+ * 山札の並びと乱数の種を替えて試す回数（`disguised`）。山札を切る効果では、置いたカードが
+ * たまたま端に並ぶ確率が 1 回ごとにおよそ山札の枚数分の 1 で、コインで行き先が変わる効果なら 2 分の 1 で、
+ * 回数だけ掛け合わさる。
  */
-const PLACEMENT_TRIES = 8;
+const DISGUISE_TRIES = 8;
 
 export function deckPlacementFor(match: Match, seat: Player): DeckPlacementView | null {
   return toMove(match) === seat ? match.deckPlacement : null;
@@ -634,7 +645,7 @@ export function deckPlacementOf(
   try {
     const edge = stackedEdge(state, seat, source, placed);
     if (edge === null) return null;
-    for (let tried = 1; tried < PLACEMENT_TRIES; tried++) {
+    for (let tried = 1; tried < DISGUISE_TRIES; tried++) {
       if (stackedEdge(state, seat, source, placed) !== edge) return null;
     }
     if (!everyAnswerStacks(state, seat, placed, edge)) return null;
@@ -742,10 +753,15 @@ function chosenIntoDeck(move: Move, events: DomainEvent[], owner: Player): CardI
     if (event.kind !== "card-moved" || event.to.kind !== "deck" || event.to.player !== owner) {
       continue;
     }
-    if (answer.kind === "card" && event.card.instanceId === answer.card) return event.card;
-    if (answer.kind === "cardDef" && event.card.defId === answer.defId) return event.card;
+    if (answerPicks(answer, event.card)) return event.card;
   }
   return null;
+}
+
+/** カードを選ぶ答えが、そのカードを指すか。`cardDef` は同じカードのどれを選んだかを持たない。 */
+function answerPicks(answer: ChoiceAnswer, card: CardInstance): boolean {
+  if (answer.kind === "card") return card.instanceId === answer.card;
+  return answer.kind === "cardDef" && card.defId === answer.defId;
 }
 
 function continuesStack(stack: DeckStack, choice: Choice): boolean {
@@ -783,17 +799,19 @@ export type AnswerDestination =
   | { to: "revealed" }
   | { to: "attached" | "evolved"; target: InPlayId; cards: CardDefId[] };
 
-/**
- * 乱数の種と山札の並びを替えて試す回数。コインで行き先が変わる効果なら、たまたま全部の回で
- * 同じ行き先になる確率が、回数だけ 2 分の 1 を掛け合わせたものになる。
- */
-const DESTINATION_TRIES = 8;
-
 export function answerDestinationsFor(
   match: Match,
   seat: Player,
 ): (AnswerDestination | null)[] | null {
   return toMove(match) === seat ? match.answerDestinations : null;
+}
+
+/** 1 つの効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード。 */
+export interface EffectReveals {
+  owner: Player;
+  /** 効果を起こしたカードのインスタンス ID。 */
+  source: string;
+  defIds: CardDefId[];
 }
 
 /**
@@ -808,55 +826,72 @@ export function answerDestinationsFor(
  * `deckPlacementOf` と同じく、試すのは選ぶ座席に見えない山札の並びと乱数の種を差し替えた局面で、
  * どの回でも同じ行き先になった答えにだけ付ける。
  */
-export function answerDestinationsOf(state: GameState): (AnswerDestination | null)[] | null {
+export function answerDestinationsOf(
+  state: GameState,
+  reveals: EffectReveals | null,
+): (AnswerDestination | null)[] | null {
   const choice = state.choices.at(-1);
   if (choice?.source == null) return null;
-  const seat = choice.owner;
+  const known = knownTo(state, choice, reveals);
   const legal = legalMoves(state);
-  try {
-    let found: (AnswerDestination | null)[] | undefined;
-    for (let tried = 0; tried < DESTINATION_TRIES; tried++) {
-      const current = disguised(state, seat, []);
-      const each = legal.map((move, index) =>
-        found !== undefined && found[index] === null ? null : destinationOf(current, move),
-      );
-      found =
-        found === undefined
-          ? each
-          : each.map((destination, index) =>
-              JSON.stringify(destination) === JSON.stringify(found?.[index]) ? destination : null,
-            );
-      if (found.every((destination) => destination === null)) return null;
-    }
-    return found ?? null;
-  } catch {
-    // `deckPlacementOf` と同じく、先読みの例外で指された手を止めない。
-    return null;
+  let found: (AnswerDestination | null)[] = legal.map(() => null);
+  for (let tried = 0; tried < DISGUISE_TRIES; tried++) {
+    const current = disguised(state, choice.owner, []);
+    const each = legal.map((move, index) =>
+      tried > 0 && found[index] === null ? null : destinationOf(state, current, move, known),
+    );
+    found =
+      tried === 0
+        ? each
+        : each.map((destination, index) =>
+            JSON.stringify(destination) === JSON.stringify(found[index]) ? destination : null,
+          );
+    if (found.every((destination) => destination === null)) return null;
   }
+  return found;
 }
 
 /**
- * 座席が正体を知りうるカード。場のポケモンを選ぶ答えで、ついたカードの `defId` を渡してよいかの判定に使う。
- * 山札は `disguised` で並びを替えてあるので、正体の分かっていないカードは試すたびに入れ替わって付かない。
- * ウラのサイドと相手の手札・山札は並びを替えていないので、ここで外す。
+ * 座席が正体を知っているカードか。場のポケモンを選ぶ答えで、ついたカードの `defId` を渡してよいかの判定に使う。
+ * 山札のカードは、この効果で見せたものと同じカードだけを知っているとみなす。
  */
-function knownTo(state: GameState, seat: Player): Set<string> {
-  const own = state.players[seat];
-  const known = [...own.hand, ...own.deck];
+function knownTo(
+  state: GameState,
+  choice: Choice,
+  reveals: EffectReveals | null,
+): (card: CardInstance) => boolean {
+  const known = [...state.players[choice.owner].hand];
   for (const side of state.players) {
     known.push(...side.discard, ...side.lostZone);
     for (const pokemon of [side.active, ...side.bench]) {
       if (pokemon !== null) known.push(...pokemon.stack, ...pokemon.attached);
     }
   }
-  return new Set(known.map((card) => card.instanceId));
+  const ids = new Set(known.map((card) => card.instanceId));
+  const shown = new Set(reveals !== null && continuesEffect(reveals, choice) ? reveals.defIds : []);
+  const deck = new Set(state.players[choice.owner].deck.map((card) => card.instanceId));
+  return (card) => ids.has(card.instanceId) || (deck.has(card.instanceId) && shown.has(card.defId));
 }
 
-/** 答えを 1 つ適用して、選んだカードが最初に動いた先。動かずに公開されただけなら `revealed`。 */
-function destinationOf(state: GameState, move: Move): AnswerDestination | null {
+/**
+ * 答えを 1 つ適用して、選んだカードが最初に動いた先。動かずに公開されただけなら `revealed`。
+ * `state` は本物の局面、`current` はそれを `disguised` で差し替えた局面で、適用するのは `current` である。
+ */
+function destinationOf(
+  state: GameState,
+  current: GameState,
+  move: Move,
+  known: (card: CardInstance) => boolean,
+): AnswerDestination | null {
   if (move.type !== "AnswerChoice") return null;
   const answer = move.answer;
-  const { events } = applyMove(state, move);
+  let events: DomainEvent[];
+  try {
+    events = applyMove(current, move).events;
+  } catch {
+    // `deckPlacementOf` と同じく、先読みの例外で指された手を止めない。ほかの答えの行き先は残す。
+    return null;
+  }
   if (answer.kind === "inPlay") {
     const attached = events.flatMap((event) =>
       (event.kind === "energy-attached" || event.kind === "tool-attached") &&
@@ -864,14 +899,17 @@ function destinationOf(state: GameState, move: Move): AnswerDestination | null {
         ? [event.card]
         : [],
     );
-    const known = knownTo(state, move.player);
-    if (attached.length === 0 || !attached.every((card) => known.has(card.instanceId))) return null;
+    if (attached.length === 0 || !attached.every(known)) return null;
     return { to: "attached", target: answer.target, cards: attached.map((card) => card.defId) };
   }
+  // 同じカードが選んだゾーンの外にもあると、`cardDef` の答えはそちらの移動にも当たる。
+  const prompt = state.choices.at(-1)?.prompt;
+  const from =
+    answer.kind === "cardDef" && prompt?.kind === "selectFromHiddenZone"
+      ? new Set(cardsIn(current, prompt.zone).map((card) => card.instanceId))
+      : null;
   const chosen = (card: CardInstance): boolean =>
-    answer.kind === "card"
-      ? card.instanceId === answer.card
-      : answer.kind === "cardDef" && card.defId === answer.defId;
+    answerPicks(answer, card) && (from === null || from.has(card.instanceId));
   let revealed = false;
   for (const event of events) {
     switch (event.kind) {
@@ -911,6 +949,37 @@ function destinationOf(state: GameState, move: Move): AnswerDestination | null {
     }
   }
   return revealed ? { to: "revealed" } : null;
+}
+
+function cardsIn(state: GameState, zone: Zone): CardInstance[] {
+  if (zone.kind === "stadium" || zone.kind === "active" || zone.kind === "bench") return [];
+  return state.players[zone.player][zone.kind];
+}
+
+function continuesEffect(reveals: EffectReveals, choice: Choice): boolean {
+  return choice.owner === reveals.owner && choice.source?.instanceId === reveals.source;
+}
+
+/**
+ * 手を 1 つ適用したあとの `effectReveals`。同じ効果の選択が続くあいだだけ、
+ * 選ぶ座席へ山札から見せたカードを足していく。
+ */
+function nextEffectReveals(
+  reveals: EffectReveals | null,
+  applied: { state: GameState; events: DomainEvent[] },
+): EffectReveals | null {
+  const next = applied.state.choices.at(-1);
+  if (next?.source == null) return null;
+  const kept = reveals !== null && continuesEffect(reveals, next) ? reveals.defIds : [];
+  const shown = applied.events.flatMap((event) =>
+    event.kind === "cards-revealed" &&
+    event.player === next.owner &&
+    event.zone.kind === "deck" &&
+    event.zone.player === next.owner
+      ? event.cards.map((card) => card.defId)
+      : [],
+  );
+  return { owner: next.owner, source: next.source.instanceId, defIds: [...kept, ...shown] };
 }
 
 export function clockView(match: Match, nowMs: number): ClockView {

@@ -2287,9 +2287,9 @@ function destinationText(answer, destination, view) {
     case "hand":
       return `${card} を${whose}手札に加える`;
     case "discard":
-      return `${card} をトラッシュする`;
+      return whose === "" ? `${card} をトラッシュする` : `${card} を相手のトラッシュに置く`;
     case "lostZone":
-      return `${card} をロストゾーンに置く`;
+      return `${card} を${whose}ロストゾーンに置く`;
     case "deck":
       return `${card} を${whose}山札にもどす`;
     case "prizes":
