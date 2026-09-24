@@ -450,8 +450,8 @@ async function loadBots() {
     return element;
   };
   $("bot").replaceChildren(...bots.map((bot) => option(bot.name, bot.name)));
-  $("bot-deck").replaceChildren(...decks.map((deck) => option(deck.label, deck.name)));
-  $("own-deck").append(...decks.map((deck) => option(deck.label, deck.name)));
+  $("bot-deck").replaceChildren(...decks.map((deck) => option(deck.label, deck.label)));
+  $("own-deck").append(...decks.map((deck) => option(deck.label, deck.label)));
   defaultOwnDeck();
   syncJoinButtons();
   $("bot-status").textContent =

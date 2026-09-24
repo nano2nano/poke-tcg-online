@@ -22,7 +22,7 @@ import {
   type PolicyFile,
 } from "./engine.js";
 
-/** 重みを置く場所。対局ログ（`matches/`）と同じバケットの別の接頭辞である。 */
+/** 重みの保存先。対局ログ（`matches/`）と同じバケットの別の接頭辞である。 */
 export const BOT_PREFIX = "bots/";
 
 /** 名前はキーの接頭辞より後ろそのもの。URL と画面にそのまま出るので、使える文字を絞る。 */
@@ -93,8 +93,8 @@ export interface BotEntry {
 export type BotLoad = { ok: true; bot: Bot } | { ok: false; error: string };
 
 /**
- * 読んだ重みを覚えておく数。形式 5 の 1 本は 2.2 MB で、Durable Object のメモリは 128 MB である。
- * 覚えていない重みは R2 から読み直す（形式 5 の読み込みは 1 秒前後）。
+ * 読んだ重みをキャッシュに持つ数。キャッシュの重みはそれぞれ Durable Object のメモリを占めるので、数を絞る。
+ * キャッシュに無い重みは R2 から読み直す。
  */
 const LOADED_LIMIT = 4;
 
@@ -104,21 +104,22 @@ const LOADED_LIMIT = 4;
  */
 const LIST_TTL_MS = 10_000;
 
-/** 重み 1 本の読み込みを待つ上限。R2 から 2.2 MB を読み、1 秒ほどで方策にする。 */
+/** 重み 1 本の読み込みを待つ上限。これを越えたら、読み込みが返ってこないものとして諦める。 */
 const LOAD_TIMEOUT_MS = 30_000;
 
 export class BotStore {
-  /** 名前 → 読んだときの etag と AI。置き換えられた重みは etag で見分けて読み直す。 */
+  /** キャッシュ。名前 → 読んだときの etag と AI。置き換えられた重みは etag で見分けて読み直す。 */
   private readonly loaded = new Map<string, { etag: string; bot: Bot }>();
   /**
-   * 名前と重みのハッシュ → まだどこかの対戦が使っている AI。上の覚えから落ちても、
+   * 名前と重みのハッシュ → まだどこかの対戦が使っている AI。上のキャッシュから落ちても、
    * 生きている対戦が持っている AI は作り直さずに渡す。作り直すと、同じ重みの写しが対戦の数だけメモリに並ぶ。
    */
   private readonly alive = new Map<string, WeakRef<Bot>>();
   private listed: { atMs: number; entries: Promise<BotEntry[]> } | null = null;
   /**
-   * 読み込みを 1 本ずつ並べる。形式 5 の読み込みは 1 秒ほど Durable Object を止め、読んでいるあいだは
-   * 2.2 MB のバイト列を抱える。並べれば、同時に何本頼まれても抱えるのは 1 本で、同じ重みは 2 本目から覚えを使う。
+   * 読み込みを 1 本ずつ並べる。形式 5 の読み込みは Durable Object を止め、読んでいるあいだは重みのバイト列を抱える。
+   * 並べれば、同時に何本頼まれても抱えるのは 1 本で（上限で諦めた読み込みが残っていなければ）、
+   * 同じ重みは 2 本目からキャッシュを使う。
    */
   private loading: Promise<unknown> = Promise.resolve();
 
@@ -161,17 +162,21 @@ export class BotStore {
 
   load(name: string): Promise<BotLoad> {
     // 返ってこない R2 の読み込みが 1 つあると、並んだ後ろの読み込みが全部止まる。待つのに上限を置く。
-    const run = this.loading.then(() =>
-      Promise.race([
-        this.loadNow(name),
-        new Promise<BotLoad>((resolve) =>
-          setTimeout(
-            () => resolve({ ok: false, error: `AI「${name}」の重みを読み終えられなかった` }),
-            LOAD_TIMEOUT_MS,
-          ),
-        ),
-      ]),
-    );
+    // 諦めた読み込みは止められないので、それが返るまでは次の読み込みと同時に走る。
+    const run = this.loading.then(async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<BotLoad>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ ok: false, error: `AI「${name}」の重みを読み終えられなかった` }),
+          LOAD_TIMEOUT_MS,
+        );
+      });
+      try {
+        return await Promise.race([this.loadNow(name), timedOut]);
+      } finally {
+        clearTimeout(timer);
+      }
+    });
     this.loading = run.catch(() => undefined);
     return run;
   }
@@ -217,23 +222,14 @@ export class BotStore {
 
 /**
  * AI が握れるデッキ。学習と評価に使っているデッキそのもので、表はエンジンが持つ。
- * 名前はエンジンの表に無いので、画面に出すものだけここに置く。無いものはラベルのまま出す。
+ * 画面にはエンジンの表のラベルをそのまま出す。カード名はエンジンのデータなので、ここには持たない。
  */
-const PRESET_NAMES: Readonly<Record<string, string>> = {
-  doraparuto: "ドラパルトex",
-  fudin: "フーディン",
-  kamitsuorochi: "カミツオロチex",
-  megarukario: "メガルカリオex",
-  nnozoroaku: "Nのゾロアークex",
-};
-
 export interface DeckPreset {
   label: string;
-  name: string;
 }
 
 export function deckPresets(): DeckPreset[] {
-  return metaDecks.map(({ label }) => ({ label, name: PRESET_NAMES[label] ?? label }));
+  return metaDecks.map(({ label }) => ({ label }));
 }
 
 export function presetDeck(label: string): DeckList | null {

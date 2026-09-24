@@ -351,7 +351,7 @@ describe("AI の座席を開く", () => {
   });
 });
 
-describe("重みの置き場", () => {
+describe("重みの保存先", () => {
   it("同じ重みは作り直さず、置き換えた重みは読み直す", async () => {
     ensureCards();
     const store = new BotStore(storage.archive);
@@ -365,18 +365,18 @@ describe("重みの置き場", () => {
     expect(replaced.ok && replaced.bot.identity.label).toBe("second");
   });
 
-  it("覚えから落ちても、生きている対戦が持っている AI は作り直さない", async () => {
+  it("キャッシュから落ちても、生きている対戦が持っている AI は作り直さない", async () => {
     ensureCards();
     const store = new BotStore(storage.archive);
     const names = ["keep-a", "keep-b", "keep-c", "keep-d", "keep-e"];
     for (const name of names)
       await storage.archive.put(`${BOT_PREFIX}${name}`, generationZero(name));
     const held = await store.load("keep-a");
-    // 覚えは 4 本なので、残りの 4 本を読むと最初の 1 本は覚えから落ちる。
+    // キャッシュは 4 本なので、残りの 4 本を読むと最初の 1 本はキャッシュから落ちる。
     for (const name of names.slice(1)) await store.load(name);
     const again = await store.load("keep-a");
     expect(held.ok && again.ok && held.bot === again.bot).toBe(true);
-    // 世代 0 の読み込みは 1 本 1 秒ほどかかる（初期値との照合を含む）ので、既定の 5 秒では足りない。
+    // 重みを 5 本、1 本ずつ方策にする（世代 0 は初期値との照合も含む）ので、既定の 5 秒では足りない。
   }, 30_000);
 
   it("名前の形が違うものと、置いていないものは断る", async () => {
