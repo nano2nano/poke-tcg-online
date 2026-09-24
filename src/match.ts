@@ -18,6 +18,7 @@ import {
   isBasicPokemon,
   legalMoves,
   movesEqual,
+  nextInt,
   opponent,
   playerView,
   projectEvents,
@@ -121,10 +122,15 @@ export interface Match {
    */
   mulligans: MulliganReveal[];
   /**
-   * 1 つの効果で、選んだカードを山札の上へ順に置いているあいだの、置いた分（3.2 節の `deckPlacement`）。
+   * 1 つの効果で、選んだカードを山札の端へ順に置いているあいだの、置いた分（3.2 節の `deckPlacement`）。
    * 置き終えるか、ほかの手が挟まれば null に戻る。
    */
   deckStack: DeckStack | null;
+  /**
+   * 手番側の座席へ送る `deckPlacement`。手を適用するたびに 1 度だけ求める。
+   * 求めるときに乱数を使うので、送るたびに求め直すと、同じ局面の `delta` と `sync` で食い違いうる。
+   */
+  deckPlacement: DeckPlacementView | null;
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
   version: number;
   clocks: [Clock, Clock];
@@ -167,6 +173,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     setupSinceMs: [options.nowMs, options.nowMs],
     mulligans: revealedHands(created.events),
     deckStack: null,
+    deckPlacement: null,
     version: 0,
     clocks: [createClock(options.bankMs), createClock(options.bankMs)],
     moves: [],
@@ -236,7 +243,8 @@ function record(
   const answered = move.type === "AnswerChoice" ? match.state.choices.at(-1) : undefined;
   const applied = applyMove(match.state, move);
   match.state = applied.state;
-  match.deckStack = nextDeckStack(match.deckStack, answered, applied.state, applied.events);
+  match.deckStack = nextDeckStack(match.deckStack, answered, move, applied);
+  match.deckPlacement = deckPlacementOf(match.state, match.deckStack);
   match.version += 1;
   match.moves.push({
     move,
@@ -542,7 +550,7 @@ export function legalMovesFor(match: Match, seat: Player): Move[] | null {
 }
 
 /** 選んだカードを山札へ順に置く効果で、置いた分。`source` は効果を起こしたカードのインスタンス ID。 */
-interface DeckStack {
+export interface DeckStack {
   owner: Player;
   source: string;
   /** 置いた順。 */
@@ -551,7 +559,7 @@ interface DeckStack {
 
 /**
  * 座席の画面に出す、今選ぶカードが山札のどこへ入るか（3.2 節の `deckPlacement`）。
- * どちらの端でも、選んだカードは先に置いた分のすぐ下へ入る。
+ * 上の端でも下の端でも、選んだカードは先に置いた分のすぐ下へ入る。
  */
 export interface DeckPlacementView {
   edge: "top" | "bottom";
@@ -565,37 +573,52 @@ export interface DeckPlacementView {
 const PLACEMENT_LOOKAHEAD_LIMIT = 16;
 
 /**
- * 乱数の種を替えて試す回数。山札を切る効果で、置いたカードがたまたま端に並ぶ確率は、
- * 1 回ごとにおよそ 山札の枚数分の 1 で、回数だけ掛け合わさる。
+ * 乱数の種と山札の並びを替えて試す回数。山札を切る効果では、置いたカードがたまたま端に並ぶ確率が
+ * 1 回ごとにおよそ山札の枚数分の 1 で、コインで行き先が変わる効果なら 2 分の 1 で、回数だけ掛け合わさる。
  */
-const PLACEMENT_TRIES = 3;
+const PLACEMENT_TRIES = 8;
+
+export function deckPlacementFor(match: Match, seat: Player): DeckPlacementView | null {
+  return toMove(match) === seat ? match.deckPlacement : null;
+}
 
 /**
  * 選んだカードを山札の上か下へ順に置く選択（「好きな順番に入れ替えて、山札の上にもどす」型）のあいだ、
  * 今選ぶカードがどこへ入るか。そのほかの選択では null。
  *
  * エンジンの選択はカードを 1 枚ずつ選ばせるだけで、何枚目を選んでいるかも、選んだカードの行き先も
- * 座席へ渡さない。名前でカードを特別扱いせず、効果の終わりまで答えてみて、置いたカードが山札の端に
- * 置いた順で並ぶかで見分ける。途中で山札を切る効果では並びが乱数で決まるので、乱数の種を差し替えて
- * 何度か試し、どの回でも同じ端に並んだときだけ出す。本物の種で試すと、これから切る結果を座席へ漏らす。
+ * 座席へ渡さない。名前でカードを特別扱いせず、答えてみて見分ける。
+ *
+ * 試すのは、選ぶ座席に見えない山札の並びと乱数の種を差し替えた局面である。本物の局面で試すと、
+ * これから切る結果や山札の並びが、出すか出さないかに表れて座席へ漏れる。
  */
-export function deckPlacementFor(match: Match, seat: Player): DeckPlacementView | null {
-  const choice = match.state.choices.at(-1);
-  if (toMove(match) !== seat || choice?.source == null) return null;
-  const stack = match.deckStack;
-  const placed = stack !== null && continuesStack(stack, choice) ? stack.placed : [];
+export function deckPlacementOf(
+  state: GameState,
+  stack: DeckStack | null,
+): DeckPlacementView | null {
+  const choice = state.choices.at(-1);
+  if (choice?.source == null) return null;
+  const seat = choice.owner;
   const source = choice.source.instanceId;
-  const edge = stackedEdge(match.state, seat, source, placed);
-  for (let tried = 1; tried < PLACEMENT_TRIES && edge !== null; tried++) {
-    if (stackedEdge(match.state, seat, source, placed) !== edge) return null;
+  const placed = stack !== null && continuesStack(stack, choice) ? stack.placed : [];
+  try {
+    const edge = stackedEdge(state, seat, source, placed);
+    if (edge === null) return null;
+    for (let tried = 1; tried < PLACEMENT_TRIES; tried++) {
+      if (stackedEdge(state, seat, source, placed) !== edge) return null;
+    }
+    if (!everyAnswerStacks(state, seat, placed, edge)) return null;
+    return { edge, nth: placed.length + 1, above: placed.map((card) => card.defId) };
+  } catch {
+    // 先読みは誰も選んでいない道をたどる。そこでエンジンが例外を上げても、指された手は適用済みなので止めない。
+    return null;
   }
-  if (edge === null) return null;
-  return { edge, nth: placed.length + 1, above: placed.map((card) => card.defId) };
 }
 
 /**
- * `source` の選択に先頭の候補で答え続けて効果を終えたとき、先に置いた分（`placed`）と
- * これから置く分が、山札のどちらかの端に置いた順で並ぶなら、その端。
+ * 先頭の候補で答え続けて効果を終えたとき、先に置いた分（`placed`）とこれから置く分が、
+ * 山札のどちらかの端に置いた順で並ぶなら、その端。
+ * 途中で山札を切る効果は、並びが乱数で決まるので、試すたびに端に並んだり並ばなかったりする。
  */
 function stackedEdge(
   state: GameState,
@@ -603,7 +626,7 @@ function stackedEdge(
   source: string,
   placed: readonly CardInstance[],
 ): "top" | "bottom" | null {
-  let current: GameState = { ...state, rng: createRng(randomBytes(16).toString("hex")) };
+  let current = disguised(state, seat, placed);
   const order = placed.map((card) => card.instanceId);
   for (let step = 0; ; step++) {
     const choice = current.choices.at(-1);
@@ -612,7 +635,7 @@ function stackedEdge(
     const answer = legalMoves(current).find(isCardAnswer);
     if (answer === undefined) return null;
     const applied = applyMove(current, answer);
-    const moved = movedIntoDeck(applied.events, seat);
+    const moved = chosenIntoDeck(answer, applied.events, seat);
     // 今の選択そのものが山札へ置かないなら、置く順番の問題ではない。
     if (moved === null && step === 0) return null;
     if (moved !== null) order.push(moved.instanceId);
@@ -622,6 +645,50 @@ function stackedEdge(
   if (sameOrder(deck.slice(0, order.length), order)) return "top";
   if (sameOrder(deck.slice(-order.length), order)) return "bottom";
   return null;
+}
+
+/**
+ * どの候補を選んでも、先に置いた分のすぐ下の同じ端へ入るか。先読みは先頭の候補しかたどらないが、
+ * 見出しはすべての候補のボタンに付く。カードによって行き先の変わる効果では付けない。
+ */
+function everyAnswerStacks(
+  state: GameState,
+  seat: Player,
+  placed: readonly CardInstance[],
+  edge: "top" | "bottom",
+): boolean {
+  const current = disguised(state, seat, placed);
+  return legalMoves(current)
+    .filter(isCardAnswer)
+    .every((answer) => {
+      const applied = applyMove(current, answer);
+      const moved = chosenIntoDeck(answer, applied.events, seat);
+      if (moved === null) return false;
+      const order = [...placed, moved].map((card) => card.instanceId);
+      const deck = applied.state.players[seat].deck.map((card) => card.instanceId);
+      return sameOrder(
+        edge === "top" ? deck.slice(0, order.length) : deck.slice(-order.length),
+        order,
+      );
+    });
+}
+
+/** 選ぶ座席に見えない山札の並びと、乱数の種を差し替えた局面。先に置いた分はその位置に残す。 */
+function disguised(state: GameState, seat: Player, placed: readonly CardInstance[]): GameState {
+  let rng = createRng(randomBytes(16).toString("hex"));
+  const kept = new Set(placed.map((card) => card.instanceId));
+  const deck = [...state.players[seat].deck];
+  const slots = deck.flatMap((card, index) => (kept.has(card.instanceId) ? [] : [index]));
+  for (let last = slots.length - 1; last > 0; last--) {
+    const [pick, next] = nextInt(rng, last + 1);
+    rng = next;
+    const a = slots[last] as number;
+    const b = slots[pick] as number;
+    [deck[a], deck[b]] = [deck[b] as CardInstance, deck[a] as CardInstance];
+  }
+  const players: GameState["players"] = [state.players[0], state.players[1]];
+  players[seat] = { ...state.players[seat], deck };
+  return { ...state, rng, players };
 }
 
 function isCardAnswer(move: Move): boolean {
@@ -634,12 +701,19 @@ function sameOrder(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
-/** 手を適用したときに、持ち主の山札へ入ったカード。 */
-function movedIntoDeck(events: DomainEvent[], owner: Player): CardInstance | null {
+/**
+ * 答えで選んだカードが持ち主の山札へ入ったなら、そのカード。
+ * 同じ手でほかのカードが山札へ入っても拾わない。拾うと、座席に見えないカードの `defId` を `above` で渡しうる。
+ */
+function chosenIntoDeck(move: Move, events: DomainEvent[], owner: Player): CardInstance | null {
+  if (move.type !== "AnswerChoice") return null;
+  const answer = move.answer;
   for (const event of events) {
-    if (event.kind === "card-moved" && event.to.kind === "deck" && event.to.player === owner) {
-      return event.card;
+    if (event.kind !== "card-moved" || event.to.kind !== "deck" || event.to.player !== owner) {
+      continue;
     }
+    if (answer.kind === "card" && event.card.instanceId === answer.card) return event.card;
+    if (answer.kind === "cardDef" && event.card.defId === answer.defId) return event.card;
   }
   return null;
 }
@@ -652,10 +726,10 @@ function continuesStack(stack: DeckStack, choice: Choice): boolean {
 function nextDeckStack(
   stack: DeckStack | null,
   answered: Choice | undefined,
-  state: GameState,
-  events: DomainEvent[],
+  move: Move,
+  applied: { state: GameState; events: DomainEvent[] },
 ): DeckStack | null {
-  const next = state.choices.at(-1);
+  const next = applied.state.choices.at(-1);
   if (answered?.source == null || next === undefined) return null;
   const current: DeckStack = {
     owner: answered.owner,
@@ -663,7 +737,7 @@ function nextDeckStack(
     placed: stack !== null && continuesStack(stack, answered) ? stack.placed : [],
   };
   if (!continuesStack(current, next)) return null;
-  const moved = movedIntoDeck(events, answered.owner);
+  const moved = chosenIntoDeck(move, applied.events, answered.owner);
   return moved === null ? current : { ...current, placed: [...current.placed, moved] };
 }
 

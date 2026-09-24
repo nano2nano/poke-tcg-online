@@ -22,6 +22,7 @@ import { commitSeed } from "../src/fingerprint.js";
 import {
   createMatch,
   deckPlacementFor,
+  deckPlacementOf,
   submitMove,
   toMove,
   type DeckPlacementView,
@@ -234,9 +235,8 @@ describe("山札の端へ順に置く選択", () => {
       return returned.length > 0 && deck.slice(-returned.length).join() === returned.join();
     });
     expect(lucky).toBeDefined();
-    match.state = lucky as GameState;
-    expect(match.state.choices.at(-1)?.owner).toBe(seat);
-    expect(deckPlacementFor(match, seat)).toBeNull();
+    expect(lucky?.choices.at(-1)?.owner).toBe(seat);
+    expect(deckPlacementOf(lucky as GameState, null)).toBeNull();
   });
 
   it("効果の出どころを持たない選択（対戦準備など）では出さない", () => {

@@ -112,7 +112,7 @@ export interface SyncMessage {
   legalMoves: Move[] | null;
   /** 対戦準備でまとめて出せる候補か、出した答え（2.4 節）。準備の外では null。 */
   setup: SetupView | null;
-  /** 選んだカードを山札の上へ順に置く選択なら、今のカードが上から何枚目に入るか。選ぶ座席にだけ入る。 */
+  /** 選んだカードを山札の端へ順に置く選択なら、今選ぶカードがどこへ入るか。選ぶ座席にだけ入る（3.2 節）。 */
   deckPlacement: DeckPlacementView | null;
   /** 対戦準備で引き直すときに見せた手札。両座席に同じものが入る（2.4 節）。 */
   mulligans: MulliganReveal[];

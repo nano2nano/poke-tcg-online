@@ -1960,7 +1960,6 @@ function placementPrompt(placement) {
   return `山札の上から ${placement.nth} 枚目に置くカードを選んでください。${note}`;
 }
 
-/** 山札へ置く答えの見出しの、置き場所。 */
 function placementPlace(placement) {
   if (placement.edge === "bottom") return "山札のいちばん下";
   return placement.nth === 1 ? "山札のいちばん上" : `山札の上から ${placement.nth} 枚目`;
@@ -2056,7 +2055,7 @@ function attackName(move, view) {
 function describeAnswer(answer, view, placement = null) {
   const choice = view?.choices?.at(-1);
   if (placement !== null && (answer.kind === "card" || answer.kind === "cardDef")) {
-    const card = answer.kind === "card" ? cardName(answer.card, view) : nameOf(answer.defId);
+    const card = answer.kind === "card" ? cardWithPlace(answer.card, view) : nameOf(answer.defId);
     return `${card} を${placementPlace(placement)}に置く`;
   }
   const setup = SETUP_ANSWERS[choice?.kind];
