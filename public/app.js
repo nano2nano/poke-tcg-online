@@ -22,7 +22,7 @@ let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
 /** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
-let lastMoves = { moves: null, playing: false, setup: null };
+let lastMoves = { moves: null, playing: false, setup: null, placement: null };
 /** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
 let setupDraft = { active: null, bench: [], sent: false };
 /** 対戦準備で引き直すときに見せた手札。名前の表が遅れて届いたら描き直す。 */
@@ -215,7 +215,7 @@ function redraw() {
   restore();
   if (lastView !== null) {
     renderView(lastView);
-    renderMoves(lastMoves.moves, lastMoves.playing, lastMoves.setup);
+    renderMoves(lastMoves.moves, lastMoves.playing, lastMoves.setup, lastMoves.placement);
     renderMulligans(lastMulligans);
   }
   if (lastWatchView !== null) renderWatch(lastWatchView);
@@ -1288,7 +1288,7 @@ function receive(message) {
       showResults(results, $("table"));
       renderClock(message.clock);
       setupDraft.sent = false;
-      renderMoves(message.legalMoves, true, message.setup);
+      renderMoves(message.legalMoves, true, message.setup, message.deckPlacement ?? null);
       // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
       renderMulligans(message.mulligans ?? lastMulligans);
       return;
@@ -1731,11 +1731,16 @@ function renderClock(clock) {
 /**
  * `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。
  * `setup` はサーバが送る準備の状態で、あるあいだは同じ選択を 1 手ずつ指すボタンを並べない。
+ * `placement` は、選んだカードを山札の端へ順に置く選択のあいだだけサーバが送る（`deckPlacement`）。
  */
-function renderMoves(moves, playing = true, setup = null) {
-  lastMoves = { moves, playing, setup };
+function renderMoves(moves, playing = true, setup = null, placement = null) {
+  lastMoves = { moves, playing, setup, placement };
   const prompt = $("move-prompt");
-  prompt.textContent = playing ? promptText(lastView, moves !== null, setup) : "";
+  prompt.textContent = !playing
+    ? ""
+    : moves !== null && placement !== null
+      ? placementPrompt(placement)
+      : promptText(lastView, moves !== null, setup);
   prompt.hidden = prompt.textContent === "";
   renderSetupForm(playing && setup?.kind === "choose" ? setup : null);
   const container = $("moves");
@@ -1751,7 +1756,7 @@ function renderMoves(moves, playing = true, setup = null) {
   const offered = shown.length === moves.length ? {} : { offered: shown.map(({ index }) => index) };
   for (const { move } of shown) {
     const button = document.createElement("button");
-    button.textContent = describeMove(move);
+    button.textContent = describeMove(move, lastView, placement);
     button.addEventListener("click", () => send({ t: "move", stateVersion, move, ...offered }));
     button.dataset.aim = JSON.stringify(moveTargets(move));
     for (const type of ["pointerenter", "pointerleave", "focus", "blur"]) {
@@ -1938,6 +1943,29 @@ function promptText(view, mine, setup = null) {
 }
 
 /**
+ * 選んだカードを山札の端へ順に置く選択の案内。エンジンはカードを 1 枚ずつ選ばせるだけなので、
+ * 書かないと、今選んでいるのが何枚目で、先に選んだカードとどちらが上になるのかが分からない。
+ */
+function placementPrompt(placement) {
+  const above = placement.above.map(nameOf).join("、");
+  if (placement.edge === "bottom") {
+    const note = above === "" ? "" : ` 先に置いた ${above} は、このカードの上になります。`;
+    return `山札のいちばん下に置くカードを選んでください。${note}`;
+  }
+  if (placement.nth === 1) return "山札のいちばん上に置くカードを選んでください。";
+  const note =
+    placement.above.length === 1
+      ? `いちばん上には ${above} を置きました。`
+      : `上から ${above} の順に置きました。`;
+  return `山札の上から ${placement.nth} 枚目に置くカードを選んでください。${note}`;
+}
+
+function placementPlace(placement) {
+  if (placement.edge === "bottom") return "山札のいちばん下";
+  return placement.nth === 1 ? "山札のいちばん上" : `山札の上から ${placement.nth} 枚目`;
+}
+
+/**
  * 対戦準備の選択への答えの見出し。答えはカードか「はい」「いいえ」だけなので、
  * そのままではバトル場とベンチのどちらに出すのか、「いいえ」で何が起きるのかが読めない。
  */
@@ -1956,7 +1984,7 @@ const SETUP_ANSWERS = {
  * 名前を引くのは その手を指す直前の盤面 からである。指したあとの盤面では、
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
-function describeMove(move, view = lastView) {
+function describeMove(move, view = lastView, placement = null) {
   const card = (instanceId) => cardName(instanceId, view);
   const target = (inPlayId) => pokemonLabel(inPlayId, view, false);
   switch (move.type) {
@@ -1997,7 +2025,7 @@ function describeMove(move, view = lastView) {
     case "EndTurn":
       return "番を終わる";
     case "AnswerChoice":
-      return describeAnswer(move.answer, view);
+      return describeAnswer(move.answer, view, placement);
     default:
       return move.type;
   }
@@ -2024,8 +2052,12 @@ function attackName(move, view) {
  * カード、場の個体、位置、番号のいずれかである。
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
-function describeAnswer(answer, view) {
+function describeAnswer(answer, view, placement = null) {
   const choice = view?.choices?.at(-1);
+  if (placement !== null && (answer.kind === "card" || answer.kind === "cardDef")) {
+    const card = answer.kind === "card" ? cardWithPlace(answer.card, view) : nameOf(answer.defId);
+    return `${card} を${placementPlace(placement)}に置く`;
+  }
   const setup = SETUP_ANSWERS[choice?.kind];
   if (setup?.[answer.kind] !== undefined) {
     return answer.kind === "card"

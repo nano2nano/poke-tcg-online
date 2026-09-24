@@ -2494,3 +2494,52 @@ test("手札の同じカードを選ぶ答えは 1 つに畳んで見せた手�
   const labels = await buttons.allTextContents();
   expect(new Set(labels).size).toBe(4);
 });
+
+test("山札の上へ順に置く選択では、何枚目に置くかを案内とボタンに出す", async ({ page }) => {
+  const sync = crowdedSync(10) as CrowdedSync & { deckPlacement: object | null };
+  const choiceId = "山札の上に置く";
+  const defIds = [...new Set(sync.view.self.hand.map((card) => card.defId))];
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt: {
+        kind: "selectFromHiddenZone",
+        zone: { kind: "deck", player: 0 },
+        candidates: defIds,
+      },
+    },
+  ];
+  sync.legalMoves = defIds.map((defId) => ({
+    type: "AnswerChoice",
+    player: 0,
+    choiceId,
+    answer: { kind: "cardDef", defId },
+  }));
+  const prompt = page.locator("#move-prompt");
+  const buttons = page.locator("#moves button");
+
+  // 何枚目かが届かないふつうの選択では、案内を出さない。
+  sync.deckPlacement = null;
+  await openWith(page, sync);
+  await expect(buttons).toHaveCount(defIds.length);
+  await expect(prompt).toBeHidden();
+  const plain = await buttons.allTextContents();
+
+  sync.deckPlacement = { edge: "top", nth: 1, above: [] };
+  await openWith(page, sync);
+  await expect(prompt).toBeVisible();
+  const first = await buttons.allTextContents();
+
+  sync.deckPlacement = { edge: "top", nth: 2, above: [defIds[0]] };
+  await openWith(page, sync);
+  await expect(prompt).toBeVisible();
+  const second = await buttons.allTextContents();
+
+  // 1 枚目と 2 枚目で見出しが変わり、どちらもふつうの選択の見出しと違う。
+  for (let index = 0; index < defIds.length; index++) {
+    expect(new Set([plain[index], first[index], second[index]]).size).toBe(3);
+  }
+});

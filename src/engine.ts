@@ -39,6 +39,7 @@ export type {
   ApplyResult,
   CardDefId,
   CardInstance,
+  Choice,
   DeckList,
   DomainEvent,
   GameOutcome,
