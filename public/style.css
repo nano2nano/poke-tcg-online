@@ -262,6 +262,9 @@ button.secondary {
 .mat.mirrored > .prize-side {
   flex-direction: column-reverse;
 }
+.prize-side > [data-zone="lost"] {
+  --w: 56px;
+}
 .mat > .field {
   grid-area: field;
 }
@@ -271,6 +274,14 @@ button.secondary {
   flex-direction: column;
   gap: 8px;
   --w: 56px;
+}
+/* 山札はバトル場の側、トラッシュは手前に置くので、向かいの側では上下を返す。 */
+.mat.mirrored > .piles {
+  flex-direction: column-reverse;
+}
+/* 盤面を右の欄と並べる横に広い画面でだけ出す。狭い画面では見出しの説明が同じことを言っている。 */
+.table-hint {
+  display: none;
 }
 .field {
   display: flex;
@@ -554,7 +565,18 @@ button.secondary {
     --w: 44px;
   }
   .mat > .prize-side {
+    flex-direction: row;
+    justify-content: center;
     --w: 30px;
+  }
+  .mat.mirrored > .prize-side {
+    flex-direction: row-reverse;
+  }
+  .mat.mirrored > .piles {
+    flex-direction: row-reverse;
+  }
+  .prize-side > [data-zone="lost"] {
+    --w: 44px;
   }
   .zone.active {
     --w: 84px;
@@ -579,7 +601,18 @@ button.secondary {
     max-width: none;
     padding: 8px 16px;
   }
+  /* 見出しの説明は盤面を押し下げるので出さず、カードを大きく出す方法だけを右の欄に残す。 */
   body:has(> .table:not([hidden])) > header {
+    display: none;
+  }
+  .table-hint {
+    display: block;
+  }
+  /*
+   * 対戦のあいだは、下に続くリプレイの欄を出さない。出すとページがスクロールでき、盤面の上でホイールを回すと
+   * 盤面ごと上へずれる。決着したら、その対戦をリプレイで開けるように戻す。
+   */
+  body:has(> #table:not([hidden]):not([data-ended])) > #history {
     display: none;
   }
   .table:not([hidden]) {
@@ -686,10 +719,11 @@ button.secondary {
   .table .mat.mirrored > .prize-side {
     justify-self: end;
   }
-  /* 山札はバトル場の側、トラッシュは手前に置く。向かいの側では上下を返す。 */
   .table .mat.mirrored > .piles {
     justify-self: start;
-    flex-direction: column-reverse;
+  }
+  .table .prize-side > [data-zone="lost"] {
+    --w: calc(var(--b) * 0.72);
   }
   .table .field {
     gap: 8px;

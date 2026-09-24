@@ -758,6 +758,35 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   await close();
 });
 
+test("横に広い画面では、対戦のあいだリプレイの欄を出さず、決着したら戻す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `たたむ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await a.setViewportSize({ width: 1920, height: 900 });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#table")).toBeVisible();
+  await expect(a.locator("#history")).toBeHidden();
+  // ページがスクロールできると、盤面の上でホイールを回したときに盤面ごとずれる。
+  expect(
+    await a.evaluate(() => {
+      const root = Reflect.get(globalThis, "document").documentElement as { scrollHeight: number };
+      return root.scrollHeight - (Reflect.get(globalThis, "innerHeight") as number);
+    }),
+  ).toBeLessThanOrEqual(0);
+
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+  await expect(a.locator("#history")).toBeVisible();
+
+  await close();
+});
+
 async function seatPair(a: Page, b: Page, room: string): Promise<void> {
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
