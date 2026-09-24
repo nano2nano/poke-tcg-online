@@ -25,6 +25,29 @@ function matchReadyForPlans(prefix: string): Match {
   throw new Error(`両座席ともまとめて出せる開始局面が見つからない: ${prefix}`);
 }
 
+/**
+ * 片方だけ最初の手札にたねが無く、1 度のマリガンでたねが来る対戦。どちらになるかは seed で決まるので、
+ * 同じ nonce の対戦で先に確かめてから返す。
+ */
+function oneSidedMulligan(prefix: string): { match: Match; ahead: Player; lacker: Player } {
+  ensureCards();
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const nonce = `${prefix}-${attempt}`;
+    const probe = newMatch(nonce);
+    const lacking = ([0, 1] as Player[]).filter(
+      (seat) => probe.state.players[seat].markers.noBasicDeclared,
+    );
+    if (lacking.length !== 1) continue;
+    const lacker = lacking[0]!;
+    const ahead = (1 - lacker) as Player;
+    const plan = planOf(probe, ahead);
+    submitSetup(probe, ahead, plan.active, plan.bench, 0);
+    if (setupViewFor(probe, lacker)?.kind !== "choose") continue;
+    return { match: newMatch(nonce), ahead, lacker };
+  }
+  throw new Error(`片方だけが 1 度引き直す対戦が見つからない: ${prefix}`);
+}
+
 /** バトル場に 1 枚、残りのたねからベンチに 1 枚。 */
 function planOf(match: Match, seat: Player): { active: string; bench: string[] } {
   const view = setupViewFor(match, seat);
@@ -171,26 +194,65 @@ describe("対戦準備をまとめて出す", () => {
     });
   });
 
-  it("追加ドローに答えてからまとめて出したとき、考えた時間は追加ドローの後から測る", () => {
+  it("引き直す座席には、引き直すまで候補を出さず、見せた手札を両座席に残す", () => {
+    const { match, ahead, lacker } = oneSidedMulligan("plan-mulligan");
+    expect(setupViewFor(match, lacker)).toBeNull();
+    expect(
+      submitSetup(match, lacker, match.state.players[lacker].hand[0]!.instanceId, [], 0),
+    ).toEqual({
+      ok: false,
+      reason: "not-your-turn",
+    });
+
+    // たねのある側の答えは、相手のマリガンを待たずに流れる。
+    const plan = planOf(match, ahead);
+    const outcome = submitSetup(match, ahead, plan.active, plan.bench, 10_000);
+    expect(outcome.ok && outcome.events.length > 0).toBe(true);
+    expect(match.mulligans.map((reveal) => reveal.player)).toEqual([lacker]);
+    const view = setupViewFor(match, lacker);
+    if (view?.kind !== "choose") throw new Error("引き直したあとにまとめて出せない");
+    const hand = match.state.players[lacker].hand.map((card) => card.instanceId);
+    expect(view.active.every((id) => hand.includes(id))).toBe(true);
+  });
+
+  it("対戦の開始でおたがいに引き直したときも、見せた手札が残る", () => {
     ensureCards();
     let match: Match | undefined;
     for (let attempt = 0; attempt < 400 && match === undefined; attempt++) {
-      const candidate = newMatch(`plan-bonus-${attempt}`);
-      if (candidate.state.choices.at(-1)?.kind === "setup-bonus-draw") match = candidate;
+      const candidate = newMatch(`plan-both-mulligan-${attempt}`);
+      if (candidate.mulligans.length >= 2) match = candidate;
     }
-    if (match === undefined) throw new Error("追加ドローから始まる対戦が見つからない");
-    const drawer = toMove(match) as Player;
-    const decline = legalMoves(match.state).find(
-      (move) => move.type === "AnswerChoice" && move.answer.kind === "decline",
-    ) as Move;
-    expect(submitMove(match, drawer, match.version, decline, 10_000).ok).toBe(true);
-    if (setupViewFor(match, drawer)?.kind !== "choose")
-      throw new Error("まとめて出せる局面ではない");
+    if (match === undefined) throw new Error("おたがいに引き直して始まる対戦が見つからない");
+    // おたがいのマリガンは両者が同時に見せる。
+    expect(new Set(match.mulligans.slice(0, 2).map((reveal) => reveal.player))).toEqual(
+      new Set([0, 1]),
+    );
+  });
 
-    const plan = planOf(match, drawer);
+  it("引き直した座席の考えた時間は、引き直したときから測る", () => {
+    const { match, ahead, lacker } = oneSidedMulligan("plan-mulligan-time");
+    const plan = planOf(match, ahead);
+    submitSetup(match, ahead, plan.active, plan.bench, 10_000);
+    const own = planOf(match, lacker);
     const before = match.moves.length;
-    expect(submitSetup(match, drawer, plan.active, plan.bench, 30_000).ok).toBe(true);
-    const planned = match.moves.slice(before).find((logged) => logged.move.player === drawer);
-    expect(planned?.elapsedMs).toBe(20_000);
+    expect(submitSetup(match, lacker, own.active, own.bench, 25_000).ok).toBe(true);
+    const planned = match.moves.slice(before).find((logged) => logged.move.player === lacker);
+    expect(planned?.elapsedMs).toBe(15_000);
+  });
+
+  it("追加ドローは枚数を選んで 1 手ずつ答え、そのあとのベンチもまとめて出さない", () => {
+    const { match, ahead, lacker } = oneSidedMulligan("plan-mulligan-bonus");
+    for (const seat of [ahead, lacker]) {
+      const plan = planOf(match, seat);
+      expect(submitSetup(match, seat, plan.active, plan.bench, 0).ok).toBe(true);
+    }
+    expect(match.state.choices.at(-1)?.kind).toBe("setup-bonus-draw");
+    expect(toMove(match)).toBe(ahead);
+    expect(setupViewFor(match, ahead)).toBeNull();
+    const one = legalMoves(match.state).find(
+      (move) => move.type === "AnswerChoice" && move.answer.kind === "bonusDrawCount",
+    ) as Move;
+    expect(submitMove(match, ahead, match.version, one, 0).ok).toBe(true);
+    expect(setupViewFor(match, ahead)).toBeNull();
   });
 });

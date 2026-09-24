@@ -3,7 +3,14 @@
 import { describe, expect, it } from "vitest";
 import { legalMoves, type Move, type Player } from "../src/engine.js";
 import { MOVE_ALLOWANCE_MS } from "../src/clock.js";
-import { applyTimeout, concede, engineOutcome, submitMove, toMove } from "../src/match.js";
+import {
+  applyTimeout,
+  concede,
+  engineOutcome,
+  submitMove,
+  toMove,
+  type Match,
+} from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
 
 function firstLegal(match: ReturnType<typeof newMatch>): Move {
@@ -173,11 +180,34 @@ describe("決着", () => {
  * 画面の案内（`public/app.js` の `promptText`）は、この順を前提に書いてある。
  * エンジンが順を変えたら、案内も書き直す。
  */
+/**
+ * 最初の手札で「たねが無い」と伝えた座席の数が `lacking` の対戦を、`count` 個。どうなるかは seed で
+ * 決まるので、作ってみて選ぶ。片方だけのときは、1 度のマリガンでたねが来る対戦に限る。
+ */
+function setupMatches(prefix: string, lacking: number, count: number): Match[] {
+  ensureCards();
+  const found: Match[] = [];
+  for (let attempt = 0; attempt < 400 && found.length < count; attempt++) {
+    const nonce = `${prefix}-${attempt}`;
+    const match = newMatch(nonce);
+    const declared = match.state.players.filter((side) => side.markers.noBasicDeclared).length;
+    if (declared !== lacking) continue;
+    if (lacking > 0) {
+      const probe = newMatch(nonce);
+      while (probe.state.phase === "setup") {
+        submitMove(probe, toMove(probe) as Player, probe.version, firstLegal(probe), 0);
+      }
+      if (probe.mulligans.length !== 1) continue;
+    }
+    found.push(match);
+  }
+  if (found.length < count) throw new Error(`準備の形が合う対戦が足りない: ${prefix}`);
+  return found;
+}
+
 describe("対戦準備", () => {
-  it("先攻、後攻の順にバトル場を選び終えてから、ベンチを選ぶ", () => {
-    ensureCards();
-    for (const nonce of ["setup-order-1", "setup-order-2", "setup-order-3"]) {
-      const match = newMatch(nonce);
+  it("両者にたねがあれば、先攻、後攻の順にバトル場を選び終えてから、ベンチを選ぶ", () => {
+    for (const match of setupMatches("setup-order", 0, 3)) {
       const placements: string[] = [];
       while (match.state.phase === "setup") {
         const top = match.state.choices.at(-1);
@@ -193,6 +223,46 @@ describe("対戦準備", () => {
         "setup-place-active 後攻",
       ]);
       expect(placements.slice(2).every((each) => each.startsWith("setup-place-bench"))).toBe(true);
+      expect(match.mulligans).toEqual([]);
+    }
+  });
+
+  /**
+   * 公式ルールガイド「G 対戦準備」5.b〜5.d と手順 7。たねのある側は、相手が引き直す前にサイドまで進み、
+   * 相手のマリガンが済んでから追加で引く。エンジンがこの順を変えたら、まとめて出す答えの扱いを見直す。
+   */
+  it("片方だけにたねが無ければ、ある側がベンチまで出してから相手が引き直し、追加ドローは最後に来る", () => {
+    for (const match of setupMatches("setup-one-sided", 1, 3)) {
+      const lacker = ([0, 1] as Player[]).find(
+        (seat) => match.state.players[seat].markers.noBasicDeclared,
+      ) as Player;
+      const ahead = (1 - lacker) as Player;
+      const steps: { kind: string; owner: Player }[] = [];
+      let revealsBeforeBonus = -1;
+      while (match.state.phase === "setup") {
+        const top = match.state.choices.at(-1);
+        if (top !== undefined) {
+          steps.push({ kind: top.kind, owner: top.owner });
+          if (top.kind === "setup-bonus-draw") revealsBeforeBonus = match.mulligans.length;
+        }
+        const mover = toMove(match) as Player;
+        expect(submitMove(match, mover, match.version, firstLegal(match), 0).ok).toBe(true);
+      }
+      const firstOfLacker = steps.findIndex((step) => step.owner === lacker);
+      const bonus = steps.findIndex((step) => step.kind === "setup-bonus-draw");
+      expect(steps.slice(0, firstOfLacker).every((step) => step.owner === ahead)).toBe(true);
+      expect(steps[0]?.kind).toBe("setup-place-active");
+      expect(steps[bonus]?.owner).toBe(ahead);
+      expect(steps.slice(firstOfLacker, bonus).every((step) => step.owner === lacker)).toBe(true);
+      // 追加で引いたあとは、引いた側のベンチが開き直すだけである。
+      expect(
+        steps
+          .slice(bonus + 1)
+          .every((step) => step.owner === ahead && step.kind === "setup-place-bench"),
+      ).toBe(true);
+      // 引き直した手札は両座席に見せる形で残り、追加ドローより前にそろっている。
+      expect(match.mulligans.map((reveal) => reveal.player)).toEqual([lacker]);
+      expect(revealsBeforeBonus).toBe(1);
     }
   });
 });

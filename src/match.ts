@@ -24,6 +24,7 @@ import {
 } from "./engine.js";
 import type {
   CardDefId,
+  CardInstance,
   DeckList,
   DomainEvent,
   GameOutcome,
@@ -111,6 +112,11 @@ export interface Match {
    * 手番の起点（`turnStartedAtMs`）とは別に持つ。
    */
   setupSinceMs: [number, number];
+  /**
+   * 対戦準備で引き直すときに見せた手札（2.4 節）。公開の情報だが、マリガンは座席の手の外
+   * （対戦の開始や相手の手の途中）で起きるので、イベントだけでは届かない座席がある。
+   */
+  mulligans: MulliganReveal[];
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
   version: number;
   clocks: [Clock, Clock];
@@ -151,6 +157,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     state: created.state,
     setupPlans: [null, null],
     setupSinceMs: [options.nowMs, options.nowMs],
+    mulligans: revealedHands(created.events),
     version: 0,
     clocks: [createClock(options.bankMs), createClock(options.bankMs)],
     moves: [],
@@ -231,6 +238,11 @@ function record(
   match.clocks[seat] = consume(match.clocks[seat], timing.chargedMs);
   match.turnStartedAtMs = timing.nowMs;
   match.setupSinceMs[seat] = timing.nowMs;
+  match.mulligans.push(...revealedHands(applied.events));
+  // 引き直した座席は、新しい手札が来てから考え始める。
+  for (const event of applied.events) {
+    if (event.kind === "mulligan-taken") match.setupSinceMs[event.player] = timing.nowMs;
+  }
 
   if (match.state.phase === "gameover") {
     finish(match, { kind: "normal", winner: match.state.outcome?.winner ?? null }, timing.nowMs);
@@ -258,6 +270,12 @@ export interface SetupPlan {
   started: boolean;
 }
 
+/** 引き直すときに相手へ見せた手札（3.2 節の `mulligans`）。 */
+export interface MulliganReveal {
+  player: Player;
+  cards: CardDefId[];
+}
+
 /** 座席の画面に出す準備の状態（3.2 節の `setup`）。 */
 export type SetupView =
   | { kind: "choose"; active: string[]; bench: string[]; benchSlots: number }
@@ -274,6 +292,8 @@ const LOOKAHEAD_LIMIT = 64;
  *
  * 準備の選択肢は、その座席の手札と、その座席がそれまでに出した答えだけで決まる。
  * 相手の答えを何にしても `seat` の選択肢は変わらないので、仮の答えで先へ進めてよい。
+ * ただし先読みの途中で `seat` 自身が引き直すと、戻り値の手札はまだ見せていないものになる。
+ * 座席に候補を見せる側（`planStart`）が手札の一致を確かめる。
  * バトル場の仮の答えに「出さない」は使わない。出さないとマリガンになり、山札を切り直す。
  */
 function lookahead(state: GameState, seat: Player): GameState | null {
@@ -326,7 +346,18 @@ function planStart(match: Match, seat: Player): GameState | null {
   const ahead = lookahead(match.state, seat);
   const top = ahead?.choices.at(-1);
   if (ahead === null || top?.kind !== "setup-place-active" || top.optional) return null;
+  if (!sameHand(match.state.players[seat].hand, ahead.players[seat].hand)) return null;
   return ahead;
+}
+
+/**
+ * 先読みの途中で手札が変わったか。変わるのはその座席が引き直すときで、マリガンはまだ起きていない。
+ * 先読みの手札で選ばせると、見せる前の手札を渡すことになる。
+ */
+function sameHand(now: readonly CardInstance[], ahead: readonly CardInstance[]): boolean {
+  if (now.length !== ahead.length) return false;
+  const ids = new Set(now.map((card) => card.instanceId));
+  return ahead.every((card) => ids.has(card.instanceId));
 }
 
 export function setupViewFor(match: Match, seat: Player): SetupView | null {
@@ -526,6 +557,22 @@ function normalizeOffered(offered: number[] | null, candidates: number): number[
     .filter((index) => Number.isInteger(index) && index >= 0 && index < candidates)
     .sort((a, b) => a - b);
   return kept.length === candidates ? null : kept;
+}
+
+/**
+ * マリガンで見せた手札。準備の中で自分の手札を全員に見せる理由はマリガンのほかに無いので、それで拾う。
+ * 両座席へ送るので、見せる相手が限られた公開は拾わない。
+ */
+function revealedHands(events: DomainEvent[]): MulliganReveal[] {
+  return events.flatMap((event) =>
+    event.kind === "cards-revealed" &&
+    event.audience === "public" &&
+    event.zone.kind === "hand" &&
+    event.zone.player === event.player &&
+    event.window.kind === "setup"
+      ? [{ player: event.zone.player, cards: event.cards.map((card) => card.defId) }]
+      : [],
+  );
 }
 
 /** `game-started` が運ぶ先攻を読む。イベントの語彙が唯一の出どころである。 */

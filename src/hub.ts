@@ -379,6 +379,7 @@ export class MatchHub {
       view: viewFor(match, seat),
       legalMoves: legalMovesFor(match, seat),
       setup: setupViewFor(match, seat),
+      mulligans: match.mulligans,
       clock: clockView(match, this.now()),
       seedCommit: match.seedCommitment.commit,
       spectatorToken: match.spectatorToken,
@@ -393,6 +394,8 @@ export class MatchHub {
       view: viewFor(match, seat),
       legalMoves: legalMovesFor(match, seat),
       setup: setupViewFor(match, seat),
+      // マリガンは準備の中でしか起きないので、対戦が始まったあとは送り直さない。
+      ...(match.state.phase === "setup" ? { mulligans: match.mulligans } : {}),
       clock: clockView(match, this.now()),
     };
   }

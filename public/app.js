@@ -25,6 +25,10 @@ let lastView = null;
 let lastMoves = { moves: null, playing: false, setup: null };
 /** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
 let setupDraft = { active: null, bench: [], sent: false };
+/** 対戦準備で引き直すときに見せた手札。名前の表が遅れて届いたら描き直す。 */
+let lastMulligans = [];
+/** 前に描いたときに準備の中だったか。欄を開け閉めするのは、準備が終わったときと増えたときだけにする。 */
+let mulligansInSetup = false;
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 /**
@@ -198,6 +202,7 @@ function redraw() {
   if (lastView !== null) {
     renderView(lastView);
     renderMoves(lastMoves.moves, lastMoves.playing, lastMoves.setup);
+    renderMulligans(lastMulligans);
   }
   if (lastWatchView !== null) renderWatch(lastWatchView);
   if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
@@ -1263,6 +1268,8 @@ function receive(message) {
       renderClock(message.clock);
       setupDraft.sent = false;
       renderMoves(message.legalMoves, true, message.setup);
+      // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
+      renderMulligans(message.mulligans ?? lastMulligans);
       return;
     case "ended":
       // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
@@ -1271,6 +1278,8 @@ function receive(message) {
       $("watch-link").value = "";
       renderView(message.view);
       renderMoves(null, false);
+      // 次の対戦で見せた手札を、この対戦のものと比べて「増えた」と読まない。
+      lastMulligans = [];
       addEvent(describeEnd(message));
       $("clock").textContent = "対戦は終わりました";
       void showShuffleCheck(seatedNow, message);
@@ -1770,6 +1779,35 @@ function renderSetupForm(offer) {
   $("setup-submit").disabled = setupDraft.active === null || setupDraft.sent;
 }
 
+/**
+ * 引き直すときに見せた手札を、見せた順に並べる。準備のあいだに増えたら開き、対戦が始まったら畳む。
+ * 相手が引き直したことは、相手に番が回る前に起きるので、できごとの欄だけでは見落とす。
+ * それ以外の局面では開け閉めしない。プレイヤーが開いた欄を、次の局面で閉じてしまう。
+ */
+function renderMulligans(mulligans) {
+  const grew = mulligans.length > lastMulligans.length;
+  lastMulligans = mulligans;
+  const inSetup = lastView?.phase === "setup";
+  const details = $("mulligans");
+  details.hidden = mulligans.length === 0;
+  if (grew && inSetup) details.open = true;
+  if (mulligansInSetup && !inSetup) details.open = false;
+  mulligansInSetup = inSetup;
+  const counts = [0, 0];
+  $("mulligan-list").replaceChildren(
+    ...mulligans.map(({ player, cards: shown }) => {
+      counts[player] += 1;
+      const own = player === lastView?.viewer;
+      const row = el("div", "mulligan", `${own ? "自分" : "相手"}（${counts[player]} 回目）`);
+      row.dataset.side = own ? "self" : "opponent";
+      const hand = el("div", "zone hand");
+      hand.append(...shown.map((defId) => zoomable(cardFace(defId), "見せた手札", [defId])));
+      row.append(hand);
+      return row;
+    }),
+  );
+}
+
 function toggleButton(instanceId, pressed, onClick) {
   const button = el("button", "secondary", handCardName(instanceId, lastView));
   button.type = "button";
@@ -1802,11 +1840,11 @@ function promptText(view, mine, setup = null) {
       // 選ばずに済むのは、候補が特性でバトル場に出られるカードだけのとき（出さなければ引き直し）。
       return choice.optional
         ? "バトル場に出すポケモンを選んでください。出さなければ手札を引き直します。"
-        : "バトル場に出すたねポケモンを選んでください。ベンチに出すのは、両者がバトル場を選んだあとです。";
+        : "バトル場に出すたねポケモンを選んでください。";
     case "setup-place-bench":
       return "ベンチに出すたねポケモンを選んでください。出し終えたら「ベンチに出し終える」を押します。";
     case "setup-bonus-draw":
-      return `相手が手札を引き直したので、追加で ${choice.prompt.count} 枚引けます。`;
+      return `相手が手札を引き直したので、${choice.prompt.max} 枚まで追加で引けます。引いたたねポケモンはベンチに出せます。`;
     default:
       return "";
   }
@@ -1819,7 +1857,7 @@ function promptText(view, mine, setup = null) {
 const SETUP_ANSWERS = {
   "setup-place-active": { card: "をバトル場に出す", decline: "出さずに手札を引き直す" },
   "setup-place-bench": { card: "をベンチに出す", decline: "ベンチに出し終える" },
-  "setup-bonus-draw": { accept: "追加で引く", decline: "追加で引かない" },
+  "setup-bonus-draw": { decline: "追加で引かない" },
 };
 
 /**
@@ -1893,6 +1931,8 @@ function describeAnswer(answer, view) {
       return `ワザ ${answer.index + 1}`;
     case "placement":
       return answer.placement === "before" ? "先に" : "あとに";
+    case "bonusDrawCount":
+      return `${answer.count} 枚引く`;
     default:
       return JSON.stringify(answer);
   }
