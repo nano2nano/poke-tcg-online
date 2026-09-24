@@ -15,10 +15,17 @@ import {
 import { validateDeck } from "../src/deck.js";
 import { commitShare } from "../src/fingerprint.js";
 import {
+  applyMove,
+  createGame,
   encodePpoWeights,
   legalMoves,
   newPpoWeightsFile,
+  NO_KNOWLEDGE,
+  projectEvents,
+  SeatKnowledge,
+  type HiddenKnowledge,
   type Move,
+  type Player,
   type PlayerView,
 } from "../src/engine.js";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
@@ -41,8 +48,8 @@ afterAll(async () => {
 });
 
 /** 世代 0 の重み。出力の層が 0 なので、どの局面でも全候補が同じ確率になる。 */
-function generationZero(label = "test-bot"): Uint8Array {
-  return encodePpoWeights(newPpoWeightsFile(label));
+function generationZero(label = "test-bot", knowledge: "tracked" | "zero" = "zero"): Uint8Array {
+  return encodePpoWeights(newPpoWeightsFile(label, undefined, undefined, knowledge));
 }
 
 /** 候補が 2 つ以上ある局面まで、先頭の合法手で進める。 */
@@ -75,10 +82,20 @@ describe("重みから作る AI", () => {
     const seat = toMove(match)!;
     const legal = legalMoves(match.state);
     const pick = (uniform: number) =>
-      botFromBytes("g0", generationZero(), () => uniform).choose(viewFor(match, seat), legal);
+      botFromBytes("g0", generationZero(), () => uniform).choose(
+        viewFor(match, seat),
+        legal,
+        NO_KNOWLEDGE,
+      );
     expect(pick(0)).toBe(0);
     expect(pick(0.999_999)).toBe(legal.length - 1);
     expect(pick(1.5 / legal.length)).toBe(1);
+  });
+
+  it("伏せたカードの知識を使うかは、重みの見出しに従う", () => {
+    ensureCards();
+    expect(botFromBytes("g0", generationZero()).tracksKnowledge).toBe(false);
+    expect(botFromBytes("g0", generationZero("test-bot", "tracked")).tracksKnowledge).toBe(true);
   });
 
   it("重みでないバイト列は読まない", () => {
@@ -168,17 +185,43 @@ async function playAgainst(arena: Arena, bot: Bot): Promise<MatchRecord> {
   return record;
 }
 
-/** 渡された AI の前に立ち、AI が受け取った値が座席の射影と合法手そのものであることを確かめる。 */
+/**
+ * 対戦の記録を初手から指し直し、AI の座席の追跡器を別に作って知識を求める。
+ * サーバが手を適用するたびにイベントを食わせているかを、イベントを 1 つも取りこぼさない経路と突き合わせる。
+ */
+function replayedKnowledge(match: Match, seat: Player, view: PlayerView): HiddenKnowledge {
+  const tracker = new SeatKnowledge(match.decks[seat], seat);
+  const created = createGame({ seed: match.seedCommitment.seed, decks: match.decks });
+  tracker.observe(projectEvents(created.events, seat));
+  let state = created.state;
+  for (const { move } of match.moves) {
+    const applied = applyMove(state, move);
+    tracker.observe(projectEvents(applied.events, seat));
+    state = applied.state;
+  }
+  return tracker.snapshot(view);
+}
+
+/**
+ * 渡された AI の前に立ち、AI が受け取った値が座席の射影と合法手そのものであることを確かめる。
+ * 知識は、知識を使う AI には記録から求め直した値と同じもの、使わない AI には何も知らない入力が届く。
+ */
 function watched(arena: Arena, inner: Bot): Bot & { calls: number } {
   const bot = {
     identity: inner.identity,
+    tracksKnowledge: inner.tracksKnowledge,
     calls: 0,
-    choose(view: PlayerView, legal: readonly Move[]): number {
+    choose(view: PlayerView, legal: readonly Move[], knowledge: HiddenKnowledge): number {
       bot.calls += 1;
       const [match] = arena.registry.live();
       expect(view).toEqual(viewFor(match!, 1));
       expect(legal).toEqual(legalMovesFor(match!, 1));
-      return inner.choose(view, legal);
+      if (inner.tracksKnowledge) {
+        expect(knowledge).toEqual(replayedKnowledge(match!, 1, view));
+      } else {
+        expect(knowledge).toBe(NO_KNOWLEDGE);
+      }
+      return inner.choose(view, legal, knowledge);
     },
   };
   return bot;
@@ -204,11 +247,21 @@ describe("AI の座席", () => {
     expect(arena.registry.live()).toHaveLength(0);
   });
 
+  it("伏せたカードの知識を使う AI には、対戦の初手から追った知識が届く", async () => {
+    const arena = newArena();
+    const bot = watched(arena, botFromBytes("g0", generationZero("test-bot", "tracked")));
+    const record = await playAgainst(arena, bot);
+
+    expect(record.matchResult.kind).toBe("normal");
+    expect(bot.calls).toBeGreaterThan(0);
+  });
+
   it("方策が投げたら、AI の投了で終える。選んでいない手を AI の手として残さない", async () => {
     const arena = newArena();
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const record = await playAgainst(arena, {
       identity: botFromBytes("g0", generationZero()).identity,
+      tracksKnowledge: false,
       choose: () => {
         throw new Error("方策が投げた");
       },
@@ -223,10 +276,15 @@ describe("AI の座席", () => {
     ensureCards();
     const arena = newArena(20);
     const inner = botFromBytes("g0", generationZero());
-    const bot = { identity: inner.identity, calls: 0, choose: inner.choose };
-    bot.choose = (view, legal) => {
+    const bot = {
+      identity: inner.identity,
+      tracksKnowledge: false,
+      calls: 0,
+      choose: inner.choose,
+    };
+    bot.choose = (view, legal, knowledge) => {
       bot.calls += 1;
-      return inner.choose(view, legal);
+      return inner.choose(view, legal, knowledge);
     };
     const { account, secret } = await arena.accounts.create("ひと", 0);
     const outcome = arena.lobby.joinBot(

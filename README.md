@@ -51,6 +51,15 @@ npx wrangler r2 object put poke-tcg-online-matches/bots/s0-g50 --file ../poke-tc
 ```
 
 重みは、`engine/` と同じ特徴の語彙を持つエンジンで作ったものしか読めない。語彙が違うと、選んだときに断られる。
+エンジンを上げて語彙が変わったら、エンジンの `tools/migrate-ppo-weights.ts` で重みを今の語彙へ写してから置き直す。
+伏せたカードの知識を使わずに学習した重みは `--knowledge=zero` で写す。増えた入力の重みが 0 になるので、写す前と同じ確率で手を選ぶ。
+
+```sh
+cd ../poke-tcg-engine
+npx tsx tools/migrate-ppo-weights.ts --in=runs/ppo/s0/ppo-clip-g50.weights --out=migrated/ppo-clip-g50.weights --knowledge=zero
+```
+
+R2 へ置くのは写したほうのファイル（この例なら `migrated/ppo-clip-g50.weights`）にする。
 
 ## 検査
 
