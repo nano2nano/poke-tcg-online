@@ -898,6 +898,35 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   await close();
 });
 
+test("横に広い画面では、対戦のあいだリプレイの欄を出さず、決着したら戻す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `たたむ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await a.setViewportSize({ width: 1920, height: 900 });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#table")).toBeVisible();
+  await expect(a.locator("#history")).toBeHidden();
+  // ページがスクロールできると、盤面の上でホイールを回したときに盤面ごとずれる。
+  expect(
+    await a.evaluate(() => {
+      const root = Reflect.get(globalThis, "document").documentElement as { scrollHeight: number };
+      return root.scrollHeight - (Reflect.get(globalThis, "innerHeight") as number);
+    }),
+  ).toBeLessThanOrEqual(0);
+
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+  await expect(a.locator("#history")).toBeVisible();
+
+  await close();
+});
+
 async function seatPair(a: Page, b: Page, room: string): Promise<void> {
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
@@ -1933,6 +1962,8 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   const hand = a.locator('#self [data-zone="hand"] .card');
   const preview = a.locator("#card-preview");
   await expect(hand.first()).toBeVisible();
+  // 「対戦をさがす」を押したマウスの位置には、盤面が開くとカードが来ることがある。
+  await a.mouse.move(0, 0);
   await expect(preview).toBeHidden();
 
   const card = hand.last();
@@ -2137,4 +2168,221 @@ test("公式サイトの返事を待つあいだにデッキを組み替えた�
   await expect(page.locator("#deck-status")).toHaveClass(/ng/);
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
   await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
+});
+
+/**
+ * 中盤の混んだ局面を 1 通の `sync` にする。両者のベンチが埋まり、進化とエネルギーとどうぐが載り、
+ * 手札も多い。盤面の大きさだけを見るので、手はサーバに頼まず、この局面を直に送る。
+ */
+function crowdedSync(handSize: number): object {
+  const defs = loadGeneratedCards();
+  const pick = (test: (def: (typeof defs)[number]) => boolean): string =>
+    (defs.find(test) as (typeof defs)[number]).defId;
+  const basic = pick((def) => def.kind === "pokemon" && def.evolutionStage === "basic");
+  const stage2 = pick((def) => def.kind === "pokemon" && def.evolutionStage === "stage2");
+  const energy = pick((def) => def.kind === "energy");
+  const tool = pick((def) => def.kind === "trainer" && def.trainerKind === "tool");
+  const item = pick((def) => def.kind === "trainer" && def.trainerKind === "item");
+  const stadium = pick((def) => def.kind === "trainer" && def.trainerKind === "stadium");
+
+  let serial = 0;
+  const card = (defId: string): object => ({ instanceId: `c${++serial}`, defId });
+  const pokemon = (top: string, damage: number, conditions: string[] = []): object => ({
+    inPlayId: `p${++serial}`,
+    stack: [basic, top].map(card),
+    attached: [energy, energy, energy, tool].map(card),
+    damage,
+    conditions: conditions.map((kind) => ({ kind })),
+    pendingKnockoutCause: null,
+    placedOnTurn: 1,
+    becameActiveOnTurn: null,
+  });
+  const bench = (): object[] =>
+    Array.from({ length: 5 }, (_, index) => pokemon(stage2, index * 10));
+  const pile = (): object[] => [item, energy, tool].map(card);
+  const common = { prizeCount: 3, faceUpPrizes: [], discard: pile(), lostZone: pile() };
+  const hand = Array.from({ length: handSize }, (_, index) =>
+    card([basic, stage2, energy, tool, item][index % 5] as string),
+  );
+  return {
+    t: "sync",
+    matchId: "混んだ局面",
+    seat: 0,
+    stateVersion: 1,
+    view: {
+      phase: "main",
+      turn: 9,
+      turnPlayer: 0,
+      turnFlags: {},
+      choices: [],
+      outcome: null,
+      viewer: 0,
+      stadium: card(stadium),
+      self: {
+        ...common,
+        hand,
+        deckCount: 20,
+        active: pokemon(stage2, 120, ["poisoned"]),
+        bench: bench(),
+      },
+      opponent: {
+        ...common,
+        handCount: 30,
+        deckCount: 20,
+        active: pokemon(stage2, 90, ["asleep"]),
+        bench: bench(),
+      },
+    },
+    legalMoves: [
+      ...hand.map(() => ({ type: "AttachEnergy" })),
+      { type: "Attack", attackIndex: 0 },
+      { type: "EndTurn" },
+    ],
+    setup: null,
+    mulligans: [],
+    clock: { bankMs: [600_000, 600_000], moveRemainingMs: 60_000, toMove: 0 },
+    seedCommit: "0".repeat(64),
+    spectatorToken: "観戦",
+  };
+}
+
+/** 要素の枠がすべて `bounds` の中にあること。スクロールで隠れた部分も枠は返るので、見えているかをこれで見る。 */
+async function expectInside(page: Page, selector: string, bounds: Box): Promise<void> {
+  const boxes = await page
+    .locator(selector)
+    .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().toJSON() as Box));
+  expect(boxes.length, selector).toBeGreaterThan(0);
+  for (const box of boxes) {
+    expect(box.x, selector).toBeGreaterThanOrEqual(bounds.x);
+    expect(box.y, selector).toBeGreaterThanOrEqual(bounds.y);
+    expect(box.x + box.width, selector).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect(box.y + box.height, selector).toBeLessThanOrEqual(bounds.y + bounds.height);
+  }
+}
+
+/** 盤面の欄の枠とビューポートの重なり。盤面がビューポートより長くても、欄より広くても、はみ出た部分は見えない。 */
+async function visibleBoard(page: Page, section: string): Promise<Box> {
+  const board = (await page.locator(`${section} .board`).boundingBox()) as Box;
+  const viewport = page.viewportSize() as { width: number; height: number };
+  return {
+    x: Math.max(board.x, 0),
+    y: Math.max(board.y, 0),
+    width: Math.min(board.x + board.width, viewport.width) - Math.max(board.x, 0),
+    height: Math.min(board.y + board.height, viewport.height) - Math.max(board.y, 0),
+  };
+}
+
+const ZONES = ["hand", "prizes", "active", "bench", "deck", "discard", "lost"];
+
+/**
+ * FHD のモニターでブラウザを最大化し、ブックマークバーまで出したときのビューポート、
+ * 同じモニターを 125% に拡大したときのビューポート、縦に置いた FHD のモニター。
+ * どれでも、ページをスクロールせずに両者の盤面と手札、指せる手、時計が見えていること。
+ */
+for (const viewport of [
+  { width: 1920, height: 900 },
+  { width: 1536, height: 730 },
+  { width: 1080, height: 1800 },
+]) {
+  test(`${viewport.width}×${viewport.height} のビューポートに、両者の盤面と手札が収まる`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await page.evaluate(() =>
+      localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "混んだ局面" })),
+    );
+    await page.routeWebSocket(/\/ws\?/, (ws) => ws.send(JSON.stringify(crowdedSync(20))));
+    await page.reload();
+    await expect(page.locator("#self .zone.bench .card").first()).toBeVisible();
+
+    const board = await visibleBoard(page, "#table");
+    for (const side of ["#opponent", "#self"]) {
+      for (const zone of ZONES)
+        await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
+    }
+    await expectInside(page, '#stadium [data-zone="stadium"] .card', board);
+    const screen = { x: 0, y: 0, ...viewport };
+    for (const selector of ["#clock", "#concede-button", "#moves button >> nth=0", "#event-log"]) {
+      await expectInside(page, selector, screen);
+    }
+
+    // 手札は枚数の見出しまで含めて、名前のために空けた幅の内側に収める。中身の見えない側も同じ。
+    for (const side of ["#opponent", "#self"]) {
+      const edges = await page.locator(`${side} [data-zone="hand"]`).evaluate((zone) => {
+        // この tsconfig は DOM の型を読まないので、ページの側から引く。
+        const style = Reflect.get(globalThis, "getComputedStyle") as (node: unknown) => {
+          paddingRight: string;
+        };
+        return {
+          label: zone.querySelector(".zone-label")!.getBoundingClientRect().right,
+          inner: zone.getBoundingClientRect().right - parseFloat(style(zone).paddingRight),
+        };
+      });
+      expect(edges.label, side).toBeLessThanOrEqual(edges.inner + 0.5);
+    }
+
+    // ベンチは狭くても折り返さない。
+    for (const side of ["#opponent", "#self"]) {
+      const benchTops = await page
+        .locator(`${side} [data-zone="bench"] > .pokemon`)
+        .evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top)));
+      expect(benchTops).toHaveLength(5);
+      expect(new Set(benchTops).size, side).toBe(1);
+    }
+
+    // 手札は多くても 1 段に並べ、重ねて収める。名前の上には重ねない。
+    const hand = page.locator('#self [data-zone="hand"] .card');
+    const tops = await hand.evaluateAll((nodes) =>
+      nodes.map((node) => Math.round(node.getBoundingClientRect().top)),
+    );
+    expect(tops).toHaveLength(20);
+    expect(new Set(tops).size).toBe(1);
+    const name = (await page.locator("#table .board-side:last-child > h2").boundingBox()) as Box;
+    expect(overlaps(name, (await hand.first().boundingBox()) as Box)).toBe(false);
+  });
+}
+
+test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる", async ({ page }) => {
+  const viewport = { width: 1920, height: 900 };
+  await page.setViewportSize(viewport);
+  const { view, clock } = crowdedSync(20) as {
+    view: { self: { hand: unknown[] }; opponent: object; stadium: object };
+    clock: object;
+  };
+  const { hand, ...shown } = view.self;
+  await page.routeWebSocket(/\/ws\?/, (ws) =>
+    ws.send(
+      JSON.stringify({
+        t: "spectator-sync",
+        view: {
+          ...view,
+          viewer: "spectator",
+          players: [{ ...shown, handCount: hand.length }, view.opponent],
+        },
+        seats: [
+          { displayName: "長い名前を付けたプレイヤー".repeat(3), rating: 1500 },
+          { displayName: "ななし", rating: 1500 },
+        ],
+        clock,
+      }),
+    ),
+  );
+  await page.goto("/?watch=観戦");
+  await expect(page.locator("#watch-side-0 .zone.bench .card").first()).toBeVisible();
+
+  const board = await visibleBoard(page, "#watch");
+  for (const side of ["#watch-side-1", "#watch-side-0"]) {
+    for (const zone of ZONES)
+      await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
+  }
+  await expectInside(page, '#watch-stadium [data-zone="stadium"] .card', board);
+  await expectInside(page, "#watch-clock", { x: 0, y: 0, ...viewport });
+  // 長い名前は省いて、手札に重ねない。
+  const name = (await page.locator("#watch-name-0").boundingBox()) as Box;
+  const backs = (await page
+    .locator('#watch-side-0 [data-zone="hand"] .card')
+    .first()
+    .boundingBox()) as Box;
+  expect(overlaps(name, backs)).toBe(false);
 });

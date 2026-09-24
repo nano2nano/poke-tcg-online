@@ -1092,6 +1092,7 @@ function openMatch(seated) {
   showConnection(null);
   $("join").hidden = true;
   $("table").hidden = false;
+  delete $("table").dataset.ended;
   // 両者がシェアを開くまで局面は届かない。
   $("clock").textContent = "相手が席に着くのを待っています";
   $("shuffle-check").hidden = true;
@@ -1293,6 +1294,7 @@ function receive(message) {
       return;
     }
     case "ended": {
+      $("table").dataset.ended = "";
       // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
       forgetSeat();
       // 観戦トークンも終わった対戦では通らない。残すと、渡された人が開いても入れない。
@@ -1644,25 +1646,24 @@ function renderSide(container, side, mirrored) {
     zone("deck", "山札", side.deckCount, side.deckCount > 0 ? cardBack() : emptySlot()),
     pileZone("discard", "トラッシュ", side.discard),
   );
-  if (side.lostZone.length > 0) piles.append(pileZone("lost", "ロストゾーン", side.lostZone));
-
-  const mat = el(
+  const prizeSide = el(
     "div",
-    mirrored ? "mat mirrored" : "mat",
+    "prize-side",
     zone("prizes", "サイド", side.prizeCount, el("div", "prize-grid", ...prizes)),
-    field,
-    piles,
   );
+  if (side.lostZone.length > 0) {
+    prizeSide.prepend(pileZone("lost", "ロストゾーン", side.lostZone));
+  }
 
-  const hand =
+  const mat = el("div", mirrored ? "mat mirrored" : "mat", prizeSide, field, piles);
+
+  const held =
     side.hand === undefined
-      ? zone("hand", "手札", side.handCount, ...Array.from({ length: side.handCount }, cardBack))
-      : zone(
-          "hand",
-          "手札",
-          side.hand.length,
-          ...side.hand.map((card) => zoomable(cardFace(card.defId), "手札", [card.defId])),
-        );
+      ? Array.from({ length: side.handCount }, cardBack)
+      : side.hand.map((card) => zoomable(cardFace(card.defId), "手札", [card.defId]));
+  const hand = zone("hand", "手札", held.length, ...held);
+  // 入りきらない枚数のときに、どれだけ重ねるかを CSS が決める。
+  hand.style.setProperty("--cards", String(held.length));
   container.replaceChildren(...(mirrored ? [hand, mat] : [mat, hand]));
 }
 

@@ -57,10 +57,12 @@
       <p id="join-status" role="status"></p>
     </section>
 
-    <section id="table" hidden>
-      <div id="clock" class="clock"></div>
-      <p id="connection" class="connection" role="status" hidden></p>
-      <p id="shuffle-check" class="note" hidden></p>
+    <section id="table" class="table" hidden>
+      <div class="table-status">
+        <div id="clock" class="clock"></div>
+        <p id="connection" class="connection" role="status" hidden></p>
+        <p id="shuffle-check" class="note" hidden></p>
+      </div>
       <div class="board">
         <div class="board-side">
           <h2>相手</h2>
@@ -73,40 +75,47 @@
         </div>
       </div>
 
-      <details id="mulligans" class="mulligans" hidden>
-        <summary>引き直しで見せた手札</summary>
-        <div id="mulligan-list"></div>
-      </details>
+      <div class="table-panel">
+        <details id="mulligans" class="mulligans" hidden>
+          <summary>引き直しで見せた手札</summary>
+          <div id="mulligan-list"></div>
+        </details>
 
-      <p class="note">
-        観戦のリンク（渡された人は、両者の手札の中身を除いた盤面を見られます）
-        <input id="watch-link" class="watch-link" readonly />
-      </p>
+        <h2>指せる手</h2>
+        <p id="move-prompt" class="move-prompt" hidden></p>
+        <div id="setup" class="setup" hidden>
+          <h3>バトル場</h3>
+          <div id="setup-active" class="moves"></div>
+          <h3>ベンチ</h3>
+          <div id="setup-bench" class="moves"></div>
+          <button id="setup-submit">準備を終える</button>
+        </div>
+        <div id="moves" class="moves"></div>
+        <button id="concede-button" class="danger">投了する</button>
 
-      <h2>指せる手</h2>
-      <p id="move-prompt" class="move-prompt" hidden></p>
-      <div id="setup" class="setup" hidden>
-        <h3>バトル場</h3>
-        <div id="setup-active" class="moves"></div>
-        <h3>ベンチ</h3>
-        <div id="setup-bench" class="moves"></div>
-        <button id="setup-submit">準備を終える</button>
+        <!-- 結果は画面の上の端に出す。ここは見逃したものを後から辿るときと、不具合を調べるとき用。 -->
+        <details id="event-log" class="event-log">
+          <summary>できごとの記録</summary>
+          <ol id="events" class="events"></ol>
+        </details>
+
+        <p class="note">
+          観戦のリンク（渡された人は、両者の手札の中身を除いた盤面を見られます）
+          <input id="watch-link" class="watch-link" readonly />
+        </p>
+        <p class="note table-hint">
+          カードにマウスを載せる（タッチ端末では長押しする）と大きく出ます。押すと、進化前やついているカードもまとめて出ます。
+        </p>
       </div>
-      <div id="moves" class="moves"></div>
-      <button id="concede-button" class="danger">投了する</button>
-
-      <!-- 結果は画面の上の端に出す。ここは見逃したものを後から辿るときと、不具合を調べるとき用。 -->
-      <details id="event-log" class="event-log">
-        <summary>できごとの記録</summary>
-        <ol id="events" class="events"></ol>
-      </details>
     </section>
 
-    <section id="watch" hidden>
-      <h2>観戦</h2>
-      <p class="note">両者とも、相手から見えるのと同じだけが見えます。手札の中身は出ません。</p>
-      <div id="watch-clock" class="clock"></div>
-      <p id="watch-status" role="status"></p>
+    <section id="watch" class="table" hidden>
+      <div class="table-status">
+        <h2>観戦</h2>
+        <p class="note">両者とも、相手から見えるのと同じだけが見えます。手札の中身は出ません。</p>
+        <div id="watch-clock" class="clock"></div>
+        <p id="watch-status" role="status"></p>
+      </div>
       <div class="board">
         <div class="board-side">
           <h2 id="watch-name-1"></h2>
@@ -119,10 +128,15 @@
         </div>
       </div>
 
-      <details id="watch-event-log" class="event-log">
-        <summary>できごとの記録</summary>
-        <ol id="watch-events" class="events"></ol>
-      </details>
+      <div class="table-panel">
+        <details id="watch-event-log" class="event-log">
+          <summary>できごとの記録</summary>
+          <ol id="watch-events" class="events"></ol>
+        </details>
+        <p class="note table-hint">
+          カードにマウスを載せる（タッチ端末では長押しする）と大きく出ます。押すと、進化前やついているカードもまとめて出ます。
+        </p>
+      </div>
     </section>
 
     <section id="history">
