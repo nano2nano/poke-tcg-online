@@ -796,8 +796,15 @@ export type AnswerDestination =
       to: "hand" | "discard" | "lostZone" | "deck" | "prizes" | "active" | "bench";
       player: Player;
     }
-  | { to: "revealed" }
-  | { to: "attached" | "evolved"; target: InPlayId; cards: CardDefId[] };
+  | { to: "attached" | "evolved"; target: InPlayId; cards: CardDefId[] }
+  /** 今の答えでは動かず、同じ効果のあとの選択で行き先が決まる。行きうる先を持つ。 */
+  | { to: "later"; options: LaterDestination[] };
+
+type MovedDestination = Exclude<AnswerDestination, { to: "later" }>;
+type LaterDestination = MovedDestination["to"];
+
+/** 行き先をあとの選択までたどるときに、答える回数の上限。越えたら行き先を付けない。 */
+const LATER_LOOKAHEAD_LIMIT = 48;
 
 export function answerDestinationsFor(
   match: Match,
@@ -821,7 +828,6 @@ export interface EffectReveals {
  * エンジンの選択はカードかポケモンを選ばせるだけで、選んだものをどうするかを座席へ渡さない。
  * 「手札に加える 1 枚」と「ポケモンにつける 1 枚」を同じ候補から続けて選ぶ効果では、
  * それが無いとどちらを選んでいるのか分からない。名前でカードを特別扱いせず、答えてみて見分ける。
- * 先読みは 1 手だけで、次の選択で行き先が決まるカードには付けない。
  *
  * `deckPlacementOf` と同じく、試すのは選ぶ座席に見えない山札の並びと乱数の種を差し替えた局面で、
  * どの回でも同じ行き先になった答えにだけ付ける。
@@ -874,7 +880,10 @@ function knownTo(
 }
 
 /**
- * 答えを 1 つ適用して、選んだカードが最初に動いた先。動かずに公開されただけなら `revealed`。
+ * 答えを 1 つ適用して、選んだカードが最初に動いた先。今の答えで動かなければ、同じ効果のあとの選択を
+ * すべての答えでたどり、行きうる先を `later` で返す。
+ * 山札から選んで相手に見せるだけの選択では、見せることは効果の目的ではなく、
+ * 選んだカードはあとの選択しだいで手札に入ったりポケモンについたりする。
  * `state` は本物の局面、`current` はそれを `disguised` で差し替えた局面で、適用するのは `current` である。
  */
 function destinationOf(
@@ -885,32 +894,41 @@ function destinationOf(
 ): AnswerDestination | null {
   if (move.type !== "AnswerChoice") return null;
   const answer = move.answer;
-  let events: DomainEvent[];
+  const source = state.choices.at(-1)?.source?.instanceId;
   try {
-    events = applyMove(current, move).events;
+    const applied = applyMove(current, move);
+    if (answer.kind === "inPlay") {
+      const attached = applied.events.flatMap((event) =>
+        (event.kind === "energy-attached" || event.kind === "tool-attached") &&
+        event.target === answer.target
+          ? [event.card]
+          : [],
+      );
+      if (attached.length === 0 || !attached.every(known)) return null;
+      return { to: "attached", target: answer.target, cards: attached.map((card) => card.defId) };
+    }
+    // 同じカードが選んだゾーンの外にもあると、`cardDef` の答えはそちらの移動にも当たる。
+    const prompt = state.choices.at(-1)?.prompt;
+    const from =
+      answer.kind === "cardDef" && prompt?.kind === "selectFromHiddenZone"
+        ? new Set(cardsIn(current, prompt.zone).map((card) => card.instanceId))
+        : null;
+    const chosen = (card: CardInstance): boolean =>
+      answerPicks(answer, card) && (from === null || from.has(card.instanceId));
+    const moved = movedTo(applied.events, chosen);
+    if (moved !== null || source === undefined) return moved;
+    const options = laterDestinations(applied.state, move.player, source, chosen);
+    return options === null || options.length === 0 ? null : { to: "later", options };
   } catch {
     // `deckPlacementOf` と同じく、先読みの例外で指された手を止めない。ほかの答えの行き先は残す。
     return null;
   }
-  if (answer.kind === "inPlay") {
-    const attached = events.flatMap((event) =>
-      (event.kind === "energy-attached" || event.kind === "tool-attached") &&
-      event.target === answer.target
-        ? [event.card]
-        : [],
-    );
-    if (attached.length === 0 || !attached.every(known)) return null;
-    return { to: "attached", target: answer.target, cards: attached.map((card) => card.defId) };
-  }
-  // 同じカードが選んだゾーンの外にもあると、`cardDef` の答えはそちらの移動にも当たる。
-  const prompt = state.choices.at(-1)?.prompt;
-  const from =
-    answer.kind === "cardDef" && prompt?.kind === "selectFromHiddenZone"
-      ? new Set(cardsIn(current, prompt.zone).map((card) => card.instanceId))
-      : null;
-  const chosen = (card: CardInstance): boolean =>
-    answerPicks(answer, card) && (from === null || from.has(card.instanceId));
-  let revealed = false;
+}
+
+function movedTo(
+  events: DomainEvent[],
+  chosen: (card: CardInstance) => boolean,
+): MovedDestination | null {
   for (const event of events) {
     switch (event.kind) {
       case "card-moved":
@@ -935,20 +953,42 @@ function destinationOf(
           return { to: "evolved", target: event.target, cards: [event.card.defId] };
         }
         break;
-      case "cards-revealed":
-        // 相手のカードを見せる効果は「相手に見せる」と書けないので、自分のカードに限る。
-        if (
-          event.audience === "public" &&
-          event.zone.kind !== "stadium" &&
-          event.zone.player === move.player &&
-          event.cards.some(chosen)
-        ) {
-          revealed = true;
-        }
-        break;
     }
   }
-  return revealed ? { to: "revealed" } : null;
+  return null;
+}
+
+/**
+ * 同じ効果の選択が続くあいだ、座席のすべての答えをたどって、選んだカードの行きうる先を集める。
+ * どの道でも動かなかったぶんは数えない。相手のゾーンへ行く道があるか、上限を越えたら null。
+ */
+function laterDestinations(
+  state: GameState,
+  seat: Player,
+  source: string,
+  chosen: (card: CardInstance) => boolean,
+): LaterDestination[] | null {
+  const found = new Set<LaterDestination>();
+  let left = LATER_LOOKAHEAD_LIMIT;
+  const visit = (current: GameState): boolean => {
+    const choice = current.choices.at(-1);
+    if (choice?.owner !== seat || choice.source?.instanceId !== source) return true;
+    for (const move of legalMoves(current)) {
+      left -= 1;
+      if (left < 0) return false;
+      const applied = applyMove(current, move);
+      const moved = movedTo(applied.events, chosen);
+      if (moved === null) {
+        if (!visit(applied.state)) return false;
+      } else if ("player" in moved && moved.player !== seat) {
+        return false;
+      } else {
+        found.add(moved.to);
+      }
+    }
+    return true;
+  };
+  return visit(state) ? [...found].sort() : null;
 }
 
 function cardsIn(state: GameState, zone: Zone): CardInstance[] {

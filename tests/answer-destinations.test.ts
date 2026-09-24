@@ -183,8 +183,9 @@ function expectDestinationHolds(match: Match, seat: Player): number {
         );
         break;
       }
-      case "revealed":
+      case "later":
         expect(zoneSizes(after, seat)).toEqual(zoneSizes(match.state, seat));
+        expect(destination.options.length).toBeGreaterThan(0);
         break;
       default:
         throw new Error(`この効果で出るとは思っていない行き先: ${destination.to}`);
@@ -203,11 +204,54 @@ describe("効果の選択で選んだカードの行き先", () => {
       expect(answerDestinationsFor(match, (1 - seat) as Player)).toBeNull();
     });
     const kinds = steps.map((step) => [...new Set(step.map((each) => each.to))]);
+    expect(kinds).toContainEqual(["later"]);
     expect(kinds).toContainEqual(["hand"]);
     expect(kinds).toContainEqual(["attached"]);
     expect(checked).toBeGreaterThanOrEqual(2);
     // 効果を終えたら出さない。
     expect(answerDestinationsFor(played.match, played.seat)).toBeNull();
+  });
+
+  it("あとの選択で行き先が決まるカードには、手札に加える道とポケモンにつける道の両方を出す", () => {
+    const played = afterPlaying(handThenAttach()) as Played;
+    const { match, seat } = played;
+    const [first] = legalMoves(match.state);
+    const [destination] = answerDestinationsFor(match, seat) ?? [];
+    if (first?.type !== "AnswerChoice" || first.answer.kind !== "cardDef") {
+      throw new Error("山札からカードを選ぶ答えではない");
+    }
+    expect(destination).toEqual({ to: "later", options: ["attached", "hand"] });
+    const picked = first.answer.defId;
+
+    // 手札に加える選択まで、辞退でない先頭の答えで進める。
+    const isHandStep = () =>
+      (answerDestinationsFor(match, seat) ?? []).some((each) => each?.to === "hand");
+    while (!isHandStep()) {
+      const next = legalMoves(match.state).find(
+        (move) => move.type === "AnswerChoice" && move.answer.kind !== "decline",
+      );
+      if (next === undefined) throw new Error("手札に加える選択に届かない");
+      submitMove(match, seat, match.version, next, 0);
+    }
+    const roles = legalMoves(match.state).filter(
+      (move) => move.type === "AnswerChoice" && move.answer.kind === "cardDef",
+    );
+    // 選んだカードを手札に加える道がある。
+    const toHand = roles.find(
+      (move) =>
+        move.type === "AnswerChoice" &&
+        move.answer.kind === "cardDef" &&
+        move.answer.defId === picked,
+    );
+    expect(toHand).toBeDefined();
+    // もう 1 枚を手札に加えると、選んだカードはポケモンにつく。
+    const other = roles.find((move) => move !== toHand) as Move;
+    const landing = applyMove(match.state, other).state;
+    const land = legalMoves(landing)[0] as Move;
+    const attached = applyMove(landing, land).events.flatMap((event) =>
+      event.kind === "energy-attached" ? [event.card.defId] : [],
+    );
+    expect(attached).toEqual([picked]);
   });
 
   it("ポケモンにつくカードは、この効果で山札から見せたものでなければ名前を渡さない", () => {

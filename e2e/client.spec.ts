@@ -2528,13 +2528,15 @@ test("効果の選択では、選んだカードの行き先をボタンに出�
     return buttons.allTextContents();
   };
 
-  // 同じ候補から、見せるカード、手札に加えるカードを続けて選ぶ。行き先が違えば見出しも違う。
+  // 同じ候補から、あとで行き先を決めるカード、手札に加えるカードを続けて選ぶ。行き先が違えば見出しも違う。
   pickFromDeck();
   const plain = await labelsWith(null);
-  const revealed = await labelsWith(defIds.map(() => ({ to: "revealed" })));
+  const later = await labelsWith(
+    defIds.map(() => ({ to: "later", options: ["attached", "hand"] })),
+  );
   const toHand = await labelsWith(defIds.map(() => ({ to: "hand", player: 0 })));
   for (let index = 0; index < defIds.length; index++) {
-    expect(new Set([plain[index], revealed[index], toHand[index]]).size).toBe(3);
+    expect(new Set([plain[index], later[index], toHand[index]]).size).toBe(3);
   }
 
   // 残りのカードをつけるポケモンを選ぶ。

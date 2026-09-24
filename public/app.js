@@ -2267,6 +2267,18 @@ function answerCardName(answer, view) {
   return answer.kind === "card" ? cardWithPlace(answer.card, view) : nameOf(answer.defId);
 }
 
+const LATER_PHRASES = {
+  hand: "手札に加える",
+  attached: "ポケモンにつける",
+  evolved: "進化させる",
+  discard: "トラッシュする",
+  lostZone: "ロストゾーンに置く",
+  deck: "山札にもどす",
+  prizes: "サイドに置く",
+  active: "バトル場に出す",
+  bench: "ベンチに出す",
+};
+
 /**
  * 選んだものの行き先を添えた見出し。書けない組み合わせなら null。
  *
@@ -2302,8 +2314,16 @@ function destinationText(answer, destination, view) {
       return `${card} を ${pokemonLabel(destination.target, view, false)} につける`;
     case "evolved":
       return `${pokemonLabel(destination.target, view, false)} を ${card} に進化させる`;
-    case "revealed":
-      return `${card} を相手に見せる`;
+    case "later": {
+      // サーバは名前順で送るので、`LATER_PHRASES` の順に並べ直す（手札に加えるが先）。
+      const phrases = Object.keys(LATER_PHRASES)
+        .filter((to) => destination.options.includes(to))
+        .map((to) => LATER_PHRASES[to]);
+      if (phrases.length !== destination.options.length) return null;
+      return phrases.length === 1
+        ? `${card} を選ぶ（あとで${phrases[0]}）`
+        : `${card} を選ぶ（${phrases.join("か、")}かは、あとで選ぶ）`;
+    }
     default:
       return null;
   }
