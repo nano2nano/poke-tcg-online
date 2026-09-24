@@ -1782,7 +1782,6 @@ function foldMoves(moves, view) {
   return shown;
 }
 
-/** 手と答えのうち、カードのインスタンス ID を運ぶ欄。 */
 const CARD_FIELDS = new Set(["cardInstanceId", "right", "left", "card"]);
 
 function cardKey(instanceId, view) {
@@ -2011,7 +2010,7 @@ function abilityName(defId, index) {
 
 /**
  * `attackIndex` は印刷されたワザの番号ではなく、どうぐなどで使えるようになったワザを
- * 後ろに足した表の番号である（エンジンの仕様 3.3 節）。印刷されたワザが前に並ぶので、
+ * 後ろに足した表の番号である（`engine/docs/spec/engine-core.md` 3.3 節）。印刷されたワザが前に並ぶので、
  * その数より小さければ名前が引ける。
  */
 function attackName(move, view) {
@@ -2152,7 +2151,7 @@ function cardWithPlace(instanceId, view) {
   return found.zone === "hand" && found.own ? name : `${name}（${found.place}）`;
 }
 
-/** 手札のインスタンス ID からカードの名前を引く。盤面に無ければ番号のまま出す。 */
+/** 手札に無ければ番号のまま出す。 */
 function handCardName(instanceId, view) {
   const found = locateCard(instanceId, view);
   return found?.zone === "hand" ? nameOf(found.defId) : instanceId;
