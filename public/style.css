@@ -61,6 +61,12 @@ button[aria-pressed="true"] {
   outline: 2px solid #2b6cb0;
   background: #dbe8f6;
 }
+.mulligans {
+  margin: 8px 0;
+}
+.mulligan {
+  font-size: 0.85rem;
+}
 .moves {
   display: flex;
   flex-wrap: wrap;

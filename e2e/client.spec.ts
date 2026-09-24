@@ -165,9 +165,8 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
    * **手が並ぶのは片側だけである。** サーバは手番でない座席へ `legalMoves` を送らない。
    * 両方に並ぶなら、射影ではなく生の局面が流れている。準備は両座席が同時に出すので、済ませてから見る。
    */
-  await untilBothChoose(a, b, seenA, seenB);
-  expect(await playOne(a)).toBe(true);
-  expect(await playOne(b)).toBe(true);
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  while (seenA()?.phase === "setup") await advance(a, b, seenA);
   await expect.poll(() => seenA()?.phase).not.toBe("setup");
   await expect.poll(() => seenB()?.phase).not.toBe("setup");
   for (const page of [a, b]) {
@@ -269,25 +268,53 @@ async function advance(a: Page, b: Page, seen: () => Seen | null): Promise<void>
 }
 
 /**
- * 両座席が準備をまとめて出せるところまで進める。マリガンの追加ドローが先に来ることがあり、
- * それはエンジンの選択を 1 つずつ答える。
+ * `page` の座席が準備をまとめて出せるところまで進める。引き直す座席なら、たねのある相手が
+ * 先にサイドまで進んでから引き直すので（公式ルールガイド「G 対戦準備」5.b）、相手に先に出させる。
  */
-async function untilBothChoose(
-  a: Page,
-  b: Page,
-  seenA: () => Seen | null,
-  seenB: () => Seen | null,
+async function untilChoose(
+  page: Page,
+  other: Page,
+  seen: () => Seen | null,
+  seenOther: () => Seen | null,
 ): Promise<void> {
-  await expect.poll(() => seenA()?.phase).toBe("setup");
-  await expect.poll(() => seenB()?.phase).toBe("setup");
-  while (seenA()?.setup !== "choose" || seenB()?.setup !== "choose") {
-    const mover = seenA()?.choice?.owner === seenA()?.viewer ? a : b;
-    const before = seenA()?.stateVersion ?? -1;
-    await mover.locator("#moves button").first().click();
-    // 両座席に次の局面が届くまで待つ。片方だけ見ると、もう片方の古い準備の状態で続きを決める。
-    await expect.poll(() => seenA()?.stateVersion ?? -1).toBeGreaterThan(before);
-    await expect.poll(() => seenB()?.stateVersion ?? -1).toBeGreaterThan(before);
+  await expect.poll(() => seen()?.phase).toBe("setup");
+  await expect.poll(() => seenOther()?.phase).toBe("setup");
+  while (seen()?.setup !== "choose") {
+    const before = seen()?.stateVersion ?? -1;
+    await expect(other.locator("#setup-submit, #moves button").first()).toBeVisible();
+    expect(await playOne(other)).toBe(true);
+    await expect.poll(() => seen()?.stateVersion ?? -1).toBeGreaterThan(before);
   }
+}
+
+/**
+ * 両座席がそろって準備を出せる対戦を開く。片方だけが引き直す対戦では、たねのある側しか先に出せないので、
+ * そうなったら閉じて別の対戦を開き直す。どちらになるかは seed で決まり、テストからは選べない。
+ */
+async function pairBothChoosing(
+  browser: Browser,
+  errors: string[],
+  prefix: string,
+): Promise<{
+  a: Page;
+  b: Page;
+  seenA: () => Seen | null;
+  seenB: () => Seen | null;
+  close: () => Promise<void>;
+}> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const [a, b, close] = await openPair(browser, errors);
+    const seenA = lastSeen(a);
+    const seenB = lastSeen(b);
+    await seatPair(a, b, `${prefix}-${Date.now()}-${attempt}`);
+    await expect.poll(() => seenA()?.phase).toBe("setup");
+    await expect.poll(() => seenB()?.phase).toBe("setup");
+    if (seenA()?.setup === "choose" && seenB()?.setup === "choose") {
+      return { a, b, seenA, seenB, close };
+    }
+    await close();
+  }
+  throw new Error("両座席がそろって準備を出せる対戦が開けない");
 }
 
 /**
@@ -298,12 +325,7 @@ test("対戦準備は、番を待たずに両座席がバトル場とベンチ�
   browser,
   pageErrors,
 }) => {
-  const room = `じゅんび-${Date.now()}`;
-  const [a, b, close] = await openPair(browser, pageErrors);
-  const seenA = lastSeen(a);
-  const seenB = lastSeen(b);
-  await seatPair(a, b, room);
-  await untilBothChoose(a, b, seenA, seenB);
+  const { a, b, seenA, seenB, close } = await pairBothChoosing(browser, pageErrors, "じゅんび");
 
   const [first, second] = seenA()?.choice?.owner === seenA()?.viewer ? [a, b] : [b, a];
   const seenSecond = second === a ? seenA : seenB;
@@ -366,7 +388,7 @@ test("「準備を終える」は返事が来るまで押せず、続けて押�
     });
   });
   await seatPair(a, b, room);
-  await untilBothChoose(a, b, seenA, () => seenB);
+  await untilChoose(b, a, () => seenB, seenA);
 
   await b.locator("#setup-active button").first().click();
   await b.locator("#setup-submit").dblclick();
@@ -405,6 +427,45 @@ test("自分の番の途中で相手が選んでいるあいだは、相手の�
   await close();
 });
 
+/**
+ * 相手が引き直したことは、相手に番が回る前に起きる。できごとの欄に流れるだけだと、準備を選んでいるうちに
+ * 見落とす。どちらが引き直すかは seed で決まるので、届いた局面に相手の引き直しを書き足して作る。
+ */
+test("引き直しで見せた手札は、準備のあいだ開いた欄に並び、対戦が始まったら畳む", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `ひきなおし-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA: { last: Seen | null } = { last: null };
+  await a.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.view !== undefined && Array.isArray(message.mulligans)) {
+        const shown = message.view.self.hand.map((card: { defId: string }) => card.defId);
+        message.mulligans = [{ player: 1 - message.view.viewer, cards: shown }];
+      }
+      seenA.last = seenIn(message) ?? seenA.last;
+      client.send(JSON.stringify(message));
+    });
+  });
+  await seatPair(a, b, room);
+
+  const panel = a.locator("#mulligans");
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute("open", "");
+  const row = a.locator('#mulligan-list .mulligan[data-side="opponent"]');
+  await expect(row).toHaveCount(1);
+  await expect(row.locator(".card")).not.toHaveCount(0);
+
+  while (seenA.last?.phase === "setup") await advance(a, b, () => seenA.last);
+  await expect(panel).toBeVisible();
+  await expect(panel).not.toHaveAttribute("open", "");
+
+  await close();
+});
+
 /** 座席へ戻った直後は、名前の表より先に局面が届くことがある。 */
 test("名前の表が局面より遅れて届いたら、準備の候補の名前も描き直す", async ({
   browser,
@@ -415,7 +476,7 @@ test("名前の表が局面より遅れて届いたら、準備の候補の名�
   const seenA = lastSeen(a);
   const seenB = lastSeen(b);
   await seatPair(a, b, room);
-  await untilBothChoose(a, b, seenA, seenB);
+  await untilChoose(a, b, seenA, seenB);
 
   const names = gate();
   await a.route("**/api/cards", async (route) => {
@@ -1519,7 +1580,8 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await untilBothChoose(a, b, seenA, seenB);
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  await expect.poll(() => seenB()?.phase).toBe("setup");
 
   const hand = a.locator('#self [data-zone="hand"] .card');
   await expect(hand.first()).toBeVisible();
