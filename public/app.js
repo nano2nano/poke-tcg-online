@@ -1629,6 +1629,8 @@ function renderSide(container, side, mirrored) {
           side.hand.length,
           ...side.hand.map((card) => zoomable(cardFace(card.defId), "手札", [card.defId])),
         );
+  // 入りきらない枚数のときに、どれだけ重ねるかを CSS が決める。
+  hand.style.setProperty("--cards", hand.dataset.count);
   container.replaceChildren(...(mirrored ? [hand, mat] : [mat, hand]));
 }
 

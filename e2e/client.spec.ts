@@ -1793,6 +1793,8 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   const hand = a.locator('#self [data-zone="hand"] .card');
   const preview = a.locator("#card-preview");
   await expect(hand.first()).toBeVisible();
+  // 「対戦をさがす」を押したマウスの位置には、盤面が開くとカードが来ることがある。
+  await a.mouse.move(0, 0);
   await expect(preview).toBeHidden();
 
   const card = hand.last();
@@ -1998,3 +2000,130 @@ test("公式サイトの返事を待つあいだにデッキを組み替えた�
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
   await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
 });
+
+/**
+ * 中盤の混んだ局面を 1 通の `sync` にする。両者のベンチが埋まり、進化とエネルギーとどうぐが載り、
+ * 手札も多い。盤面の大きさだけを見るので、手はサーバに頼まず、この局面を直に送る。
+ */
+function crowdedSync(handSize: number): object {
+  const defs = loadGeneratedCards();
+  const pick = (test: (def: (typeof defs)[number]) => boolean): string =>
+    (defs.find(test) as (typeof defs)[number]).defId;
+  const basic = pick((def) => def.kind === "pokemon" && def.evolutionStage === "basic");
+  const stage2 = pick((def) => def.kind === "pokemon" && def.evolutionStage === "stage2");
+  const energy = pick((def) => def.kind === "energy");
+  const tool = pick((def) => def.kind === "trainer" && def.trainerKind === "tool");
+  const item = pick((def) => def.kind === "trainer" && def.trainerKind === "item");
+  const stadium = pick((def) => def.kind === "trainer" && def.trainerKind === "stadium");
+
+  let serial = 0;
+  const card = (defId: string): object => ({ instanceId: `c${++serial}`, defId });
+  const pokemon = (top: string, damage: number, conditions: string[] = []): object => ({
+    inPlayId: `p${++serial}`,
+    stack: [basic, top].map(card),
+    attached: [energy, energy, energy, tool].map(card),
+    damage,
+    conditions: conditions.map((kind) => ({ kind })),
+    pendingKnockoutCause: null,
+    placedOnTurn: 1,
+    becameActiveOnTurn: null,
+  });
+  const bench = (): object[] =>
+    Array.from({ length: 5 }, (_, index) => pokemon(stage2, index * 10));
+  const pile = (): object[] => [item, energy, tool].map(card);
+  const common = { prizeCount: 3, faceUpPrizes: [], discard: pile(), lostZone: pile() };
+  const hand = Array.from({ length: handSize }, (_, index) =>
+    card([basic, stage2, energy, tool, item][index % 5] as string),
+  );
+  return {
+    t: "sync",
+    matchId: "混んだ局面",
+    seat: 0,
+    stateVersion: 1,
+    view: {
+      phase: "main",
+      turn: 9,
+      turnPlayer: 0,
+      turnFlags: {},
+      choices: [],
+      outcome: null,
+      viewer: 0,
+      stadium: card(stadium),
+      self: {
+        ...common,
+        hand,
+        deckCount: 20,
+        active: pokemon(stage2, 120, ["poisoned"]),
+        bench: bench(),
+      },
+      opponent: {
+        ...common,
+        handCount: 12,
+        deckCount: 20,
+        active: pokemon(stage2, 90, ["asleep"]),
+        bench: bench(),
+      },
+    },
+    legalMoves: [
+      ...hand.map(() => ({ type: "AttachEnergy" })),
+      { type: "Attack", attackIndex: 0 },
+      { type: "EndTurn" },
+    ],
+    setup: null,
+    mulligans: [],
+    clock: { bankMs: [600_000, 600_000], moveRemainingMs: 60_000, toMove: 0 },
+    seedCommit: "0".repeat(64),
+    spectatorToken: "観戦",
+  };
+}
+
+/**
+ * FHD のモニターでブラウザを最大化したときの表示域と、同じモニターを 125% に拡大したときの表示域。
+ * どちらでも、ページを送らずに両者の盤面と手札、指せる手、時計が見えていること。
+ */
+for (const viewport of [
+  { width: 1920, height: 950 },
+  { width: 1536, height: 730 },
+]) {
+  test(`${viewport.width}×${viewport.height} の表示域に、両者の盤面と手札が収まる`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await page.evaluate(() =>
+      localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "混んだ局面" })),
+    );
+    await page.routeWebSocket(/\/ws\?/, (ws) => ws.send(JSON.stringify(crowdedSync(20))));
+    await page.reload();
+    await expect(page.locator("#self .zone.bench .card").first()).toBeVisible();
+
+    const inside = async (selector: string): Promise<void> => {
+      for (const box of await page
+        .locator(selector)
+        .evaluateAll((nodes) =>
+          nodes.map((node) => node.getBoundingClientRect().toJSON() as Box & { bottom: number }),
+        )) {
+        expect(box.x, selector).toBeGreaterThanOrEqual(0);
+        expect(box.y, selector).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width, selector).toBeLessThanOrEqual(viewport.width);
+        expect(box.y + box.height, selector).toBeLessThanOrEqual(viewport.height);
+      }
+    };
+    for (const side of ["#opponent", "#self"]) {
+      for (const zone of ["hand", "prizes", "active", "bench", "deck", "discard", "lost"]) {
+        await inside(`${side} [data-zone="${zone}"] .card`);
+      }
+    }
+    await inside('#stadium [data-zone="stadium"] .card');
+    await inside("#clock");
+    await inside("#concede-button");
+    await inside("#moves button >> nth=0");
+
+    // 手札は多くても 1 段に並べ、重ねて収める。
+    const tops = await page
+      .locator('#self [data-zone="hand"] .card')
+      .evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top)));
+    expect(tops).toHaveLength(20);
+    expect(new Set(tops).size).toBe(1);
+  });
+}
