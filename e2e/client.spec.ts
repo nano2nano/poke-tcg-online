@@ -473,6 +473,143 @@ test("引き直しで見せた手札は、準備のあいだ開いた欄に並�
   await close();
 });
 
+test("先攻を決めたコイントスが盤面の上に出て、できごとの記録は畳んである", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `せんこう-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const synced = [firstSync(a), firstSync(b)];
+  await seatPair(a, b, room);
+
+  // コインの向きは座席ごとに先攻か後攻かを表す。両座席で食い違えば、どちらかが違う先攻を見ている。
+  const faces = [];
+  for (const [index, page] of [a, b].entries()) {
+    const coin = page.locator("#results .coin");
+    await expect(coin).toHaveCount(1);
+    const sync = synced[index]!();
+    expect(sync).not.toBeNull();
+    const face = sync!.seat === sync!.firstPlayer ? "heads" : "tails";
+    await expect(coin).toHaveAttribute("data-face", face);
+    faces.push(face);
+    await expect(page.locator("#event-log")).not.toHaveAttribute("open");
+  }
+  expect(faces.sort()).toEqual(["heads", "tails"]);
+
+  await close();
+});
+
+/** 座席に最初に届いた `sync` の座席と先攻。 */
+function firstSync(page: Page): () => { seat: number; firstPlayer: number } | null {
+  let seen: { seat: number; firstPlayer: number } | null = null;
+  page.on("websocket", (socket) => {
+    socket.on("framereceived", ({ payload }) => {
+      const message = JSON.parse(String(payload));
+      if (message.t === "sync" && seen === null) {
+        seen = { seat: message.seat, firstPlayer: message.firstPlayer };
+      }
+    });
+  });
+  return () => seen;
+}
+
+test("コインを投げたイベントが届くと投げた数だけコインが出て、ダメージは受けたポケモンの上に浮かぶ", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `こいん-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  // 盤面に合ったイベントを作るため、最後に届いた局面を覚えておき、それに載せて送る。
+  const held: { last: Record<string, any> | null; client: WebSocketRoute | null } = {
+    last: null,
+    client: null,
+  };
+  await a.routeWebSocket(/\/ws\?/, (route) => {
+    held.client = route;
+    const server = route.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "sync" || message.t === "delta") held.last = message;
+      route.send(raw);
+    });
+  });
+  const seenA = lastSeen(a);
+  await seatPair(a, b, room);
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  while (seenA()?.phase === "setup") await advance(a, b, seenA);
+
+  const view = held.last!.view;
+  const target = view.self.active.inPlayId as string;
+  const base = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
+  held.client!.send(
+    JSON.stringify({
+      ...held.last,
+      t: "delta",
+      events: [
+        {
+          ...base,
+          actor: view.viewer,
+          source: null,
+          kind: "coin-flipped",
+          player: view.viewer,
+          results: [true, false, true],
+        },
+        {
+          ...base,
+          actor: 1 - view.viewer,
+          source: null,
+          kind: "damage-dealt",
+          target,
+          amount: 30,
+          beforeDamage: 0,
+          afterDamage: 30,
+          cause: { kind: "damage-counter" },
+        },
+        // 結果を溢れさせる。古いものから消すときに、コインを先に消さない。
+        ...Array.from({ length: 4 }, () => ({
+          ...base,
+          actor: null,
+          source: null,
+          kind: "turn-started",
+          player: view.turnPlayer,
+        })),
+      ],
+    }),
+  );
+
+  const coins = a
+    .locator("#results .result")
+    .filter({ has: a.locator(".coin") })
+    .last()
+    .locator(".coin");
+  await expect(coins).toHaveCount(3);
+  expect(
+    await coins.evaluateAll((all) => all.map((coin) => coin.getAttribute("data-face"))),
+  ).toEqual(["heads", "tails", "heads"]);
+  await expect(a.locator(".hit")).toHaveCount(1);
+
+  // コインで埋まっていても、あとから届いた結果は出す。同じ回のサイドは記録でも 1 行に畳む。
+  const logged = await a.locator("#events li").count();
+  const opponent = 1 - view.viewer;
+  const coin = { ...base, actor: opponent, source: null, kind: "coin-flipped", player: opponent };
+  const prize = { ...base, actor: opponent, source: null, kind: "prize-taken-hidden" };
+  held.client!.send(
+    JSON.stringify({
+      ...held.last,
+      t: "delta",
+      events: [
+        ...Array.from({ length: 5 }, () => ({ ...coin, results: [false] })),
+        { ...prize, player: opponent, count: 2 },
+        { ...prize, player: opponent, count: 2 },
+      ],
+    }),
+  );
+  await expect(a.locator("#events li")).toHaveCount(logged + 6);
+  await expect(a.locator("#results .result").last().locator(".coin")).toHaveCount(0);
+
+  await close();
+});
+
 /** 座席へ戻った直後は、名前の表より先に局面が届くことがある。 */
 test("名前の表が局面より遅れて届いたら、準備の候補の名前も描き直す", async ({
   browser,
