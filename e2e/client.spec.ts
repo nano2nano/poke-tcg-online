@@ -2135,9 +2135,9 @@ async function visibleBoard(page: Page, section: string): Promise<Box> {
 const ZONES = ["hand", "prizes", "active", "bench", "deck", "discard", "lost"];
 
 /**
- * FHD のモニターでブラウザを最大化し、ブックマークバーまで出したときのビューポート、同じモニターを
- * 125% に拡大したときのビューポート、縦に置いた FHD のモニター。どれでも、ページをスクロールせずに両者の盤面と手札、
- * 指せる手、時計が見えていること。
+ * FHD のモニターでブラウザを最大化し、ブックマークバーまで出したときのビューポート、
+ * 同じモニターを 125% に拡大したときのビューポート、縦に置いた FHD のモニター。
+ * どれでも、ページをスクロールせずに両者の盤面と手札、指せる手、時計が見えていること。
  */
 for (const viewport of [
   { width: 1920, height: 900 },
