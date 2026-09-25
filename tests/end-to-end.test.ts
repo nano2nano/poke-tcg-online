@@ -291,6 +291,7 @@ describe("入れなかった理由", () => {
 
   const malformedEndpoints = [
     "/api/join",
+    "/api/join-bot",
     "/api/deck/validate",
     "/api/deck/resolve",
     "/api/deck/official",
