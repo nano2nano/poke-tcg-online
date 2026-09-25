@@ -156,6 +156,8 @@ describe("観戦の配線", () => {
     expect((await watcher.next()).t).toBe("error");
     watcher.socket.send(JSON.stringify({ t: "concede" }));
     expect((await watcher.next()).t).toBe("error");
+    watcher.socket.send(JSON.stringify({ t: "setup", active: "c0", bench: [] }));
+    expect((await watcher.next()).t).toBe("error");
 
     // 局面も決着も動いていない。
     seats[0].socket.send(JSON.stringify({ t: "hello" }));
@@ -251,6 +253,29 @@ function fakeSocket(): SeatSocket & { sent: Json[]; closed: boolean } {
   };
   return socket;
 }
+
+describe("先攻", () => {
+  // 先攻を決めた `game-started` は対戦を作るときに出て、delta には載らない。画面が先攻を出すには sync が要る。
+  it("座席と観戦者の sync に、エンジンが決めた先攻が載る", () => {
+    ensureCards();
+    const registry = new MatchRegistry();
+    const hub = new MatchHub({ registry, now: () => 0 });
+    const matches = Array.from({ length: 8 }, (_, index) => newMatch(`hub-first-${index}`));
+    // 先攻が座席 0 に決まり続けても通ってしまわないよう、両方の先攻を含める。
+    expect(new Set(matches.map((match) => match.firstPlayer))).toEqual(new Set([0, 1]));
+
+    for (const match of matches) {
+      registry.add(match);
+      const seats = [fakeSocket(), fakeSocket()];
+      seats.forEach((socket, index) => hub.attach(socket, match.seatTokens[index]!));
+      const watcher = fakeSocket();
+      hub.attachSpectator(watcher, match.spectatorToken);
+      for (const socket of [...seats, watcher]) {
+        expect(socket.sent[0]!.firstPlayer).toBe(match.firstPlayer);
+      }
+    }
+  });
+});
 
 describe("サーバ全体の観戦者の上限", () => {
   it("溢れたら断り、終わった対戦の観戦者は閉じて数から外す", () => {

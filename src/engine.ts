@@ -10,6 +10,7 @@
 
 export {
   applyMove,
+  availableAttacks,
   createGame,
   getCardDef,
   isBasicPokemon,
@@ -37,10 +38,14 @@ export type { CardDef } from "../engine/src/cards.js";
 export type {
   ApplyResult,
   CardDefId,
+  CardInstance,
+  Choice,
+  ChoiceAnswer,
   DeckList,
   DomainEvent,
   GameOutcome,
   GameState,
+  InPlayId,
   Move,
   Player,
   PlayerEvent,
@@ -49,7 +54,34 @@ export type {
   Viewer,
 } from "../engine/src/index.js";
 
+/**
+ * これも `src/index.ts` が公開していない。対戦準備で、ベンチの枠をエンジンと同じ値で出すのと、
+ * 選択の候補のゾーンをエンジンと同じ読み方で引くのに要る。
+ */
+export { benchCapacity, cardsInZone } from "../engine/src/engine/query.js";
 export { classifyDefId, listUnimplementedDefIds } from "../engine/src/coverage.js";
 export { registerPoolCards } from "../engine/src/cardpool/index.js";
 export { loadGeneratedCards } from "../engine/src/cardpool/generated-cards.js";
 export { createRng, nextInt } from "../engine/src/rng.js";
+
+/**
+ * 学習した方策を AI の座席に座らせるのに要る（7.3 節）。どれも `src/index.ts` が公開していない。
+ * 重みの形式の見分け方と読み方はエンジンの `readWeightsFile` と同じで、ファイルのパスの代わりにバイト列を受ける。
+ */
+export { policyOf, type PolicyFile } from "../engine/src/learning/residual.js";
+export { decodePpoWeights, PPO_MAGIC } from "../engine/src/learning/ppo-net.js";
+/** テストが世代 0 の重みを作るのに使う。サーバは重みを作らない。 */
+export { encodePpoWeights, newPpoWeightsFile } from "../engine/src/learning/ppo-net.js";
+export { sampleFrom } from "../engine/src/learning/policy.js";
+export {
+  GameKnowledge,
+  NO_KNOWLEDGE,
+  tracksKnowledge,
+  type HiddenKnowledge,
+} from "../engine/src/learning/knowledge.js";
+/** テストが、サーバとは別の道で AI の座席の知識を求め直すのに使う。 */
+export { SeatKnowledge } from "../engine/src/learning/knowledge.js";
+/** 座席の方策が候補ごとに付ける確率。エンジンの自己対戦と同じ分布を返すので、AI の座席もここから引く。 */
+export { probabilitiesOf } from "../engine/harness/seat-agent.js";
+/** 学習と評価に使っているデッキ。AI の座席はこれを握る（7.3 節）。 */
+export { metaDecks } from "../engine/harness/meta-decks.js";

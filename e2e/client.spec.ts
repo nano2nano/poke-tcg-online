@@ -81,6 +81,12 @@ async function join(page: Page, room: string): Promise<void> {
  */
 async function playOne(page: Page): Promise<boolean> {
   try {
+    // 準備はまとめて出す。バトル場だけ選び、ベンチは空のまま出す。
+    if (await page.locator("#setup-submit").isVisible()) {
+      await page.locator("#setup-active button").first().click({ timeout: 1_000 });
+      await page.locator("#setup-submit").click({ timeout: 1_000 });
+      return true;
+    }
     await page.locator("#moves button").first().click({ timeout: 1_000 });
     return true;
   } catch {
@@ -143,6 +149,8 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
 test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {
   const room = `あいことば-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA = lastSeen(a);
+  const seenB = lastSeen(b);
 
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
@@ -155,13 +163,479 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
 
   /**
    * **手が並ぶのは片側だけである。** サーバは手番でない座席へ `legalMoves` を送らない。
-   * 両方に並ぶなら、射影ではなく生の局面が流れている。
+   * 両方に並ぶなら、射影ではなく生の局面が流れている。準備は両座席が同時に出すので、済ませてから見る。
    */
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  while (seenA()?.phase === "setup") await advance(a, b, seenA);
+  await expect.poll(() => seenA()?.phase).not.toBe("setup");
+  await expect.poll(() => seenB()?.phase).not.toBe("setup");
+  for (const page of [a, b]) {
+    await expect(page.locator("#moves button, #moves .waiting").first()).toBeVisible();
+  }
   const counts = await Promise.all([
     a.locator("#moves button").count(),
     b.locator("#moves button").count(),
   ]);
   expect(counts.filter((count) => count > 0)).toHaveLength(1);
+
+  await close();
+});
+
+interface Seen {
+  stateVersion: number;
+  phase: string;
+  viewer: number;
+  turnPlayer: number;
+  choice: { owner: number; kind: string } | undefined;
+  /** サーバが送った準備の状態（`choose` か `submitted`）。 */
+  setup: string | null;
+  hand: { instanceId: string; defId: string }[];
+  activeDefId: string | null;
+  benchCount: number;
+}
+
+interface SeenPokemon {
+  stack: { defId: string }[];
+}
+
+/**
+ * 局面を運ぶメッセージから、画面の文言を読まずに準備のどこにいるかを知るための値を取り出す。
+ * 選択の `kind` と持ち主は、持ち主でない座席の射影にも載る。
+ */
+function seenIn(message: {
+  t: string;
+  stateVersion?: number;
+  setup?: { kind: string } | null;
+  view?: {
+    phase: string;
+    viewer: number;
+    turnPlayer: number;
+    choices: { owner: number; kind: string }[];
+    self: {
+      hand: { instanceId: string; defId: string }[];
+      active: SeenPokemon | null;
+      bench: (SeenPokemon | null)[];
+    };
+  };
+}): Seen | null {
+  if ((message.t !== "sync" && message.t !== "delta") || message.view === undefined) return null;
+  const { view } = message;
+  return {
+    stateVersion: message.stateVersion ?? -1,
+    phase: view.phase,
+    viewer: view.viewer,
+    turnPlayer: view.turnPlayer,
+    choice: view.choices.at(-1),
+    setup: message.setup?.kind ?? null,
+    hand: view.self.hand,
+    activeDefId: view.self.active?.stack.at(-1)?.defId ?? null,
+    benchCount: view.self.bench.filter((pokemon) => pokemon !== null).length,
+  };
+}
+
+function lastSeen(page: Page): () => Seen | null {
+  let seen: Seen | null = null;
+  page.on("websocket", (socket) => {
+    socket.on("framereceived", ({ payload }) => {
+      seen = seenIn(JSON.parse(String(payload))) ?? seen;
+    });
+  });
+  return () => seen;
+}
+
+/**
+ * 自分の番の途中で相手が選ぶ局面（きぜつしたあとにバトル場へ出すポケモンなど）は、きぜつまで
+ * 指さないと来ない。準備も手番のプレイヤーでない側が選ぶので、その `phase` を書き換えて作る。
+ * まとめて出す準備の状態も落とし、エンジンの選択を 1 つずつ答える画面にする。
+ */
+async function relabelSetupAsMain(page: Page): Promise<() => Seen | null> {
+  let seen: Seen | null = null;
+  await page.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.view?.phase === "setup") message.view.phase = "main";
+      if (message.setup !== undefined) message.setup = null;
+      seen = seenIn(message) ?? seen;
+      client.send(JSON.stringify(message));
+    });
+  });
+  return () => seen;
+}
+
+/** 1 手指し、その局面が届くまで待つ。待たずに続けると、古い局面を見て次の手を選ぶ。 */
+async function advance(a: Page, b: Page, seen: () => Seen | null): Promise<void> {
+  const before = seen()?.stateVersion ?? -1;
+  expect(await playEither(a, b)).toBe(true);
+  await expect.poll(() => seen()?.stateVersion ?? -1).toBeGreaterThan(before);
+}
+
+/**
+ * `page` の座席が準備をまとめて出せるところまで進める。引き直す座席なら、たねのある相手が
+ * 先にサイドまで進んでから引き直すので（公式ルールガイド「G 対戦準備」5.b）、手番の側に先に出させる。
+ */
+async function untilChoose(
+  page: Page,
+  other: Page,
+  seen: () => Seen | null,
+  seenOther: () => Seen | null,
+): Promise<void> {
+  await expect.poll(() => seen()?.phase).toBe("setup");
+  await expect.poll(() => seenOther()?.phase).toBe("setup");
+  while (seen()?.setup !== "choose") {
+    const before = seen()?.stateVersion ?? -1;
+    const mover = seen()?.choice?.owner === seen()?.viewer ? page : other;
+    await expect(mover.locator("#setup-submit:visible, #moves button").first()).toBeVisible();
+    expect(await playOne(mover)).toBe(true);
+    await expect.poll(() => seen()?.stateVersion ?? -1).toBeGreaterThan(before);
+  }
+}
+
+/**
+ * 両座席がそろって準備を出せる対戦を開く。片方だけが引き直す対戦では、たねのある側しか先に出せないので、
+ * そうなったら閉じて別の対戦を開き直す。どちらになるかは seed で決まり、テストからは選べない。
+ */
+async function pairBothChoosing(
+  browser: Browser,
+  errors: string[],
+  prefix: string,
+): Promise<{
+  a: Page;
+  b: Page;
+  seenA: () => Seen | null;
+  seenB: () => Seen | null;
+  close: () => Promise<void>;
+}> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const [a, b, close] = await openPair(browser, errors);
+    const seenA = lastSeen(a);
+    const seenB = lastSeen(b);
+    await seatPair(a, b, `${prefix}-${Date.now()}-${attempt}`);
+    await expect.poll(() => seenA()?.phase).toBe("setup");
+    await expect.poll(() => seenB()?.phase).toBe("setup");
+    if (seenA()?.setup === "choose" && seenB()?.setup === "choose") {
+      return { a, b, seenA, seenB, close };
+    }
+    await close();
+  }
+  throw new Error("両座席がそろって準備を出せる対戦が開けない");
+}
+
+/**
+ * 実際のポケカでは両者が裏向きで同時に置く。エンジンは 1 人ずつの選択に並べるが、
+ * 番の来ていない側の答えもサーバが預かるので、後攻が先に出しても待たされない。
+ */
+test("対戦準備は、番を待たずに両座席がバトル場とベンチを選んで出せる", async ({
+  browser,
+  pageErrors,
+}) => {
+  const { a, b, seenA, seenB, close } = await pairBothChoosing(browser, pageErrors, "じゅんび");
+
+  const [first, second] = seenA()?.choice?.owner === seenA()?.viewer ? [a, b] : [b, a];
+  const seenSecond = second === a ? seenA : seenB;
+  const active = second.locator("#setup-active button").first();
+  await active.click();
+  await expect(active).toHaveAttribute("aria-pressed", "true");
+  const pickedId = await active.getAttribute("data-instance-id");
+  const pickedDefId = seenSecond()?.hand.find((card) => card.instanceId === pickedId)?.defId;
+  const benchable = await second.locator("#setup-bench button").count();
+  if (benchable > 0) await second.locator("#setup-bench button").first().click();
+  await second.locator("#setup-submit").click();
+
+  // 出した側は待ちになり、まだ選んでいる先攻もそのまま選べる。
+  await expect(second.locator("#setup")).toBeHidden();
+  await expect(second.locator("#move-prompt")).toBeVisible();
+  await expect(second.locator("#moves button")).toHaveCount(0);
+  await expect(second.locator("#moves .waiting")).toHaveCount(0);
+  await expect(first.locator("#setup")).toBeVisible();
+
+  await first.locator("#setup-active button").first().click();
+  await first.locator("#setup-submit").click();
+  await expect.poll(() => seenSecond()?.phase).not.toBe("setup");
+  expect(seenSecond()?.activeDefId).toBe(pickedDefId);
+  expect(seenSecond()?.benchCount).toBe(benchable > 0 ? 1 : 0);
+  for (const page of [a, b]) {
+    await expect(page.locator("#setup")).toBeHidden();
+    await expect(page.locator("#move-prompt")).toBeHidden();
+  }
+
+  await close();
+});
+
+test("「準備を終える」は返事が来るまで押せず、続けて押しても答えは 1 通だけ送る", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `にどおし-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA = lastSeen(a);
+  let seenB: Seen | null = null;
+  let setups = 0;
+  // 答えを送ってからの返事は止めておき、押せなくなっているかを返事の前に確かめる。
+  const hold: { queue: (() => void)[] | null } = { queue: null };
+  await b.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    client.onMessage((raw) => {
+      if (JSON.parse(String(raw)).t === "setup") {
+        setups += 1;
+        hold.queue ??= [];
+      }
+      server.send(raw);
+    });
+    server.onMessage((raw) => {
+      const deliver = () => {
+        seenB = seenIn(JSON.parse(String(raw))) ?? seenB;
+        client.send(raw);
+      };
+      if (hold.queue === null) deliver();
+      else hold.queue.push(deliver);
+    });
+  });
+  await seatPair(a, b, room);
+  await untilChoose(b, a, () => seenB, seenA);
+
+  await b.locator("#setup-active button").first().click();
+  await b.locator("#setup-submit").dblclick();
+  await expect(b.locator("#setup-submit")).toBeDisabled();
+  await expect.poll(() => setups).toBe(1);
+
+  const queued = hold.queue ?? [];
+  hold.queue = null;
+  for (const deliver of queued) deliver();
+  await expect(b.locator("#setup")).toBeHidden();
+  expect(setups).toBe(1);
+
+  await close();
+});
+
+test("自分の番の途中で相手が選んでいるあいだは、相手の番と出さない", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `とちゅう-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seen = await relabelSetupAsMain(a);
+  await relabelSetupAsMain(b);
+  await seatPair(a, b, room);
+  await expect.poll(() => seen()?.choice?.kind).toBeDefined();
+
+  // どちらが先に選ぶかは引き直しで変わる（公式ルールガイド「G 対戦準備」5.b）ので、選択の持ち主で待つ。
+  while (seen()?.choice?.owner !== seen()?.turnPlayer) await advance(a, b, seen);
+  const [first, second] = seen()?.turnPlayer === seen()?.viewer ? [a, b] : [b, a];
+  await expect(second.locator("#moves .waiting")).toHaveAttribute("data-state", "their-turn");
+
+  // 準備のあいだ番は先攻のままで、後攻が選ぶ局面が来る。
+  while (seen()?.choice?.owner === seen()?.turnPlayer) await advance(a, b, seen);
+  expect(seen()?.choice).toBeDefined();
+  await expect(first.locator("#moves .waiting")).toHaveAttribute("data-state", "their-choice");
+
+  await close();
+});
+
+/**
+ * 相手が引き直したことは、相手に番が回る前に起きる。できごとの欄に流れるだけだと、準備を選んでいるうちに
+ * 見落とす。どちらが引き直すかは seed で決まるので、届いた局面に相手のマリガンを書き足して作る。
+ */
+test("引き直しで見せた手札は、準備のあいだ開いた欄に並び、対戦が始まったら畳む", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `ひきなおし-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA: { last: Seen | null } = { last: null };
+  await a.routeWebSocket(/\/ws\?/, (client) => {
+    const server = client.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.view !== undefined && Array.isArray(message.mulligans)) {
+        const shown = message.view.self.hand.map((card: { defId: string }) => card.defId);
+        message.mulligans = [{ player: 1 - message.view.viewer, cards: shown }];
+      }
+      seenA.last = seenIn(message) ?? seenA.last;
+      client.send(JSON.stringify(message));
+    });
+  });
+  await seatPair(a, b, room);
+
+  const panel = a.locator("#mulligans");
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute("open", "");
+  const row = a.locator('#mulligan-list .mulligan[data-side="opponent"]');
+  await expect(row).toHaveCount(1);
+  await expect(row.locator(".card")).not.toHaveCount(0);
+
+  while (seenA.last?.phase === "setup") await advance(a, b, () => seenA.last);
+  await expect(panel).toBeVisible();
+  await expect(panel).not.toHaveAttribute("open", "");
+
+  // 対戦が始まってから開いた欄は、次の局面が届いても開いたままにする。
+  await panel.locator("summary").click();
+  await expect(panel).toHaveAttribute("open", "");
+  await advance(a, b, () => seenA.last);
+  await expect(panel).toHaveAttribute("open", "");
+
+  await close();
+});
+
+test("先攻を決めたコイントスが盤面の上に出て、できごとの記録は畳んである", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `せんこう-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const synced = [firstSync(a), firstSync(b)];
+  await seatPair(a, b, room);
+
+  // コインの向きは座席ごとに先攻か後攻かを表す。両座席で食い違えば、どちらかが違う先攻を見ている。
+  const faces = [];
+  for (const [index, page] of [a, b].entries()) {
+    const coin = page.locator("#results .coin");
+    await expect(coin).toHaveCount(1);
+    const sync = synced[index]!();
+    expect(sync).not.toBeNull();
+    const face = sync!.seat === sync!.firstPlayer ? "heads" : "tails";
+    await expect(coin).toHaveAttribute("data-face", face);
+    faces.push(face);
+    await expect(page.locator("#event-log")).not.toHaveAttribute("open");
+  }
+  expect(faces.sort()).toEqual(["heads", "tails"]);
+
+  await close();
+});
+
+function firstSync(page: Page): () => { seat: number; firstPlayer: number } | null {
+  let seen: { seat: number; firstPlayer: number } | null = null;
+  page.on("websocket", (socket) => {
+    socket.on("framereceived", ({ payload }) => {
+      const message = JSON.parse(String(payload));
+      if (message.t === "sync" && seen === null) {
+        seen = { seat: message.seat, firstPlayer: message.firstPlayer };
+      }
+    });
+  });
+  return () => seen;
+}
+
+test("コインを投げたイベントが届くと投げた数だけコインが出て、ダメージは受けたポケモンの上に浮かぶ", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `こいん-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  // 盤面に合ったイベントを作るため、最後に届いた局面を覚えておき、それに載せて送る。
+  const held: { last: Record<string, any> | null; client: WebSocketRoute | null } = {
+    last: null,
+    client: null,
+  };
+  await a.routeWebSocket(/\/ws\?/, (route) => {
+    held.client = route;
+    const server = route.connectToServer();
+    server.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "sync" || message.t === "delta") held.last = message;
+      route.send(raw);
+    });
+  });
+  const seenA = lastSeen(a);
+  await seatPair(a, b, room);
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  while (seenA()?.phase === "setup") await advance(a, b, seenA);
+
+  const view = held.last!.view;
+  const target = view.self.active.inPlayId as string;
+  const base = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
+  held.client!.send(
+    JSON.stringify({
+      ...held.last,
+      t: "delta",
+      events: [
+        {
+          ...base,
+          actor: view.viewer,
+          source: null,
+          kind: "coin-flipped",
+          player: view.viewer,
+          results: [true, false, true],
+        },
+        {
+          ...base,
+          actor: 1 - view.viewer,
+          source: null,
+          kind: "damage-dealt",
+          target,
+          amount: 30,
+          beforeDamage: 0,
+          afterDamage: 30,
+          cause: { kind: "damage-counter" },
+        },
+        // 結果を溢れさせる。古いものから消すときに、コインを先に消さない。
+        ...Array.from({ length: 4 }, () => ({
+          ...base,
+          actor: null,
+          source: null,
+          kind: "turn-started",
+          player: view.turnPlayer,
+        })),
+      ],
+    }),
+  );
+
+  const coins = a
+    .locator("#results .result")
+    .filter({ has: a.locator(".coin") })
+    .last()
+    .locator(".coin");
+  await expect(coins).toHaveCount(3);
+  expect(
+    await coins.evaluateAll((all) => all.map((coin) => coin.getAttribute("data-face"))),
+  ).toEqual(["heads", "tails", "heads"]);
+  await expect(a.locator(".hit")).toHaveCount(1);
+
+  // コインで埋まっていても、あとから届いた結果は出す。続けて取ったサイドは記録でも 1 行に畳む。
+  const logged = await a.locator("#events li").count();
+  const opponent = 1 - view.viewer;
+  const coin = { ...base, actor: opponent, source: null, kind: "coin-flipped", player: opponent };
+  const prize = { ...base, actor: opponent, source: null, kind: "prize-taken-hidden" };
+  held.client!.send(
+    JSON.stringify({
+      ...held.last,
+      t: "delta",
+      events: [
+        ...Array.from({ length: 5 }, () => ({ ...coin, results: [false] })),
+        { ...prize, player: opponent, count: 2 },
+        { ...prize, player: opponent, count: 2 },
+      ],
+    }),
+  );
+  await expect(a.locator("#events li")).toHaveCount(logged + 6);
+  await expect(a.locator("#results .result").last().locator(".coin")).toHaveCount(0);
+
+  await close();
+});
+
+/** 座席へ戻った直後は、名前の表より先に局面が届くことがある。 */
+test("名前の表が局面より遅れて届いたら、準備の候補の名前も描き直す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `なまえ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA = lastSeen(a);
+  const seenB = lastSeen(b);
+  await seatPair(a, b, room);
+  await untilChoose(a, b, seenA, seenB);
+
+  const names = gate();
+  await a.route("**/api/cards", async (route) => {
+    await names.wait;
+    await route.continue();
+  });
+  await a.reload();
+  const candidate = a.locator("#setup-active button").first();
+  await expect(candidate).toBeVisible();
+  const before = await candidate.textContent();
+  names.open();
+  await expect(candidate).not.toHaveText(before ?? "");
 
   await close();
 });
@@ -424,6 +898,35 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   await close();
 });
 
+test("横に広い画面では、対戦のあいだリプレイの欄を出さず、決着したら戻す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `たたむ-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await a.setViewportSize({ width: 1920, height: 900 });
+
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#table")).toBeVisible();
+  await expect(a.locator("#history")).toBeHidden();
+  // ページがスクロールできると、盤面の上でホイールを回したときに盤面ごとずれる。
+  expect(
+    await a.evaluate(() => {
+      const root = Reflect.get(globalThis, "document").documentElement as { scrollHeight: number };
+      return root.scrollHeight - (Reflect.get(globalThis, "innerHeight") as number);
+    }),
+  ).toBeLessThanOrEqual(0);
+
+  a.once("dialog", (dialog) => void dialog.accept());
+  await a.click("#concede-button");
+  await expect(a.locator("#history")).toBeVisible();
+
+  await close();
+});
+
 async function seatPair(a: Page, b: Page, room: string): Promise<void> {
   await Promise.all([a.goto("/"), b.goto("/")]);
   await join(a, room);
@@ -433,7 +936,19 @@ async function seatPair(a: Page, b: Page, room: string): Promise<void> {
   await expect(b.locator("#self .mat").first()).toBeVisible();
 }
 
+/**
+ * どちらかの座席で 1 手ぶん局面を動かす。準備は両座席がそろってはじめて動くので、
+ * 出せる座席がそろって出す。
+ */
 async function playEither(a: Page, b: Page): Promise<boolean> {
+  const setup = [];
+  for (const page of [a, b]) if (await page.locator("#setup-submit").isVisible()) setup.push(page);
+  if (setup.length > 0) {
+    for (const page of setup) await playOne(page);
+    // マリガンの追加ドローを答えていない座席は、まだ準備を出せない。それを答えれば局面が動く。
+    for (const page of [a, b]) if (!setup.includes(page)) await playOne(page);
+    return true;
+  }
   for (let attempt = 0; attempt < 6; attempt += 1) {
     if ((await playOne(a)) || (await playOne(b))) return true;
   }
@@ -654,11 +1169,7 @@ test("観戦のリンクを開くと、プレイヤーを作らずに両者の�
   await expect(watcher.locator("#watch-side-1")).not.toBeEmpty();
   await expect(watcher.locator("#watch-events li")).toHaveCount(0);
 
-  let played = false;
-  for (let attempt = 0; attempt < 6 && !played; attempt += 1) {
-    played = (await playOne(a)) || (await playOne(b));
-  }
-  expect(played).toBe(true);
+  expect(await playEither(a, b)).toBe(true);
   // 座席の 1 手が観戦者へも届いた印は、できごとの行が増えることである。
   await expect(watcher.locator("#watch-events li")).not.toHaveCount(0);
 
@@ -1233,9 +1744,11 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
 test("画像を読めなかったカードは、名前の面で残る", async ({ browser, pageErrors }) => {
   const room = `がぞうなし-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  let asked = 0;
+  const seenA = lastSeen(a);
+  const seenB = lastSeen(b);
+  const asked: string[] = [];
   await withCardImages(a, (route) => {
-    asked += 1;
+    asked.push(new URL(route.request().url()).pathname);
     return route.fulfill({ status: 502, body: "" });
   });
 
@@ -1243,6 +1756,8 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await expect.poll(() => seenA()?.phase).toBe("setup");
+  await expect.poll(() => seenB()?.phase).toBe("setup");
 
   const hand = a.locator('#self [data-zone="hand"] .card');
   await expect(hand.first()).toBeVisible();
@@ -1251,14 +1766,14 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
 
   /**
    * 盤面は 1 手ごとに描き直す。読めなかった画像を覚えていないと、公式が落ちているあいだ
-   * 1 手ごとに全部のカードを頼み直す。
+   * 1 手ごとに全部のカードを頼み直す。準備が終わる手で相手の場が表になり、初めて出る画像は頼む。
    */
-  const before = asked;
   const events = a.locator("#events li");
   const seen = await events.count();
-  while (!(await playOne(a)) && !(await playOne(b)));
+  expect(await playEither(a, b)).toBe(true);
   await expect(events).not.toHaveCount(seen);
-  expect(asked).toBe(before);
+  expect(asked.length).toBeGreaterThan(0);
+  expect(new Set(asked).size).toBe(asked.length);
 
   await close();
 });
@@ -1430,6 +1945,193 @@ test("公式のカード ID で定義が決まらないカードは、枚数に�
   await expect(page.locator("#deck-status")).toHaveClass(/ng/);
 });
 
+type Box = { x: number; y: number; width: number; height: number };
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+test("カードにマウスを載せると横に大きく出て、外すと消える", async ({ browser, pageErrors }) => {
+  const room = `のせる-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  await Promise.all([a.goto("/"), b.goto("/")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+
+  const hand = a.locator('#self [data-zone="hand"] .card');
+  const preview = a.locator("#card-preview");
+  await expect(hand.first()).toBeVisible();
+  // 「対戦をさがす」を押したマウスの位置には、盤面が開くとカードが来ることがある。
+  await a.mouse.move(0, 0);
+  await expect(preview).toBeHidden();
+
+  const card = hand.last();
+  const defId = await card.getAttribute("data-def-id");
+  // プレビューは読み上げない。同じ説明をカードそのものが持つ。
+  await expect(preview).toHaveAttribute("aria-hidden", "true");
+  await expect(card.locator(".visually-hidden")).not.toBeEmpty();
+  await card.hover();
+  await expect(preview).toBeVisible();
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", defId as string);
+  const shown = (await preview.boundingBox()) as Box;
+  const under = (await card.boundingBox()) as Box;
+  const viewport = a.viewportSize() as { width: number; height: number };
+  expect(shown.width).toBeGreaterThan(under.width * 2);
+  expect(overlaps(shown, under)).toBe(false);
+  expect(shown.x).toBeGreaterThanOrEqual(0);
+  expect(shown.y).toBeGreaterThanOrEqual(0);
+  expect(shown.x + shown.width).toBeLessThanOrEqual(viewport.width);
+  expect(shown.y + shown.height).toBeLessThanOrEqual(viewport.height);
+
+  // 盤面の描き直しと同じく、載せているカードを差し替える。閉じずに、マウスの下に来た方へ移る。
+  const hides = await preview.evaluateHandle((node) => {
+    const seen = { count: 0 };
+    // この tsconfig は DOM の型を読まないので、ページの側から引く。
+    const Observer = Reflect.get(globalThis, "MutationObserver");
+    new Observer(() => {
+      if (node.hidden) seen.count += 1;
+    }).observe(node, { attributes: true, attributeFilter: ["hidden"] });
+    return seen;
+  });
+  const other = "差し替えたカード";
+  await card.evaluate((node, defId) => {
+    const replacement = node.cloneNode() as typeof node;
+    replacement.dataset.defId = defId;
+    node.replaceWith(replacement);
+  }, other);
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", other);
+  expect(await hides.evaluate((seen) => seen.count)).toBe(0);
+
+  // 下にカードが無くなったら閉じる。
+  await hand.evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
+  await expect(preview).toBeHidden();
+  await expect(hand).toHaveCount(0);
+  while (!(await playOne(a)) && !(await playOne(b)));
+  await expect(hand.first()).toBeVisible();
+
+  await hand.first().hover();
+  await expect(preview).toBeVisible();
+  await a.mouse.move(0, 0);
+  await expect(preview).toBeHidden();
+
+  // 押して開く拡大の中では出さない。
+  await hand.first().click();
+  await expect(a.locator("#card-zoom")).toBeVisible();
+  await expect(preview).toBeHidden();
+  await a.locator("#card-zoom-cards .card").first().hover();
+  await expect(preview).toBeHidden();
+
+  await close();
+});
+
+test("一覧を送ると、プレビューもカードに付いていく", async ({ page }) => {
+  // プレビューが画面の上下の端で止まらない高さにして、カードとの位置の関係だけを見る。
+  await page.setViewportSize({ width: 1280, height: 1600 });
+  await withCardImages(page, (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
+  );
+  await page.goto("/");
+  await page.fill("#card-search", "エネルギー");
+  const thumb = page.locator("#card-results .card-row .card").nth(3);
+  await expect(thumb).toBeVisible();
+  const preview = page.locator("#card-preview");
+  await thumb.hover();
+  await expect(preview).toBeVisible();
+  const offset = async (): Promise<number> =>
+    ((await preview.boundingBox()) as Box).y - ((await thumb.boundingBox()) as Box).y;
+  const before = await offset();
+
+  await page.locator("#card-results").evaluate((node) => node.scrollBy(0, 10));
+  await expect.poll(offset).toBeCloseTo(before, 0);
+  expect(((await preview.boundingBox()) as Box).y).toBeGreaterThan(8);
+});
+
+test.describe("タッチ端末", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+
+  /** CDP で指を置く。Playwright の `tap` は置いてすぐ離すので、長押しを作れない。 */
+  async function finger(
+    page: Page,
+    box: Box,
+  ): Promise<{ slide: (dy: number) => Promise<void>; lift: () => Promise<void> }> {
+    const cdp = await page.context().newCDPSession(page);
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    return {
+      slide: async (dy) => {
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: point.x, y: point.y + dy }],
+        });
+      },
+      lift: async () => {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      },
+    };
+  }
+
+  test("長押しのあいだだけ大きく出る", async ({ page }) => {
+    await withCardImages(page, (route) =>
+      route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
+    );
+    await page.goto("/");
+    await page.fill("#card-search", "エネルギー");
+    const thumb = page.locator("#card-results .card-row .card").first();
+    await expect(thumb).toBeVisible();
+    const defId = await thumb.getAttribute("data-def-id");
+    const preview = page.locator("#card-preview");
+    const box = (await thumb.boundingBox()) as Box;
+
+    // 見るのは、画面が長押しのメニューを止めたかどうかと、クリックが画面の処理まで届いたか。
+    const menus = await thumb.evaluateHandle((node) => {
+      const prevented: boolean[] = [];
+      node.ownerDocument.addEventListener("contextmenu", (event: { defaultPrevented: boolean }) =>
+        prevented.push(event.defaultPrevented),
+      );
+      return prevented;
+    });
+    // 画面より後に付けた capture のリスナーは画面が止めても呼ばれ、bubble のリスナーは呼ばれない。
+    const clicks = await thumb.evaluateHandle((node) => {
+      const counts = { sent: 0, reached: 0 };
+      node.ownerDocument.addEventListener("click", () => (counts.sent += 1), { capture: true });
+      node.ownerDocument.addEventListener("click", () => (counts.reached += 1));
+      return counts;
+    });
+
+    const pressed = await finger(page, box);
+    await expect(preview).toBeVisible();
+    await expect(preview.locator(".card")).toHaveAttribute("data-def-id", defId as string);
+    await expect(preview.locator(".card img")).toBeVisible();
+    const shown = (await preview.boundingBox()) as Box;
+    expect(overlaps(shown, box)).toBe(false);
+    expect(shown.x + shown.width).toBeLessThanOrEqual(390);
+    // ヘッドレスの Chromium は長押しでメニューを出さないので、届いたときの扱いを直に見る。
+    await thumb.dispatchEvent("contextmenu");
+    await pressed.lift();
+    await expect(preview).toBeHidden();
+    // 離したときに届くクリックは長押しの続きなので、拡大を開かせない。次に押したときのクリックは通す。
+    await expect
+      .poll(() => clicks.evaluate((counts) => ({ ...counts })))
+      .toEqual({ sent: 1, reached: 0 });
+    await thumb.tap();
+    expect(await clicks.evaluate((counts) => counts.reached)).toBe(1);
+
+    // 指をずらすと閉じる。そのときはクリックが来ないので、次に押したときのクリックを止めない。
+    const slid = await finger(page, box);
+    await expect(preview).toBeVisible();
+    await slid.slide(30);
+    await expect(preview).toBeHidden();
+    await slid.lift();
+    await thumb.tap();
+    expect(await clicks.evaluate((counts) => counts.reached)).toBe(2);
+    await expect(preview).toBeHidden();
+    // 長押しでないときのメニューは止めない。
+    await thumb.dispatchEvent("contextmenu");
+    expect(await menus.evaluate((prevented) => [...prevented])).toEqual([true, false]);
+  });
+});
+
 test("公式サイトの返事を待つあいだにデッキを組み替えたら、置き換えない", async ({ page }) => {
   await page.goto("/");
   const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
@@ -1466,4 +2168,450 @@ test("公式サイトの返事を待つあいだにデッキを組み替えた�
   await expect(page.locator("#deck-status")).toHaveClass(/ng/);
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
   await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
+});
+
+/**
+ * 中盤の混んだ局面を 1 通の `sync` にする。両者のベンチが埋まり、進化とエネルギーとどうぐが載り、
+ * 手札も多い。盤面の大きさだけを見るので、手はサーバに頼まず、この局面を直に送る。
+ */
+function crowdedSync(handSize: number): object {
+  const defs = loadGeneratedCards();
+  const pick = (test: (def: (typeof defs)[number]) => boolean): string =>
+    (defs.find(test) as (typeof defs)[number]).defId;
+  const basic = pick((def) => def.kind === "pokemon" && def.evolutionStage === "basic");
+  const stage2 = pick((def) => def.kind === "pokemon" && def.evolutionStage === "stage2");
+  const energy = pick((def) => def.kind === "energy");
+  const tool = pick((def) => def.kind === "trainer" && def.trainerKind === "tool");
+  const item = pick((def) => def.kind === "trainer" && def.trainerKind === "item");
+  const stadium = pick((def) => def.kind === "trainer" && def.trainerKind === "stadium");
+
+  let serial = 0;
+  const card = (defId: string): object => ({ instanceId: `c${++serial}`, defId });
+  const pokemon = (top: string, damage: number, conditions: string[] = []): object => ({
+    inPlayId: `p${++serial}`,
+    stack: [basic, top].map(card),
+    attached: [energy, energy, energy, tool].map(card),
+    damage,
+    conditions: conditions.map((kind) => ({ kind })),
+    pendingKnockoutCause: null,
+    placedOnTurn: 1,
+    becameActiveOnTurn: null,
+  });
+  const bench = (): object[] =>
+    Array.from({ length: 5 }, (_, index) => pokemon(stage2, index * 10));
+  const pile = (): object[] => [item, energy, tool].map(card);
+  const common = { prizeCount: 3, faceUpPrizes: [], discard: pile(), lostZone: pile() };
+  const hand = Array.from({ length: handSize }, (_, index) =>
+    card([basic, stage2, energy, tool, item][index % 5] as string),
+  );
+  const active = pokemon(stage2, 120, ["poisoned"]);
+  const benched = bench();
+  const targets = [active, ...benched].map((each) => (each as { inPlayId: string }).inPlayId);
+  // 手札の同じカードはエンジンが 1 枚に畳むので、つける手はつける先の数だけ並ぶ。
+  const first = (defId: string): string =>
+    (hand as { instanceId: string; defId: string }[]).find((each) => each.defId === defId)!
+      .instanceId;
+  const attach = (type: string, defId: string): object[] =>
+    targets.map((target) => ({ type, player: 0, cardInstanceId: first(defId), target }));
+  return {
+    t: "sync",
+    matchId: "混んだ局面",
+    seat: 0,
+    stateVersion: 1,
+    view: {
+      phase: "main",
+      turn: 9,
+      turnPlayer: 0,
+      turnFlags: {},
+      choices: [],
+      outcome: null,
+      viewer: 0,
+      stadium: card(stadium),
+      self: {
+        ...common,
+        hand,
+        deckCount: 20,
+        active,
+        bench: benched,
+      },
+      opponent: {
+        ...common,
+        handCount: 30,
+        deckCount: 20,
+        active: pokemon(stage2, 90, ["asleep"]),
+        bench: bench(),
+      },
+    },
+    legalMoves: [
+      ...attach("AttachEnergy", energy),
+      ...attach("AttachTool", tool),
+      { type: "Attack", player: 0, attackIndex: 0 },
+      { type: "EndTurn", player: 0 },
+    ],
+    setup: null,
+    mulligans: [],
+    clock: { bankMs: [600_000, 600_000], moveRemainingMs: 60_000, toMove: 0 },
+    seedCommit: "0".repeat(64),
+    spectatorToken: "観戦",
+  };
+}
+
+/** 要素の枠がすべて `bounds` の中にあること。スクロールで隠れた部分も枠は返るので、見えているかをこれで見る。 */
+async function expectInside(page: Page, selector: string, bounds: Box): Promise<void> {
+  const boxes = await page
+    .locator(selector)
+    .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().toJSON() as Box));
+  expect(boxes.length, selector).toBeGreaterThan(0);
+  for (const box of boxes) {
+    expect(box.x, selector).toBeGreaterThanOrEqual(bounds.x);
+    expect(box.y, selector).toBeGreaterThanOrEqual(bounds.y);
+    expect(box.x + box.width, selector).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect(box.y + box.height, selector).toBeLessThanOrEqual(bounds.y + bounds.height);
+  }
+}
+
+/** 盤面の欄の枠とビューポートの重なり。盤面がビューポートより長くても、欄より広くても、はみ出た部分は見えない。 */
+async function visibleBoard(page: Page, section: string): Promise<Box> {
+  const board = (await page.locator(`${section} .board`).boundingBox()) as Box;
+  const viewport = page.viewportSize() as { width: number; height: number };
+  return {
+    x: Math.max(board.x, 0),
+    y: Math.max(board.y, 0),
+    width: Math.min(board.x + board.width, viewport.width) - Math.max(board.x, 0),
+    height: Math.min(board.y + board.height, viewport.height) - Math.max(board.y, 0),
+  };
+}
+
+const ZONES = ["hand", "prizes", "active", "bench", "deck", "discard", "lost"];
+
+/**
+ * FHD のモニターでブラウザを最大化し、ブックマークバーまで出したときのビューポート、
+ * 同じモニターを 125% に拡大したときのビューポート、縦に置いた FHD のモニター。
+ * どれでも、ページをスクロールせずに両者の盤面と手札、指せる手、時計が見えていること。
+ */
+for (const viewport of [
+  { width: 1920, height: 900 },
+  { width: 1536, height: 730 },
+  { width: 1080, height: 1800 },
+]) {
+  test(`${viewport.width}×${viewport.height} のビューポートに、両者の盤面と手札が収まる`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await openWith(page, crowdedSync(20));
+    await expect(page.locator("#self .zone.bench .card").first()).toBeVisible();
+
+    const board = await visibleBoard(page, "#table");
+    for (const side of ["#opponent", "#self"]) {
+      for (const zone of ZONES)
+        await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
+    }
+    await expectInside(page, '#stadium [data-zone="stadium"] .card', board);
+    const screen = { x: 0, y: 0, ...viewport };
+    for (const selector of ["#clock", "#concede-button", "#moves button >> nth=0", "#event-log"]) {
+      await expectInside(page, selector, screen);
+    }
+
+    // 手札は枚数の見出しまで含めて、名前のために空けた幅の内側に収める。中身の見えない側も同じ。
+    for (const side of ["#opponent", "#self"]) {
+      const edges = await page.locator(`${side} [data-zone="hand"]`).evaluate((zone) => {
+        // この tsconfig は DOM の型を読まないので、ページの側から引く。
+        const style = Reflect.get(globalThis, "getComputedStyle") as (node: unknown) => {
+          paddingRight: string;
+        };
+        return {
+          label: zone.querySelector(".zone-label")!.getBoundingClientRect().right,
+          inner: zone.getBoundingClientRect().right - parseFloat(style(zone).paddingRight),
+        };
+      });
+      expect(edges.label, side).toBeLessThanOrEqual(edges.inner + 0.5);
+    }
+
+    // ベンチは狭くても折り返さない。
+    for (const side of ["#opponent", "#self"]) {
+      const benchTops = await page
+        .locator(`${side} [data-zone="bench"] > .pokemon`)
+        .evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().top)));
+      expect(benchTops).toHaveLength(5);
+      expect(new Set(benchTops).size, side).toBe(1);
+    }
+
+    // 手札は多くても 1 段に並べ、重ねて収める。名前の上には重ねない。
+    const hand = page.locator('#self [data-zone="hand"] .card');
+    const tops = await hand.evaluateAll((nodes) =>
+      nodes.map((node) => Math.round(node.getBoundingClientRect().top)),
+    );
+    expect(tops).toHaveLength(20);
+    expect(new Set(tops).size).toBe(1);
+    const name = (await page.locator("#table .board-side:last-child > h2").boundingBox()) as Box;
+    expect(overlaps(name, (await hand.first().boundingBox()) as Box)).toBe(false);
+  });
+}
+
+test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる", async ({ page }) => {
+  const viewport = { width: 1920, height: 900 };
+  await page.setViewportSize(viewport);
+  const { view, clock } = crowdedSync(20) as {
+    view: { self: { hand: unknown[] }; opponent: object; stadium: object };
+    clock: object;
+  };
+  const { hand, ...shown } = view.self;
+  await page.routeWebSocket(/\/ws\?/, (ws) =>
+    ws.send(
+      JSON.stringify({
+        t: "spectator-sync",
+        view: {
+          ...view,
+          viewer: "spectator",
+          players: [{ ...shown, handCount: hand.length }, view.opponent],
+        },
+        seats: [
+          { displayName: "長い名前を付けたプレイヤー".repeat(3), rating: 1500 },
+          { displayName: "ななし", rating: 1500 },
+        ],
+        clock,
+      }),
+    ),
+  );
+  await page.goto("/?watch=観戦");
+  await expect(page.locator("#watch-side-0 .zone.bench .card").first()).toBeVisible();
+
+  const board = await visibleBoard(page, "#watch");
+  for (const side of ["#watch-side-1", "#watch-side-0"]) {
+    for (const zone of ZONES)
+      await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
+  }
+  await expectInside(page, '#watch-stadium [data-zone="stadium"] .card', board);
+  await expectInside(page, "#watch-clock", { x: 0, y: 0, ...viewport });
+  // 長い名前は省いて、手札に重ねない。
+  const name = (await page.locator("#watch-name-0").boundingBox()) as Box;
+  const backs = (await page
+    .locator('#watch-side-0 [data-zone="hand"] .card')
+    .first()
+    .boundingBox()) as Box;
+  expect(overlaps(name, backs)).toBe(false);
+});
+
+interface HeldCard {
+  instanceId: string;
+  defId: string;
+}
+interface CrowdedSync {
+  view: {
+    choices: object[];
+    self: { hand: HeldCard[]; active: { inPlayId: string; attached: HeldCard[] } };
+  };
+  legalMoves: object[];
+}
+
+/** 局面を 1 通の `sync` で直に送る画面を開く。返す配列に、画面が送った手が溜まる。 */
+async function openWith(page: Page, sync: object): Promise<{ move: object; offered?: number[] }[]> {
+  const sent: { move: object; offered?: number[] }[] = [];
+  await page.goto("/");
+  await page.evaluate(() =>
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "混んだ局面" })),
+  );
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    ws.onMessage((raw) => {
+      const message = JSON.parse(String(raw));
+      if (message.t === "move") sent.push(message);
+    });
+    ws.send(JSON.stringify(sync));
+  });
+  await page.reload();
+  return sent;
+}
+
+test("つける先だけが違う手は見出しで見分けられ、ボタンに載せると盤面のつける先を囲む", async ({
+  page,
+}) => {
+  const sync = crowdedSync(20) as CrowdedSync;
+  const sent = await openWith(page, sync);
+  const buttons = page.locator("#moves button");
+  await expect(buttons).toHaveCount(sync.legalMoves.length);
+  // ベンチの 5 匹は同じカードなので、名前だけでは見出しが重なる。
+  const labels = await buttons.allTextContents();
+  expect(new Set(labels).size).toBe(labels.length);
+
+  const { target } = sync.legalMoves[3] as { target: string };
+  await buttons.nth(3).hover();
+  const aimed = page.locator("#table .pokemon.aimed");
+  await expect(aimed).toHaveCount(1);
+  await expect(aimed).toHaveAttribute("data-in-play-id", target);
+  await buttons.last().hover();
+  await expect(aimed).toHaveCount(0);
+
+  // エネルギーとどうぐの 1 つ目は、どちらもバトル場へつける。片方から外れても、選んだ方の囲みは残す。
+  const { target: active } = sync.legalMoves[0] as { target: string };
+  await buttons.first().focus();
+  await buttons.nth(6).hover();
+  await buttons.last().hover();
+  await expect(aimed).toHaveCount(1);
+  await expect(aimed).toHaveAttribute("data-in-play-id", active);
+
+  // 1 つも畳んでいなければ、見せた手の位置は添えない。
+  await buttons.last().click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]?.offered).toBeUndefined();
+});
+
+test("手札の同じカードを選ぶ答えは 1 つに畳んで見せた手の位置を添え、場の同じカードは畳まずに見分ける", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync;
+  const choose = (cards: HeldCard[]): void => {
+    const choiceId = "カードを選ぶ";
+    sync.view.choices = [
+      {
+        choiceId,
+        owner: 0,
+        kind: "card-effect",
+        optional: false,
+        prompt: { kind: "selectCard", candidates: cards.map((card) => card.instanceId) },
+      },
+    ];
+    sync.legalMoves = cards.map((card) => ({
+      type: "AnswerChoice",
+      player: 0,
+      choiceId,
+      answer: { kind: "card", card: card.instanceId },
+    }));
+  };
+  const buttons = page.locator("#moves button");
+
+  // 手札は 5 種類を 2 枚ずつ持つ。
+  choose(sync.view.self.hand);
+  const sent = await openWith(page, sync);
+  await expect(buttons).toHaveCount(5);
+  await buttons.last().click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]).toMatchObject({ move: sync.legalMoves[4], offered: [0, 1, 2, 3, 4] });
+
+  // バトル場のポケモンには同じエネルギーが 3 枚つく。場のカードは個体ごとの記録を持ちうる。
+  choose(sync.view.self.active.attached);
+  await openWith(page, sync);
+  await expect(buttons).toHaveCount(4);
+  const labels = await buttons.allTextContents();
+  expect(new Set(labels).size).toBe(4);
+});
+
+test("効果の選択では、選んだカードの行き先をボタンに出す", async ({ page }) => {
+  const sync = crowdedSync(10) as CrowdedSync & { answerDestinations: object[] | null };
+  const defIds = [...new Set(sync.view.self.hand.map((card) => card.defId))].slice(0, 2);
+  const buttons = page.locator("#moves button");
+  const pickFromDeck = (): void => {
+    const choiceId = "山札から選ぶ";
+    sync.view.choices = [
+      {
+        choiceId,
+        owner: 0,
+        kind: "card-effect",
+        optional: false,
+        prompt: {
+          kind: "selectFromHiddenZone",
+          zone: { kind: "deck", player: 0 },
+          candidates: defIds,
+        },
+      },
+    ];
+    sync.legalMoves = defIds.map((defId) => ({
+      type: "AnswerChoice",
+      player: 0,
+      choiceId,
+      answer: { kind: "cardDef", defId },
+    }));
+  };
+  const labelsWith = async (destinations: object[] | null): Promise<string[]> => {
+    sync.answerDestinations = destinations;
+    await openWith(page, sync);
+    await expect(buttons).toHaveCount(sync.legalMoves.length);
+    return buttons.allTextContents();
+  };
+
+  // 同じ候補から、あとで行き先を決めるカード、手札に加えるカードを続けて選ぶ。行き先が違えば見出しも違う。
+  pickFromDeck();
+  const plain = await labelsWith(null);
+  const later = await labelsWith(
+    defIds.map(() => ({ to: "later", options: ["attached", "hand"] })),
+  );
+  const toHand = await labelsWith(defIds.map(() => ({ to: "hand", player: 0 })));
+  for (let index = 0; index < defIds.length; index++) {
+    expect(new Set([plain[index], later[index], toHand[index]]).size).toBe(3);
+  }
+
+  // 残りのカードをつけるポケモンを選ぶ。
+  const choiceId = "つける先を選ぶ";
+  const targets = [sync.view.self.active.inPlayId];
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt: { kind: "selectInPlay", candidates: targets },
+    },
+  ];
+  sync.legalMoves = targets.map((target) => ({
+    type: "AnswerChoice",
+    player: 0,
+    choiceId,
+    answer: { kind: "inPlay", target },
+  }));
+  const [pokemon] = await labelsWith(null);
+  const [attach] = await labelsWith(
+    targets.map((target) => ({ to: "attached", target, cards: [defIds[1]] })),
+  );
+  expect(attach).not.toBe(pokemon);
+  // 行き先の書けない組み合わせは、元の見出しに戻す。
+  const [unknown] = await labelsWith(targets.map(() => ({ to: "hand", player: 0 })));
+  expect(unknown).toBe(pokemon);
+});
+
+test("山札の上へ順に置く選択では、何枚目に置くかを案内とボタンに出す", async ({ page }) => {
+  const sync = crowdedSync(10) as CrowdedSync & { deckPlacement: object | null };
+  const choiceId = "山札の上に置く";
+  const defIds = [...new Set(sync.view.self.hand.map((card) => card.defId))];
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt: {
+        kind: "selectFromHiddenZone",
+        zone: { kind: "deck", player: 0 },
+        candidates: defIds,
+      },
+    },
+  ];
+  sync.legalMoves = defIds.map((defId) => ({
+    type: "AnswerChoice",
+    player: 0,
+    choiceId,
+    answer: { kind: "cardDef", defId },
+  }));
+  const prompt = page.locator("#move-prompt");
+  const buttons = page.locator("#moves button");
+
+  // 何枚目かが届かないふつうの選択では、案内を出さない。
+  sync.deckPlacement = null;
+  await openWith(page, sync);
+  await expect(buttons).toHaveCount(defIds.length);
+  await expect(prompt).toBeHidden();
+  const plain = await buttons.allTextContents();
+
+  sync.deckPlacement = { edge: "top", nth: 1, above: [] };
+  await openWith(page, sync);
+  await expect(prompt).toBeVisible();
+  const first = await buttons.allTextContents();
+
+  sync.deckPlacement = { edge: "top", nth: 2, above: [defIds[0]] };
+  await openWith(page, sync);
+  await expect(prompt).toBeVisible();
+  const second = await buttons.allTextContents();
+
+  // 1 枚目と 2 枚目で見出しが変わり、どちらもふつうの選択の見出しと違う。
+  for (let index = 0; index < defIds.length; index++) {
+    expect(new Set([plain[index], first[index], second[index]]).size).toBe(3);
+  }
 });

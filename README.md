@@ -34,6 +34,32 @@ Cloudflare へ出す手順は `docs/deploy.md` にある。
 
 `public/` の画面は盤面を卓の配置で描き（カードの画像は仕様 3.7 節）、
 サーバが送ってきた合法手をそのまま並べる。**盤面の判断を一切持たない。**
+横に広い画面では、両者の盤面と手札をスクロールせずに見られるよう、指せる手とできごとを右の欄へ寄せ、
+カードの大きさを画面の高さと盤面の幅から決める。
+
+## AI と対戦する
+
+学習した方策（`poke-tcg-engine` の `harness/train.ts` が書く重み）と、画面の「AI と対戦する」から指せる。
+重みは R2 の `bots/` に置き、キーの `bots/` より後ろが画面に出る名前になる（仕様 7.3 節）。
+AI との対戦はレーティングを動かさない。
+
+```sh
+# 手元（npm run dev）へ置く
+npx wrangler r2 object put poke-tcg-online-matches/bots/s0-g50 --file ../poke-tcg-engine/runs/ppo/s0/ppo-clip-g50.weights --local
+# Cloudflare へ置く
+npx wrangler r2 object put poke-tcg-online-matches/bots/s0-g50 --file ../poke-tcg-engine/runs/ppo/s0/ppo-clip-g50.weights --remote
+```
+
+重みは、`engine/` と同じ特徴の語彙を持つエンジンで作ったものしか読めない。語彙が違うと、選んだときに断られる。
+エンジンを上げて語彙が変わったら、エンジンの `tools/migrate-ppo-weights.ts` で重みを今の語彙へ写してから置き直す。
+伏せたカードの知識を使わずに学習した重みは `--knowledge=zero` で写す。増えた入力の重みが 0 になるので、写す前と同じ確率で手を選ぶ。
+
+```sh
+cd ../poke-tcg-engine
+npx tsx tools/migrate-ppo-weights.ts --in=runs/ppo/s0/ppo-clip-g50.weights --out=migrated/ppo-clip-g50.weights --knowledge=zero
+```
+
+R2 へ置くのは写したほうのファイル（この例なら `migrated/ppo-clip-g50.weights`）にする。
 
 ## 検査
 

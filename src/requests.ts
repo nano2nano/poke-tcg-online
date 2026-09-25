@@ -42,6 +42,22 @@ export const joinRequestSchema = z
     ...(body.seedShareCommit === undefined ? {} : { seedShareCommit: body.seedShareCommit }),
   }));
 
+/**
+ * AI と対戦する要求（7.3 節）。自分のデッキは組んだもの（`deck`）か、AI と同じ表のデッキ
+ * （`deckPreset`）のどちらか一方で渡す。
+ */
+export const joinBotRequestSchema = z
+  .object({
+    secret: z.string(),
+    bot: z.string(),
+    botDeck: z.string(),
+    deck: deckListSchema.optional(),
+    deckPreset: z.string().optional(),
+    displayName: z.string().optional(),
+    seedShareCommit: z.string().regex(SEED_SHARE_PATTERN).optional(),
+  })
+  .refine((body) => (body.deck === undefined) !== (body.deckPreset === undefined));
+
 /** 自分のものを読むだけの要求。シークレットを URL に載せないので本文で受ける（7.2 節）。 */
 export const secretRequestSchema = z.object({
   secret: z.string(),

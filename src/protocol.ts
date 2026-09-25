@@ -14,7 +14,14 @@ import type {
   PlayerView,
   SpectatorView,
 } from "./engine.js";
-import type { MatchResult, SeatInfo } from "./match.js";
+import type {
+  AnswerDestination,
+  DeckPlacementView,
+  MatchResult,
+  MulliganReveal,
+  SeatInfo,
+  SetupView,
+} from "./match.js";
 import type { SeedShares } from "./fingerprint.js";
 
 /**
@@ -77,13 +84,25 @@ export const clientMessageSchema = z.discriminatedUnion("t", [
      */
     offered: z.array(z.int().nonnegative()).optional(),
   }),
+  /**
+   * 対戦準備のバトル場とベンチを 1 度に出す（2.4 節）。手番でなくても送れる。
+   * 値は手札のインスタンス ID で、合法かどうかはサーバがエンジンで確かめる。
+   */
+  z.object({
+    t: z.literal("setup"),
+    active: z.string().max(64),
+    bench: z.array(z.string().max(64)).max(8),
+  }),
   z.object({ t: z.literal("concede") }),
   z.object({ t: z.literal("ping") }),
 ]);
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 
-/** 局面一式。`hello` の直後と、`stale-version` の応答として送る。 */
+/**
+ * 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、
+ * 準備の答えを預かったとき（2.4 節）に送る。
+ */
 export interface SyncMessage {
   t: "sync";
   matchId: string;
@@ -92,6 +111,16 @@ export interface SyncMessage {
   view: PlayerView;
   /** 手番側の座席にだけ配列が入る。他方は null（4.1 節）。 */
   legalMoves: Move[] | null;
+  /** 対戦準備でまとめて出せる候補か、出した答え（2.4 節）。準備の外では null。 */
+  setup: SetupView | null;
+  /** 選んだカードを山札の端へ順に置く選択なら、今選ぶカードがどこへ入るか。選ぶ座席にだけ入る（3.2 節）。 */
+  deckPlacement: DeckPlacementView | null;
+  /** 効果の選択なら、`legalMoves` と同じ並びで、その答えで選んだカードの行き先。選ぶ座席にだけ入る（3.2 節）。 */
+  answerDestinations: (AnswerDestination | null)[] | null;
+  /** 対戦準備で引き直すときに見せた手札。両座席に同じものが入る（2.4 節）。 */
+  mulligans: MulliganReveal[];
+  /** 先攻。決めた `game-started` は対戦を作るときのイベントで、`delta` には載らない。 */
+  firstPlayer: Player;
   clock: ClockView;
   /** シャッフルの公正さのコミット（6.4 節）。対戦中に seed そのものは渡さない。 */
   seedCommit: string;
@@ -99,13 +128,18 @@ export interface SyncMessage {
   spectatorToken: string;
 }
 
-/** 1 手が適用された。両座席へ送る。 */
+/** 手が適用された。両座席へ送る。預かった準備の答えが続けて流れると、複数手ぶんになる（2.4 節）。 */
 export interface DeltaMessage {
   t: "delta";
   stateVersion: number;
   events: PlayerEvent[];
   view: PlayerView;
   legalMoves: Move[] | null;
+  setup: SetupView | null;
+  deckPlacement: DeckPlacementView | null;
+  answerDestinations: (AnswerDestination | null)[] | null;
+  /** 対戦準備のあいだだけ載せる。無ければ、前に届いたものから変わっていない。 */
+  mulligans?: MulliganReveal[];
   clock: ClockView;
 }
 
@@ -132,6 +166,7 @@ export interface SpectatorSyncMessage {
   t: "spectator-sync";
   stateVersion: number;
   view: SpectatorView;
+  firstPlayer: Player;
   clock: ClockView;
   /**
    * 公開 id は渡さない。観戦トークンは座席の外へ配られる値なので、それを持つだけで

@@ -11,6 +11,7 @@ import type { Player } from "./engine.js";
 import { applyTimeout, type Match } from "./match.js";
 import { toRecord, type MatchRecord } from "./log.js";
 import { startPending, type PendingMatch } from "./pending.js";
+import type { SeedShares } from "./fingerprint.js";
 
 export interface SeatRef {
   match: Match;
@@ -20,6 +21,19 @@ export interface SeatRef {
 export interface PendingSeatRef {
   pending: PendingMatch;
   seat: Player;
+}
+
+/** AI との対戦の、人の座席。ロビーが席を渡すときの形（`Seated`）と同じ欄を持つ。 */
+export interface BotMatchSeat {
+  matchId: string;
+  seat: Player;
+  seatToken: string;
+  seedCommit: string;
+  seedShareCommits: SeedShares;
+}
+
+function humanSeatOf(botSeat: Player): Player {
+  return botSeat === 0 ? 1 : 0;
 }
 
 export function newToken(): string {
@@ -75,6 +89,41 @@ export class MatchRegistry {
 
   overdue(nowMs: number): PendingMatch[] {
     return [...this.pending.values()].filter((pending) => pending.deadlineMs <= nowMs);
+  }
+
+  /**
+   * そのプレイヤーが人として座っている、終わっていない AI との対戦（7.3 節）。始まる前のものも含む。
+   * 返すのは人の座席で、その人が画面を失っていても、ここから対戦へ戻れる。
+   *
+   * 決着の付いた対戦は数えない。決着のあとの後始末で投げるとレジストリに残ることがあり、
+   * 数えると、その人は二度と AI と指せなくなる。
+   */
+  botMatchOf(playerId: string): BotMatchSeat | null {
+    for (const match of this.matches.values()) {
+      if (match.bot === null || match.result !== null) continue;
+      const seat = humanSeatOf(match.bot.seat);
+      if (match.seats[seat].playerId !== playerId) continue;
+      return {
+        matchId: match.matchId,
+        seat,
+        seatToken: match.seatTokens[seat],
+        seedCommit: match.seedCommitment.commit,
+        seedShareCommits: match.seedShareCommits,
+      };
+    }
+    for (const pending of this.pending.values()) {
+      if (pending.bot === null) continue;
+      const seat = humanSeatOf(pending.bot.seat);
+      if (pending.seats[seat].playerId !== playerId) continue;
+      return {
+        matchId: pending.matchId,
+        seat,
+        seatToken: pending.seatTokens[seat],
+        seedCommit: pending.server.commit,
+        seedShareCommits: pending.shareCommits,
+      };
+    }
+    return null;
   }
 
   bySpectatorToken(token: string): Match | undefined {

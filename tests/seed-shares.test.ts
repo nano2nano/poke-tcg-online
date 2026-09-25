@@ -196,10 +196,12 @@ describe("シェアの開示", () => {
     arena.hub.handle(socket, a.seatToken, { t: "ping" });
     arena.hub.handle(socket, a.seatToken, { t: "hello" });
     arena.hub.handle(socket, a.seatToken, { t: "concede" });
+    arena.hub.handle(socket, a.seatToken, { t: "setup", active: "c0", bench: [] });
     expect(socket.sent.map((message) => message.t)).toEqual([
       "pending",
       "pong",
       "pending",
+      "error",
       "error",
     ]);
     expect(arena.registry.live()).toHaveLength(0);
@@ -227,6 +229,7 @@ describe("シェアの開示", () => {
       shareCommits: [commitShare(SHARE_A), null],
       shares: [null, null],
       deadlineMs: SHARE_REVEAL_DEADLINE_MS,
+      bot: null,
     };
     arena.registry.addPending(pending);
     const socket = recorder();

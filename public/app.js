@@ -21,6 +21,14 @@ let seatedNow = null;
 let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
+/** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
+let lastMoves = { moves: null, playing: false, setup: null, placement: null, destinations: null };
+/** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
+let setupDraft = { active: null, bench: [], sent: false };
+/** 対戦準備で引き直すときに見せた手札。名前の表が遅れて届いたら描き直す。 */
+let lastMulligans = [];
+/** 前に描いたときに準備の中だったか。欄を開け閉めするのは、準備が終わったときと増えたときだけにする。 */
+let mulligansInSetup = false;
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
 let loadingAccount = null;
 /**
@@ -76,6 +84,20 @@ const TRAINER_KINDS = {
   stadium: "スタジアム",
 };
 const HALVES = { left: "左", right: "右" };
+const WIN_REASONS = {
+  "prizes-taken": "サイドを取りきった",
+  "no-pokemon": "場のポケモンがいなくなった",
+  "deck-out": "山札を引けなかった",
+  "effect-declared": "カードの効果",
+  "turn-limit": "手数の上限",
+};
+/** 手を断った理由（仕様 2.2 節）。 */
+const REJECT_REASONS = {
+  "not-your-turn": "あなたの番ではありません",
+  "stale-version": "盤面が先に進んでいました",
+  "illegal-move": "いまは指せない手です",
+  "match-over": "対戦は終わっています",
+};
 const CONDITIONS = {
   poisoned: "どく",
   burned: "やけど",
@@ -103,8 +125,49 @@ let deckEntries = loadDeck();
 
 const nameOf = (defId) => cards[defId]?.name ?? defId;
 
-$("join-button").addEventListener("click", () => {
-  join().catch((error) => setStatus(`つながらなかった: ${error.message}`));
+/**
+ * 走っている入り方。`kind` の `queue` は相手さがし（待っているあいだも含む）、`bot` は AI との対戦の用意である。
+ *
+ * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
+ * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
+ * 終わったときに外すのは、自分が置いたものだけにする。相手さがしを押し直すと前の待ちが先に終わり、
+ * それが外すと、次の待ちが続いているのに AI のボタンが押せるようになる。
+ */
+let joining = null;
+
+function syncJoinButtons() {
+  $("bot-button").disabled = joining !== null || $("bot").options.length === 0;
+  $("join-button").disabled = joining?.kind === "bot";
+}
+
+function runJoin(kind, task) {
+  const mine = { kind };
+  joining = mine;
+  syncJoinButtons();
+  task()
+    .catch((error) => setStatus(`つながらなかった: ${error.message}`))
+    .finally(() => {
+      if (joining === mine) joining = null;
+      syncJoinButtons();
+    });
+}
+
+/**
+ * AI との対戦を頼んだときのシェア。返事が届かずに押し直したとき、サーバは続いている対戦の席を返すが、
+ * その席のシェアはこの画面が作ったものである。覚えていないと、シェアを開けないまま入り直すことになる。
+ */
+let botShare = null;
+
+$("join-button").addEventListener("click", () => runJoin("queue", join));
+$("bot-button").addEventListener("click", () => runJoin("bot", joinBot));
+
+/**
+ * 自分のデッキの欄を人が選んだか。選んでいなければ、デッキを組んだかどうかで既定を選び直す。
+ * 読み込んだときの既定のままにすると、あとで組んだデッキではなく表のデッキで対戦が始まる。
+ */
+let ownDeckTouched = false;
+$("own-deck").addEventListener("change", () => {
+  ownDeckTouched = true;
 });
 
 /**
@@ -134,6 +197,9 @@ if (watchToken !== null) {
   resumeSeat();
   renderDeck();
   loadCardsForJoin();
+  loadBots().catch((error) => {
+    $("bot-status").textContent = `AI の一覧を読めませんでした: ${error.message}`;
+  });
 }
 
 /**
@@ -190,8 +256,19 @@ function redraw() {
   const restore = focusedRowButton();
   renderDeck();
   renderSearch();
+  renderBotDecks();
   restore();
-  if (lastView !== null) renderView(lastView);
+  if (lastView !== null) {
+    renderView(lastView);
+    renderMoves(
+      lastMoves.moves,
+      lastMoves.playing,
+      lastMoves.setup,
+      lastMoves.placement,
+      lastMoves.destinations,
+    );
+    renderMulligans(lastMulligans);
+  }
   if (lastWatchView !== null) renderWatch(lastWatchView);
   if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
 }
@@ -297,6 +374,14 @@ window.addEventListener("storage", (event) => {
   if ($("deck-status").classList.contains("ok")) showDeckStatus([], "");
 });
 
+$("setup-submit").addEventListener("click", () => {
+  if (setupDraft.active === null || setupDraft.sent) return;
+  // 返事が来るまで押せなくする。2 度目はサーバが断り、通った答えまで失敗に見える。
+  setupDraft.sent = true;
+  $("setup-submit").disabled = true;
+  send({ t: "setup", active: setupDraft.active, bench: setupDraft.bench });
+});
+
 $("concede-button").addEventListener("click", () => {
   if (socket !== null && confirm("投了しますか。")) send({ t: "concede" });
 });
@@ -337,11 +422,7 @@ async function join() {
 
   const outcome = await postJson("/api/join", request);
   if (!outcome.ok) {
-    // 断られる理由はデッキとは限らない。アカウントが見つからないこともここへ来る。
-    // そのときは、この画面が覚えているアカウントがもう無い。読み直しに行かせる。
-    // シークレットを捨ててよいかの判断は `/api/account` の経路が持っているので、ここでは忘れるだけにする。
-    if (outcome.code === "account-not-found") loadingAccount = null;
-    setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
+    refused(outcome);
     return;
   }
   const seedShare = contribution?.share ?? null;
@@ -351,6 +432,114 @@ async function join() {
   }
   setStatus("相手を待っています");
   await waitForOpponent(outcome.ticket, seedShare);
+}
+
+/** 対戦に入るのを断られた。 */
+function refused(outcome) {
+  // 断られる理由はデッキとは限らない。アカウントが見つからないこともここへ来る。
+  // そのときは、この画面が覚えているアカウントがもう無い。読み直しに行かせる。
+  // シークレットを捨ててよいかの判断は `/api/account` の経路が持っているので、ここでは忘れるだけにする。
+  if (outcome.code === "account-not-found") loadingAccount = null;
+  setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
+}
+
+/**
+ * AI の一覧と、AI が握れるデッキを読む（仕様 7.3 節）。AI が 1 つも置かれていなければ、ボタンを押せないままにする。
+ * 自分のデッキは、組みかけのデッキが無ければ表のデッキを先に選んでおく（`defaultOwnDeck`）。空のまま押すと
+ * サンプルデッキになり、AI が学んだことの無い相手になる。
+ */
+async function loadBots() {
+  const { bots, decks } = await getJson("/api/bots");
+  const option = (value, text) => {
+    const element = document.createElement("option");
+    element.value = value;
+    element.textContent = text;
+    return element;
+  };
+  botDecks = decks;
+  $("bot").replaceChildren(...bots.map((bot) => option(bot.name, bot.name)));
+  $("bot-deck").replaceChildren(...decks.map((deck) => option(deck.label, deckName(deck))));
+  $("own-deck").append(...decks.map((deck) => option(deck.label, deckName(deck))));
+  defaultOwnDeck();
+  syncJoinButtons();
+  $("bot-status").textContent =
+    bots.length === 0 ? "サーバに AI が置かれていません（README の「AI と対戦する」）。" : "";
+}
+
+/**
+ * AI が握れるデッキの表。名前は看板のカード（`ace`）の名前で出す。
+ * 名前の表が届く前はラベルで出し、届いたら `redraw` から出し直す。
+ */
+let botDecks = [];
+
+const deckName = (deck) => cards[deck.ace]?.name ?? deck.label;
+
+function renderBotDecks() {
+  for (const select of [$("bot-deck"), $("own-deck")]) {
+    for (const option of select.options) {
+      const deck = botDecks.find((each) => each.label === option.value);
+      if (deck !== undefined) option.textContent = deckName(deck);
+    }
+  }
+}
+
+/** 組みかけのデッキが無ければ表の先頭のデッキを、あれば組んだデッキを選ぶ。人が選んだあとは触らない。 */
+function defaultOwnDeck() {
+  const select = $("own-deck");
+  if (ownDeckTouched || select.options.length < 2) return;
+  select.value = deckEntries.length === 0 ? select.options[1].value : "";
+}
+
+async function joinBot() {
+  setStatus("AI との対戦を用意しています");
+  await loadCards();
+  await ensureAccount();
+  const request = {
+    secret: storedSecret(),
+    bot: $("bot").value,
+    botDeck: $("bot-deck").value,
+  };
+  const preset = $("own-deck").value;
+  if (preset !== "") {
+    request.deckPreset = preset;
+  } else {
+    const deck = await deckToSubmit();
+    if (deck === null) {
+      setStatus("デッキを直してから、もう一度おしてください。");
+      return;
+    }
+    request.deck = { cards: deck.cards };
+  }
+  const contribution = await newSeedShare();
+  if (contribution !== null) request.seedShareCommit = contribution.commit;
+  if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
+
+  const earlier = botShare;
+  botShare = contribution;
+  const outcome = await postJson("/api/join-bot", request);
+  // 終わっていない AI との対戦があれば、サーバがその席を返す。この画面が席を失っていても、そこへ戻る。
+  if (!outcome.ok && outcome.code === "bot-match-live" && outcome.seat !== undefined) {
+    openMatch({ ...outcome.seat, seedShare: shareFor(outcome.seat, earlier) });
+    return;
+  }
+  if (!outcome.ok) {
+    refused(outcome);
+    return;
+  }
+  openMatch({ ...outcome.seat, seedShare: contribution?.share ?? null });
+}
+
+/**
+ * 戻る席に出したシェア。覚えている席か、前に頼んだときのシェアのうち、その席のコミットに合うもの。
+ * どちらにも無ければ null で、シェアを開かずに入る（シャッフルの検算はそのことを出す）。
+ */
+function shareFor(seated, earlier) {
+  const stored = storedSeat();
+  if (stored?.seatToken === seated.seatToken && typeof stored.seedShare === "string") {
+    return stored.seedShare;
+  }
+  const commit = seated.seedShareCommits?.[seated.seat];
+  return earlier !== null && earlier.commit === commit ? earlier.share : null;
 }
 
 /**
@@ -427,7 +616,11 @@ async function verifyShuffle(seated, ended) {
   if (problems.length > 0) {
     return ["mismatch", `シャッフルの検算が合いません: ${problems.join("、")}`];
   }
-  if (typeof seated.seedShare === "string" && shares[seated.seat] !== seated.seedShare) {
+  // シェアを覚えていない画面（入り直した画面など）でも、コミットしたシェアが開かれなかったことは分かる。
+  if (
+    (typeof seated.seedShare === "string" && shares[seated.seat] !== seated.seedShare) ||
+    (shares[seated.seat] === null && seated.seedShareCommits[seated.seat] !== null)
+  ) {
     return [
       "share-unused",
       "シャッフルに自分のシェアが使われていません。席に着くのが期限に間に合わなかったか、サーバがシェアを捨てています。",
@@ -851,6 +1044,7 @@ function countInDeck(defId) {
 }
 
 function renderDeck() {
+  defaultOwnDeck();
   const total = deckEntries.reduce((sum, entry) => sum + entry.count, 0);
   const count = $("deck-count");
   count.textContent = total === 0 ? "デッキは空です。" : `${total} / ${DECK_SIZE} 枚`;
@@ -1058,6 +1252,7 @@ function openMatch(seated) {
   showConnection(null);
   $("join").hidden = true;
   $("table").hidden = false;
+  delete $("table").dataset.ended;
   // 両者がシェアを開くまで局面は届かない。
   $("clock").textContent = "相手が席に着くのを待っています";
   $("shuffle-check").hidden = true;
@@ -1207,6 +1402,8 @@ function backToJoin(text) {
   seat = null;
   $("table").hidden = true;
   $("join").hidden = false;
+  // 対戦の結果をマッチングの画面に重ねたままにしない。
+  $("results").replaceChildren();
   setStatus(text);
 }
 
@@ -1240,33 +1437,57 @@ function storedSeat() {
 function receive(message) {
   switch (message.t) {
     case "sync":
-    case "delta":
+    case "delta": {
       if (message.t === "sync") $("watch-link").value = watchUrl(message.spectatorToken);
       stateVersion = message.stateVersion;
-      if (message.events !== undefined) for (const event of message.events) addEvent(event.kind);
+      const events = message.events ?? [];
+      const results = describeResults(events, [message.view, lastView], seatName);
+      logEvents(events, results);
       renderView(message.view);
+      if (message.t === "sync") showFirstPlayer(message.matchId, message.firstPlayer, message.view);
+      showResults(results, $("table"));
       renderClock(message.clock);
-      renderMoves(message.legalMoves);
+      setupDraft.sent = false;
+      renderMoves(
+        message.legalMoves,
+        true,
+        message.setup,
+        message.deckPlacement ?? null,
+        message.answerDestinations ?? null,
+      );
+      // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
+      renderMulligans(message.mulligans ?? lastMulligans);
       return;
-    case "ended":
+    }
+    case "ended": {
+      $("table").dataset.ended = "";
       // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
       forgetSeat();
       // 観戦トークンも終わった対戦では通らない。残すと、渡された人が開いても入れない。
       $("watch-link").value = "";
       renderView(message.view);
-      renderMoves(null);
-      addEvent(describeEnd(message));
+      renderMoves(null, false);
+      // 次の対戦で見せた手札を、この対戦のものと比べて「増えた」と読まない。
+      lastMulligans = [];
+      const text = describeEnd(message);
+      addEvent(text);
+      showResult({ text, tone: endTone(message.matchResult) });
       $("clock").textContent = "対戦は終わりました";
       void showShuffleCheck(seatedNow, message);
       // 決着でレーティングが動く。開いた時点の値のまま置かない。
       refreshAccount().catch(() => {});
       return;
-    case "reject":
+    }
+    case "reject": {
       // 古い画面から押したときは、サーバが正しい局面を送り直してくる。
-      addEvent(`手が通りませんでした（${message.reason}）`);
+      const text = `手が通りませんでした（${REJECT_REASONS[message.reason] ?? message.reason}）`;
+      addEvent(text);
+      showResult({ text, tone: "attention" });
       return;
+    }
     case "error":
       addEvent(message.message);
+      showResult({ text: message.message, tone: "attention" });
       return;
     default:
       return;
@@ -1279,7 +1500,13 @@ function describeEnd(message) {
   if (result.kind === "concede") return `投了により ${mine}`;
   if (result.kind === "timeout") return `時間切れにより ${mine}`;
   if (result.winner === null) return "引き分け";
-  return `${mine}（${message.outcome?.reason ?? ""}）`;
+  const reason = message.outcome?.reason;
+  return `${mine}（${WIN_REASONS[reason] ?? reason ?? ""}）`;
+}
+
+function endTone(result) {
+  if (result.winner === null) return "neutral";
+  return result.winner === seat ? "positive" : "negative";
 }
 
 function renderView(view) {
@@ -1314,13 +1541,14 @@ function cardFace(defId) {
   face.dataset.defId = defId;
   face.dataset.kind = card?.kind ?? "";
   if (card?.type !== undefined) face.dataset.type = card.type;
-  face.title = card === undefined ? defId : `${card.name}\n${describeCard(card)}`;
   face.append(el("span", "card-name", card?.name ?? defId));
   const sub =
     card?.hp !== undefined
       ? `HP ${card.hp}`
       : (TRAINER_KINDS[card?.trainerKind] ?? KINDS[card?.kind] ?? "");
   face.append(el("span", "card-sub", sub));
+  // 読み上げでは、マウスで出るプレビューの代わりにここを読む。
+  if (card !== undefined) face.append(el("span", "visually-hidden", describeCard(card)));
   const src = imageUrl(defId);
   if (src !== null) {
     const image = document.createElement("img");
@@ -1364,15 +1592,14 @@ function openZoom({ title, defIds }) {
   $("card-zoom-title").textContent = title;
   $("card-zoom-cards").replaceChildren(
     ...defIds.map((defId) =>
-      el(
-        "figure",
-        "",
-        cardFace(defId),
-        el("figcaption", "", el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])),
-      ),
+      el("figure", "", cardFace(defId), el("figcaption", "", ...cardCaption(defId))),
     ),
   );
   if (!$("card-zoom").open) $("card-zoom").showModal();
+}
+
+function cardCaption(defId) {
+  return [el("strong", "", nameOf(defId)), " ", describeCard(cards[defId])];
 }
 
 // 枠の外（背景）を押しても閉じる。中身は内側の要素が覆っているので、dialog そのものに当たるのは背景だけである。
@@ -1391,6 +1618,163 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
   openZoom(zoomTargets.get(target));
 });
+
+/**
+ * マウスを載せている間（タッチ端末では長押しの間）、カードを大きく出す。印刷の小さな文字は
+ * 盤面の大きさでは読めない。押して開く拡大と違ってマウスの操作を受けないので、手を指す邪魔をしない。
+ */
+const LONG_PRESS_MS = 400;
+/** 長押しの途中で指がこれより動いたら、スクロールのつもりとみなしてやめる。 */
+const LONG_PRESS_SLOP_PX = 10;
+const PREVIEW_MARGIN_PX = 8;
+const PREVIEW_GAP_PX = 12;
+
+let previewTarget = null;
+let previewPointer = "mouse";
+let longPress = null;
+// 長押しで読んで指を離すと、そのクリックも届いて拡大が開いてしまう。
+let swallowClick = false;
+let lastMouse = null;
+// 盤面は相手の手でも描き直され、載せていたカードが消える。マウスなら下に来たカードへ移り、
+// 閉じてから開き直す一瞬のちらつきを出さない。指で押している最中なら、押したカードはもう無いので閉じる。
+const previewWatch = new MutationObserver(() => {
+  if (previewTarget === null || previewTarget.isConnected) return;
+  const under =
+    longPress === null && lastMouse !== null
+      ? document.elementFromPoint(lastMouse.x, lastMouse.y)
+      : null;
+  const card = previewable(under);
+  if (card === null) hidePreview();
+  else showPreview(card, "mouse");
+});
+
+function previewable(target) {
+  const card = target?.closest?.(".card[data-def-id]");
+  // 開いた拡大の中のカードは、もう大きい。
+  if (card == null || card.closest("dialog, #card-preview") !== null) return null;
+  return card;
+}
+
+function showPreview(card, pointerType) {
+  if (card === previewTarget) return;
+  const defId = card.dataset.defId;
+  const preview = $("card-preview");
+  const src = imageUrl(defId);
+  // 同じカードなら前に作った中身をそのまま使う。カードの一覧が届く前に作った中身や、
+  // 読めなくなった画像を残さないよう、その 2 つも鍵に入れる。
+  const key = `${defId}\n${cards[defId] !== undefined}\n${src}`;
+  if (preview.dataset.key !== key) {
+    preview.dataset.key = key;
+    // 画像があれば効果まで画像で読める。無いときだけ、名前の面に種類とワザを書き添える。
+    preview.replaceChildren(
+      cardFace(defId),
+      ...(src === null ? [el("p", "", ...cardCaption(defId))] : []),
+    );
+  }
+  previewTarget = card;
+  previewPointer = pointerType;
+  previewWatch.observe(document.body, { childList: true, subtree: true });
+  preview.hidden = false;
+  placePreview();
+}
+
+function hidePreview() {
+  previewTarget = null;
+  previewWatch.disconnect();
+  $("card-preview").hidden = true;
+}
+
+/**
+ * カードの横に出し、入らなければ上下、それも無理なら画面の中央に重ねる。
+ * 指で押しているときは、指と手のひらが下と横を隠すので上を先に試す。
+ * 画面の幅は `clientWidth` で測る。`innerWidth` はスクロールバーの下まで含む。
+ */
+function placePreview() {
+  const preview = $("card-preview");
+  const rect = previewTarget.getBoundingClientRect();
+  const { clientWidth, clientHeight } = document.documentElement;
+  const width = preview.offsetWidth;
+  const height = preview.offsetHeight;
+  const maxX = clientWidth - width - PREVIEW_MARGIN_PX;
+  const maxY = clientHeight - height - PREVIEW_MARGIN_PX;
+  const clamp = (value, max) => Math.max(PREVIEW_MARGIN_PX, Math.min(value, max));
+  const beside = clamp(rect.top + rect.height / 2 - height / 2, maxY);
+  const across = clamp(rect.left + rect.width / 2 - width / 2, maxX);
+  const right = { x: rect.right + PREVIEW_GAP_PX, y: beside };
+  const left = { x: rect.left - PREVIEW_GAP_PX - width, y: beside };
+  const above = { x: across, y: rect.top - PREVIEW_GAP_PX - height };
+  const below = { x: across, y: rect.bottom + PREVIEW_GAP_PX };
+  const order =
+    previewPointer === "touch" ? [above, right, left, below] : [right, left, above, below];
+  const spot = order.find(
+    ({ x, y }) => x >= PREVIEW_MARGIN_PX && x <= maxX && y >= PREVIEW_MARGIN_PX && y <= maxY,
+  ) ?? { x: clamp((clientWidth - width) / 2, maxX), y: clamp((clientHeight - height) / 2, maxY) };
+  preview.style.left = `${spot.x}px`;
+  preview.style.top = `${spot.y}px`;
+}
+
+document.addEventListener("pointerover", (event) => {
+  if (event.pointerType === "touch") return;
+  const card = previewable(event.target);
+  if (card !== null) showPreview(card, event.pointerType);
+});
+document.addEventListener("pointerout", (event) => {
+  if (event.pointerType === "touch" || previewTarget === null) return;
+  if (previewTarget.contains(event.relatedTarget)) return;
+  hidePreview();
+});
+document.addEventListener("pointerdown", (event) => {
+  swallowClick = false;
+  if (event.pointerType !== "touch") return;
+  if (longPress !== null) endLongPress();
+  const card = previewable(event.target);
+  if (card === null) return;
+  const timer = setTimeout(() => {
+    if (!card.isConnected) return;
+    showPreview(card, "touch");
+    swallowClick = true;
+  }, LONG_PRESS_MS);
+  longPress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer };
+});
+document.addEventListener("pointermove", (event) => {
+  if (event.pointerType !== "touch") lastMouse = { x: event.clientX, y: event.clientY };
+  if (longPress?.pointerId !== event.pointerId) return;
+  const moved = Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y);
+  if (moved > LONG_PRESS_SLOP_PX) endLongPress();
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  document.addEventListener(type, (event) => {
+    if (longPress?.pointerId === event.pointerId) endLongPress();
+  });
+}
+document.addEventListener(
+  "click",
+  (event) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+  },
+  { capture: true },
+);
+// 長押しで出る画像の保存や選択のメニューが、プレビューの上に重なる。
+document.addEventListener("contextmenu", (event) => {
+  if (longPress !== null) event.preventDefault();
+});
+// 一覧やページが送られるとカードは動くが、マウスの下が同じカードのままなら置き直す合図が来ない。
+document.addEventListener(
+  "scroll",
+  (event) => {
+    if (previewTarget !== null && event.target.contains?.(previewTarget)) placePreview();
+  },
+  { capture: true, passive: true },
+);
+
+function endLongPress() {
+  clearTimeout(longPress.timer);
+  longPress = null;
+  hidePreview();
+}
 
 /** 盤面のゾーン。`count` は山札やトラッシュのように、枚数を読むゾーンでだけ渡す。 */
 function zone(name, label, count, ...children) {
@@ -1413,8 +1797,8 @@ function renderSide(container, side, mirrored) {
   });
 
   // ベンチの枠の数はスタジアムで変わり、射影には載っていない。空いた枠は描かない。
-  const benched = side.bench.filter((pokemon) => pokemon !== null);
-  const bench = benched.length === 0 ? [emptySlot()] : benched.map(pokemonSlot);
+  const inBench = benched(side);
+  const bench = inBench.length === 0 ? [emptySlot()] : inBench.map(pokemonSlot);
   const field = el(
     "div",
     "field",
@@ -1428,25 +1812,24 @@ function renderSide(container, side, mirrored) {
     zone("deck", "山札", side.deckCount, side.deckCount > 0 ? cardBack() : emptySlot()),
     pileZone("discard", "トラッシュ", side.discard),
   );
-  if (side.lostZone.length > 0) piles.append(pileZone("lost", "ロストゾーン", side.lostZone));
-
-  const mat = el(
+  const prizeSide = el(
     "div",
-    mirrored ? "mat mirrored" : "mat",
+    "prize-side",
     zone("prizes", "サイド", side.prizeCount, el("div", "prize-grid", ...prizes)),
-    field,
-    piles,
   );
+  if (side.lostZone.length > 0) {
+    prizeSide.prepend(pileZone("lost", "ロストゾーン", side.lostZone));
+  }
 
-  const hand =
+  const mat = el("div", mirrored ? "mat mirrored" : "mat", prizeSide, field, piles);
+
+  const held =
     side.hand === undefined
-      ? zone("hand", "手札", side.handCount, ...Array.from({ length: side.handCount }, cardBack))
-      : zone(
-          "hand",
-          "手札",
-          side.hand.length,
-          ...side.hand.map((card) => zoomable(cardFace(card.defId), "手札", [card.defId])),
-        );
+      ? Array.from({ length: side.handCount }, cardBack)
+      : side.hand.map((card) => zoomable(cardFace(card.defId), "手札", [card.defId]));
+  const hand = zone("hand", "手札", held.length, ...held);
+  // 入りきらない枚数のときに、どれだけ重ねるかを CSS が決める。
+  hand.style.setProperty("--cards", String(held.length));
   container.replaceChildren(...(mirrored ? [hand, mat] : [mat, hand]));
 }
 
@@ -1474,7 +1857,7 @@ function pokemonSlot(pokemon) {
   const marks = el("div", "marks");
   if (pokemon.damage > 0) marks.append(el("span", "damage", String(pokemon.damage)));
   for (const condition of pokemon.conditions) {
-    marks.append(el("span", "condition", CONDITIONS[condition.kind] ?? condition.kind));
+    marks.append(el("span", "condition", conditionName(condition)));
   }
 
   const body = el("div", "pokemon", face, marks);
@@ -1511,59 +1894,324 @@ function renderClock(clock) {
   $("clock").textContent = `${turn}${remaining} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
 }
 
-function renderMoves(moves) {
+/**
+ * `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。
+ * `setup` はサーバが送る準備の状態で、あるあいだは同じ選択を 1 手ずつ指すボタンを並べない。
+ * `placement` は、選んだカードを山札の端へ順に置く選択のあいだだけサーバが送る（`deckPlacement`）。
+ * `destinations` は、効果の選択のあいだサーバが送る、`moves` と同じ並びの行き先（`answerDestinations`）。
+ */
+function renderMoves(moves, playing = true, setup = null, placement = null, destinations = null) {
+  lastMoves = { moves, playing, setup, placement, destinations };
+  const prompt = $("move-prompt");
+  prompt.textContent = !playing
+    ? ""
+    : moves !== null && placement !== null
+      ? placementPrompt(placement)
+      : promptText(lastView, moves !== null, setup);
+  prompt.hidden = prompt.textContent === "";
+  renderSetupForm(playing && setup?.kind === "choose" ? setup : null);
   const container = $("moves");
   container.innerHTML = "";
+  if (playing && setup !== null) return;
   if (moves === null) {
-    container.innerHTML = '<p class="waiting">相手の番です</p>';
+    // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
+    if (playing && lastView?.phase !== "setup") container.append(waitingNote(lastView));
     return;
   }
-  for (const move of moves) {
+  const shown = foldMoves(moves, lastView);
+  // 畳んだときだけ、見せた手の位置を添える。記録で、見せなかった手と選ばなかった手を分けるため（6.2 節）。
+  const offered = shown.length === moves.length ? {} : { offered: shown.map(({ index }) => index) };
+  for (const { move, index } of shown) {
     const button = document.createElement("button");
-    button.textContent = describeMove(move);
-    button.addEventListener("click", () => send({ t: "move", stateVersion, move }));
+    button.textContent = describeMove(move, lastView, placement, destinations?.[index] ?? null);
+    button.addEventListener("click", () => send({ t: "move", stateVersion, move, ...offered }));
+    button.dataset.aim = JSON.stringify(moveTargets(move));
+    for (const type of ["pointerenter", "pointerleave", "focus", "blur"]) {
+      button.addEventListener(type, refreshAim);
+    }
     container.append(button);
   }
 }
 
 /**
+ * 自分の手札の同じカードを選ぶ手を 1 つに畳み、残した手と `legalMoves` での位置を返す。
+ *
+ * エンジンは番の中の手では手札の同じカードを畳むが、選択の候補（手札からトラッシュするカードなど）は
+ * 1 枚ずつ並べる。畳むのはエンジンと同じく手札だけにする。場やトラッシュのカードは、
+ * 同じ `defId` でも個体ごとの記録（どうぐの使用済み、ワザでトラッシュしたエネルギーなど）を持ちうる。
+ */
+function foldMoves(moves, view) {
+  const seen = new Set();
+  const shown = [];
+  moves.forEach((move, index) => {
+    const key = JSON.stringify(move, (field, value) =>
+      CARD_FIELDS.has(field) ? (cardKey(value, view) ?? value) : value,
+    );
+    if (seen.has(key)) return;
+    seen.add(key);
+    shown.push({ move, index });
+  });
+  return shown;
+}
+
+const CARD_FIELDS = new Set(["cardInstanceId", "right", "left", "card"]);
+
+function cardKey(instanceId, view) {
+  const found = locateCard(instanceId, view);
+  return found?.own && found.zone === "hand" ? `hand ${found.defId}` : null;
+}
+
+/** 手が狙う場のポケモン。ボタンにマウスを載せるか選ぶと、盤面のそのポケモンを囲む。 */
+function moveTargets(move) {
+  const answer = move.type === "AnswerChoice" ? move.answer : {};
+  return [move.target, move.to, move.source, answer.target].filter((id) => typeof id === "string");
+}
+
+/** 同じポケモンを狙うボタンが 2 つあっても消し合わないよう、載っているボタンと選んだボタンから数え直す。 */
+function refreshAim() {
+  const table = $("table");
+  for (const pokemon of table.querySelectorAll(".pokemon.aimed")) pokemon.classList.remove("aimed");
+  for (const button of $("moves").querySelectorAll("button:hover, button:focus")) {
+    for (const id of JSON.parse(button.dataset.aim ?? "[]")) {
+      table.querySelector(`.pokemon[data-in-play-id="${CSS.escape(id)}"]`)?.classList.add("aimed");
+    }
+  }
+}
+
+/**
+ * 手番のプレイヤーでなくても、選択を持てば手を持つ（きぜつしたあとにバトル場へ出すポケモンなど）。
+ * 自分の番の途中で相手が選んでいるのを「相手の番」と出すと、番が移ったと読まれる。
+ */
+function waitingNote(view) {
+  const ownTurn = view?.turnPlayer === view?.viewer;
+  const note = el(
+    "p",
+    "waiting",
+    ownTurn ? "相手が選んでいます。あなたの番は続きます" : "相手の番です",
+  );
+  note.dataset.state = ownTurn ? "their-choice" : "their-turn";
+  return note;
+}
+
+/**
+ * 対戦準備のバトル場とベンチを選ぶ。選んだものは「準備を終える」で 1 度に送る。
+ *
+ * エンジンは準備を 1 人ずつの選択に並べて進めるが、サーバは番の来ていない座席の答えも
+ * 預かる（仕様 2.4 節）。1 つずつ送る形にすると、相手の番を待つたびに止まる。
+ */
+function renderSetupForm(offer) {
+  $("setup").hidden = offer === null;
+  if (offer === null) {
+    setupDraft = { active: null, bench: [], sent: false };
+    return;
+  }
+  if (!offer.active.includes(setupDraft.active)) setupDraft.active = null;
+  setupDraft.bench = setupDraft.bench
+    .filter((id) => offer.bench.includes(id) && id !== setupDraft.active)
+    .slice(0, offer.benchSlots);
+
+  const redraw = () => renderSetupForm(offer);
+  $("setup-active").replaceChildren(
+    ...offer.active.map((id) =>
+      toggleButton(id, setupDraft.active === id, () => {
+        setupDraft.active = setupDraft.active === id ? null : id;
+        redraw();
+      }),
+    ),
+  );
+  const full = setupDraft.bench.length >= offer.benchSlots;
+  $("setup-bench").replaceChildren(
+    ...offer.bench
+      .filter((id) => id !== setupDraft.active)
+      .map((id) => {
+        const chosen = setupDraft.bench.includes(id);
+        const button = toggleButton(id, chosen, () => {
+          setupDraft.bench = chosen
+            ? setupDraft.bench.filter((each) => each !== id)
+            : [...setupDraft.bench, id];
+          redraw();
+        });
+        button.disabled = !chosen && full;
+        return button;
+      }),
+  );
+  $("setup-submit").disabled = setupDraft.active === null || setupDraft.sent;
+}
+
+/**
+ * 引き直すときに見せた手札を、見せた順に並べる。準備のあいだに増えたら開き、対戦が始まったら畳む。
+ * 相手が引き直したことは、相手に番が回る前に起きるので、できごとの欄だけでは見落とす。
+ * それ以外の局面では開け閉めしない。プレイヤーが開いた欄を、次の局面で閉じてしまう。
+ */
+function renderMulligans(mulligans) {
+  const grew = mulligans.length > lastMulligans.length;
+  lastMulligans = mulligans;
+  const inSetup = lastView?.phase === "setup";
+  const details = $("mulligans");
+  details.hidden = mulligans.length === 0;
+  if (grew && inSetup) details.open = true;
+  if (mulligansInSetup && !inSetup) details.open = false;
+  mulligansInSetup = inSetup;
+  const counts = [0, 0];
+  $("mulligan-list").replaceChildren(
+    ...mulligans.map(({ player, cards: shown }) => {
+      counts[player] += 1;
+      const own = player === lastView?.viewer;
+      const row = el("div", "mulligan", `${own ? "自分" : "相手"}（${counts[player]} 回目）`);
+      row.dataset.side = own ? "self" : "opponent";
+      const hand = el("div", "zone hand");
+      hand.append(...shown.map((defId) => zoomable(cardFace(defId), "見せた手札", [defId])));
+      row.append(hand);
+      return row;
+    }),
+  );
+}
+
+function toggleButton(instanceId, pressed, onClick) {
+  const button = el("button", "secondary", handCardName(instanceId, lastView));
+  button.type = "button";
+  button.dataset.instanceId = instanceId;
+  button.setAttribute("aria-pressed", String(pressed));
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+/**
+ * 対戦準備で、何を選んでいるのか。
+ *
+ * まとめて出せないとき（マリガンの追加ドロー、たねが無く特性で出られるカードだけのとき）は、
+ * エンジンの選択を 1 つずつ答える。準備は 1 人ずつ進むので、何も書かないと相手の番に移ったように見える。
+ */
+function promptText(view, mine, setup = null) {
+  if (view?.phase !== "setup") return "";
+  if (setup?.kind === "choose") {
+    return "バトル場に出すポケモンを 1 枚と、ベンチに出すたねポケモンを選んで「準備を終える」を押してください。相手に見えるのは、両者が出し終えてからです。";
+  }
+  if (setup?.kind === "submitted") {
+    const bench = setup.bench.map((id) => ownCardName(id, view)).join("、");
+    const placed = `バトル場に ${ownCardName(setup.active, view)}${bench === "" ? "" : `、ベンチに ${bench}`}`;
+    return `${placed} を出しました。相手の準備を待っています。`;
+  }
+  if (!mine) return "相手が対戦の準備で選んでいます。";
+  const choice = view.choices.at(-1);
+  switch (choice?.kind) {
+    case "setup-place-active":
+      // 選ばずに済むのは、候補が特性でバトル場に出られるカードだけのとき（出さなければ引き直し）。
+      return choice.optional
+        ? "バトル場に出すポケモンを選んでください。出さなければ手札を引き直します。"
+        : "バトル場に出すたねポケモンを選んでください。";
+    case "setup-place-bench":
+      return "ベンチに出すたねポケモンを選んでください。出し終えたら「ベンチに出し終える」を押します。";
+    case "setup-bonus-draw":
+      return `相手が手札を引き直したので、${choice.prompt.max} 枚まで追加で引けます。引いたたねポケモンはベンチに出せます。`;
+    default:
+      return "";
+  }
+}
+
+/**
+ * 選んだカードを山札の端へ順に置く選択の案内。エンジンはカードを 1 枚ずつ選ばせるだけなので、
+ * 書かないと、今選んでいるのが何枚目で、先に選んだカードとどちらが上になるのかが分からない。
+ */
+function placementPrompt(placement) {
+  const above = placement.above.map(nameOf).join("、");
+  if (placement.edge === "bottom") {
+    const note = above === "" ? "" : ` 先に置いた ${above} は、このカードの上になります。`;
+    return `山札のいちばん下に置くカードを選んでください。${note}`;
+  }
+  if (placement.nth === 1) return "山札のいちばん上に置くカードを選んでください。";
+  const note =
+    placement.above.length === 1
+      ? `いちばん上には ${above} を置きました。`
+      : `上から ${above} の順に置きました。`;
+  return `山札の上から ${placement.nth} 枚目に置くカードを選んでください。${note}`;
+}
+
+function placementPlace(placement) {
+  if (placement.edge === "bottom") return "山札のいちばん下";
+  return placement.nth === 1 ? "山札のいちばん上" : `山札の上から ${placement.nth} 枚目`;
+}
+
+/**
+ * 対戦準備の選択への答えの見出し。答えはカードか「はい」「いいえ」だけなので、
+ * そのままではバトル場とベンチのどちらに出すのか、「いいえ」で何が起きるのかが読めない。
+ */
+const SETUP_ANSWERS = {
+  "setup-place-active": { card: "をバトル場に出す", decline: "出さずに手札を引き直す" },
+  "setup-place-bench": { card: "をベンチに出す", decline: "ベンチに出し終える" },
+  "setup-bonus-draw": { decline: "追加で引かない" },
+};
+
+/**
  * 手の見出し。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
  * ここが知らない型が来ても、型の名前だけは出す。
+ *
+ * エネルギーやどうぐは、つける先の数だけ手が並ぶ。何をどこへ、まで書かないと見分けられない。
  *
  * 名前を引くのは その手を指す直前の盤面 からである。指したあとの盤面では、
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
-function describeMove(move, view = lastView) {
+function describeMove(move, view = lastView, placement = null, destination = null) {
+  const card = (instanceId) => cardName(instanceId, view);
+  const target = (inPlayId) => pokemonLabel(inPlayId, view, false);
   switch (move.type) {
     case "PlayBasic":
-      return `${handCardName(move.cardInstanceId, view)} をだす`;
+      return `${card(move.cardInstanceId)} をベンチに出す`;
     case "Evolve":
-      return "進化させる";
+      return `${target(move.target)} を ${card(move.cardInstanceId)} に進化させる`;
     case "AttachEnergy":
-      return "エネルギーをつける";
-    case "PlayTrainer":
-    case "PlayStadiumPair":
-      return "トレーナーズを使う";
     case "AttachTool":
-      return "どうぐをつける";
-    case "UseAbility":
-    case "UseHandAbility":
-      return "特性を使う";
+      return `${card(move.cardInstanceId)} を ${target(move.target)} につける`;
+    case "PlayTrainer": {
+      const defId = locateCard(move.cardInstanceId, view)?.defId;
+      const verb = cards[defId]?.trainerKind === "stadium" ? "出す" : "使う";
+      return `${card(move.cardInstanceId)} を${verb}`;
+    }
+    case "PlayStadiumPair":
+      return `${card(move.right)} を出す`;
+    case "UseAbility": {
+      const top = pokemonAt(move.source, view)?.pokemon.stack.at(-1);
+      return `${target(move.source)} の${abilityName(top?.defId, move.abilityIndex)}を使う`;
+    }
+    case "UseHandAbility": {
+      const defId = locateCard(move.cardInstanceId, view)?.defId;
+      return `手札の ${card(move.cardInstanceId)} の${abilityName(defId, move.abilityIndex)}を使う`;
+    }
     case "UseStadiumEffect":
       return "スタジアムの効果を使う";
     case "Retreat":
-      return "にげる";
+      return `にげて、${target(move.to)} をバトル場に出す`;
     case "DiscardOwnPokemon":
-      return "自分のポケモンをトラッシュする";
-    case "Attack":
-      return `ワザ ${move.attackIndex + 1} を使う`;
+      return `${target(move.target)} をトラッシュする`;
+    case "Attack": {
+      const name = attackName(move, view);
+      return name === undefined
+        ? `${move.attackIndex + 1} 番目のワザを使う`
+        : `ワザ「${name}」を使う`;
+    }
     case "EndTurn":
       return "番を終わる";
     case "AnswerChoice":
-      return describeAnswer(move.answer, view);
+      return describeAnswer(move.answer, view, placement, destination);
     default:
       return move.type;
   }
+}
+
+function abilityName(defId, index) {
+  const name = cards[defId]?.abilities?.[index];
+  return name === undefined ? "特性" : `特性「${name}」`;
+}
+
+/**
+ * `attackIndex` は印刷されたワザの番号ではなく、どうぐなどで使えるようになったワザを
+ * 後ろに足した表の番号である（`engine/docs/spec/engine-core.md` 3.3 節）。印刷されたワザが前に並ぶので、
+ * その数より小さければ名前が引ける。
+ */
+function attackName(move, view) {
+  const side = move.player === view?.viewer ? view?.self : view?.opponent;
+  const top = side?.active?.stack?.at(-1);
+  return cards[top?.defId]?.attacks?.[move.attackIndex];
 }
 
 /**
@@ -1571,63 +2219,419 @@ function describeMove(move, view = lastView) {
  * カード、場の個体、位置、番号のいずれかである。
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
-function describeAnswer(answer, view) {
+function describeAnswer(answer, view, placement = null, destination = null) {
+  const choice = view?.choices?.at(-1);
+  if (placement !== null && (answer.kind === "card" || answer.kind === "cardDef")) {
+    return `${answerCardName(answer, view)} を${placementPlace(placement)}に置く`;
+  }
+  const setup = SETUP_ANSWERS[choice?.kind];
+  if (setup?.[answer.kind] !== undefined) {
+    return answer.kind === "card"
+      ? `${handCardName(answer.card, view)} ${setup.card}`
+      : setup[answer.kind];
+  }
+  const moved = destination === null ? null : destinationText(answer, destination, view);
+  if (moved !== null) return moved;
   switch (answer.kind) {
     case "accept":
       return "はい";
     case "decline":
       return "いいえ";
     case "card":
-      return handCardName(answer.card, view);
+      return cardWithPlace(answer.card, view);
     case "cardDef":
       return nameOf(answer.defId);
     case "inPlay":
-      return inPlayName(answer.target, view);
+      return pokemonLabel(answer.target, view, true);
     case "position":
       return `${answer.index + 1} 番目`;
     case "effectIndex":
       return `${answer.index + 1} 番目の効果`;
-    case "attackIndex":
-      return `ワザ ${answer.index + 1}`;
+    case "attackIndex": {
+      const listed =
+        choice?.prompt?.kind === "selectAttack"
+          ? choice.prompt.candidates.find((each) => each.attackIndex === answer.index)
+          : undefined;
+      return listed === undefined ? `ワザ ${answer.index + 1}` : `ワザ「${listed.label}」`;
+    }
     case "placement":
       return answer.placement === "before" ? "先に" : "あとに";
+    case "bonusDrawCount":
+      return `${answer.count} 枚引く`;
     default:
       return JSON.stringify(answer);
   }
 }
 
-/** 場のインスタンス ID から、いちばん上のカードの名前を引く。 */
-function inPlayName(inPlayId, view) {
-  if (!view) return inPlayId;
-  for (const side of [view.self, view.opponent]) {
-    for (const pokemon of [side.active, ...side.bench]) {
-      if (pokemon === null || pokemon.concealed === true) continue;
-      if (pokemon.inPlayId !== inPlayId) continue;
-      const own = side === view.self ? "自分の" : "相手の";
-      return own + nameOf(pokemon.stack[pokemon.stack.length - 1].defId);
-    }
-  }
-  return inPlayId;
+function answerCardName(answer, view) {
+  return answer.kind === "card" ? cardWithPlace(answer.card, view) : nameOf(answer.defId);
 }
 
 /**
- * 手札のインスタンス ID からカードの名前を引く。盤面に無ければ番号のまま出す。
- *
- * 両側を見るのはリプレイのためである。対戦中は相手の手札が `hand` を持たないので、
- * 自分の手札しか当たらない。
+ * 行き先ごとの言い方。`whose` は、相手のゾーンなら「相手の」、自分のなら空文字。
+ * 並びは、あとで決まる行き先を並べる順でもある（手札に加えるが先）。サーバは名前順で送る。
  */
-function handCardName(instanceId, view) {
-  for (const side of [view?.self, view?.opponent]) {
-    const card = side?.hand?.find((held) => held.instanceId === instanceId);
-    if (card !== undefined) return nameOf(card.defId);
+const DESTINATION_PHRASES = {
+  hand: (whose) => `${whose}手札に加える`,
+  attached: () => "ポケモンにつける",
+  evolved: () => "進化させる",
+  discard: (whose) => (whose === "" ? "トラッシュする" : "相手のトラッシュに置く"),
+  lostZone: (whose) => `${whose}ロストゾーンに置く`,
+  deck: (whose) => `${whose}山札にもどす`,
+  prizes: (whose) => `${whose}サイドに置く`,
+  active: (whose) => `${whose}バトル場に出す`,
+  bench: (whose) => `${whose}ベンチに出す`,
+};
+
+/**
+ * 選んだものの行き先を添えた見出し。書けない組み合わせなら null。
+ *
+ * 同じ候補から「手札に加える 1 枚」と「ポケモンにつける 1 枚」を続けて選ぶ効果では、
+ * カードの名前だけのボタンが 2 回並び、どちらを選んでいるのか分からない。
+ */
+function destinationText(answer, destination, view) {
+  if (answer.kind === "inPlay") {
+    if (destination.to !== "attached") return null;
+    const cardNames = destination.cards.map(nameOf).join("、");
+    return `${cardNames} を ${pokemonLabel(destination.target, view, false)} につける`;
   }
-  return instanceId;
+  if (answer.kind !== "card" && answer.kind !== "cardDef") return null;
+  const card = answerCardName(answer, view);
+  switch (destination.to) {
+    case "attached":
+      return `${card} を ${pokemonLabel(destination.target, view, false)} につける`;
+    case "evolved":
+      return `${pokemonLabel(destination.target, view, false)} を ${card} に進化させる`;
+    case "later": {
+      const phrases = Object.keys(DESTINATION_PHRASES)
+        .filter((to) => destination.options.includes(to))
+        .map((to) => DESTINATION_PHRASES[to](""));
+      if (phrases.length === 0 || phrases.length !== destination.options.length) return null;
+      return phrases.length === 1
+        ? `${card} を選ぶ（あとで${phrases[0]}）`
+        : `${card} を選ぶ（${phrases.join("か、")}かは、あとで選ぶ）`;
+    }
+    default: {
+      const phrase = DESTINATION_PHRASES[destination.to];
+      if (phrase === undefined) return null;
+      return `${card} を${phrase(destination.player === view?.viewer ? "" : "相手の")}`;
+    }
+  }
+}
+
+/**
+ * 座席から見た両側と、それが自分の側か。リプレイの盤面も同じ形にしてある（`readerBoard`）。
+ * 対戦中は相手の手札が `hand` を持たないので、自分の手札しか当たらない。
+ */
+function seatSides(view) {
+  return sidesOf(view)
+    .filter(([, side]) => side != null)
+    .map(([player, side]) => [player === view.viewer, side]);
+}
+
+/** 描いている順のベンチ。空いた枠は描かないので、左からの番号もこれで数える。 */
+const benched = (side) => side.bench.filter((pokemon) => pokemon !== null);
+
+function pokemonAt(inPlayId, view) {
+  for (const [own, side] of seatSides(view)) {
+    if (side.active?.inPlayId === inPlayId) return { own, side, pokemon: side.active, bench: -1 };
+    const index = benched(side).findIndex((pokemon) => pokemon.inPlayId === inPlayId);
+    if (index >= 0) return { own, side, pokemon: benched(side)[index], bench: index };
+  }
+  return null;
+}
+
+const topName = (pokemon) =>
+  pokemon.concealed === true ? "ウラのポケモン" : nameOf(pokemon.stack.at(-1).defId);
+
+/**
+ * 場のポケモンを、いる場所と合わせて書く。ベンチに同じ名前が並ぶときは左からの番号を足す。
+ * `withSide` が偽なら、自分の側では「自分の」を省く。自分の番の手は自分の場にしか向かない。
+ */
+function pokemonLabel(inPlayId, view, withSide) {
+  const found = pokemonAt(inPlayId, view);
+  if (found === null) return inPlayId;
+  const name = topName(found.pokemon);
+  const twins = benched(found.side).filter((pokemon) => topName(pokemon) === name).length;
+  const place =
+    found.bench < 0 ? "バトル場" : twins > 1 ? `ベンチ左から ${found.bench + 1} 番目` : "ベンチ";
+  const side = found.own ? (withSide ? "自分の" : "") : "相手の";
+  return `${side}${place}の${name}`;
+}
+
+/**
+ * インスタンス ID から、カードと、それがある場所を引く。盤面に無ければ null（山札の中など）。
+ *
+ * 同じ場所に同じカードが何枚かあるときは、盤面で見分けられる順番を `place` に足す。
+ * ついているカードは左から描き、トラッシュとロストゾーンは大きく出すと上から並ぶ。
+ */
+function locateCard(instanceId, view) {
+  for (const [own, side] of seatSides(view)) {
+    const who = own ? "自分の" : "相手の";
+    const piles = [
+      ["hand", () => `${who}手札`, side.hand ?? [], "左から"],
+      ["discard", () => `${who}トラッシュ`, [...(side.discard ?? [])].reverse(), "上から"],
+      ["lost", () => `${who}ロストゾーン`, [...(side.lostZone ?? [])].reverse(), "上から"],
+    ];
+    for (const pokemon of [side.active, ...benched(side)]) {
+      if (pokemon == null || pokemon.concealed === true) continue;
+      const holder = () => pokemonLabel(pokemon.inPlayId, view, true);
+      piles.push(
+        ["stack", holder, [...pokemon.stack].reverse(), "上から"],
+        ["attached", holder, pokemon.attached, "左から"],
+      );
+    }
+    for (const [zone, where, pile, from] of piles) {
+      const card = pile.find((each) => each.instanceId === instanceId);
+      if (card === undefined) continue;
+      const twins = pile.filter((each) => each.defId === card.defId);
+      const place =
+        twins.length > 1 ? `${where()}の${from} ${twins.indexOf(card) + 1} 枚目` : where();
+      return { defId: card.defId, own, zone, place };
+    }
+  }
+  return null;
+}
+
+/** 盤面に無ければ番号のまま出す。 */
+function cardName(instanceId, view) {
+  const found = locateCard(instanceId, view);
+  return found === null ? instanceId : nameOf(found.defId);
+}
+
+/** 選択の候補のカード。手札から選ぶことが多いので、手札のときだけ場所を省く。 */
+function cardWithPlace(instanceId, view) {
+  const found = locateCard(instanceId, view);
+  if (found === null) return instanceId;
+  const name = nameOf(found.defId);
+  return found.zone === "hand" && found.own ? name : `${name}（${found.place}）`;
+}
+
+/** 手札に無ければ番号のまま出す。 */
+function handCardName(instanceId, view) {
+  const found = locateCard(instanceId, view);
+  return found?.zone === "hand" ? nameOf(found.defId) : instanceId;
+}
+
+/** 手札か自分の場にある自分のカードの名前。出したあとのカードは手札から場へ移っている。 */
+function ownCardName(instanceId, view) {
+  const found = locateCard(instanceId, view);
+  const mine = found?.own && (found.zone === "hand" || found.zone === "stack");
+  return mine ? nameOf(found.defId) : instanceId;
+}
+
+/** 人に見せる文が無いイベントは、不具合を調べるときのために名前で残す。 */
+function logEvents(events, results, list = "events") {
+  for (const [index, event] of events.entries()) {
+    const result = results[index];
+    if (result?.repeated) continue;
+    addEvent(result?.text ?? event.kind, list);
+  }
 }
 
 function addEvent(text, list = "events") {
   const item = document.createElement("li");
   item.textContent = text;
   $(list).prepend(item);
+}
+
+/** 観戦の画面は代わりに `watchName` で座席の名前を使う。 */
+function seatName(player) {
+  return player === seat ? "あなた" : "相手";
+}
+
+/** 先攻のコイントスを見せた対戦。`sync` は繋ぎ直すたびに届くので、この画面で 2 度は出さない。 */
+let firstPlayerShownFor = null;
+
+/** 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。 */
+function showFirstPlayer(key, firstPlayer, view) {
+  if (firstPlayerShownFor === key || view.phase !== "setup") return;
+  firstPlayerShownFor = key;
+  const watching = view.viewer === "spectator";
+  const text = watching
+    ? `コイントスの結果、${watchName(firstPlayer)}が先攻です`
+    : firstPlayer === seat
+      ? "コイントスの結果、あなたが先攻です"
+      : "コイントスの結果、相手が先攻です（あなたは後攻）";
+  const results = [watching || firstPlayer === seat];
+  showResult({ text, coins: { results, faces: ["先攻", "後攻"] } });
+}
+
+/**
+ * 届いたイベントを、人に見せる結果へ直す。見せないイベントの位置は null にする。
+ * 名前は適用後と適用前の盤面から引く。きぜつしたポケモンは適用後の盤面にもういない。
+ */
+function describeResults(events, views, who) {
+  let previous = null;
+  return events.map((event) => {
+    const result = describeResult(event, views, who);
+    const repeated = result?.key !== undefined && result.key === previous?.key;
+    previous = result;
+    return repeated ? { ...result, repeated: true } : result;
+  });
+}
+
+function describeResult(event, views, who) {
+  const pokemon = (inPlayId) => pokemonName(inPlayId, views, who) ?? "ポケモン";
+  switch (event.kind) {
+    case "coin-flipped": {
+      const heads = event.results.filter(Boolean).length;
+      const tails = event.results.length - heads;
+      const summary =
+        event.results.length === 1
+          ? event.results[0]
+            ? "オモテ"
+            : "ウラ"
+          : `オモテ ${heads} 回・ウラ ${tails} 回`;
+      const cause =
+        event.source !== null
+          ? `（${nameOf(event.source.defId)}）`
+          : event.window.kind === "pokemon-check"
+            ? "（ポケモンチェック）"
+            : "";
+      return {
+        text: `${who(event.player)}のコイン${cause}: ${summary}`,
+        coins: { results: event.results, faces: ["オモテ", "ウラ"] },
+      };
+    }
+    case "damage-dealt":
+      return {
+        text: `${pokemon(event.target)}に ${event.amount} ダメージ`,
+        hit: { target: event.target, text: `-${event.amount}`, tone: "negative" },
+      };
+    case "damage-counters-placed": {
+      // 載せた数は HP で頭打ちになる。浮かべるのは実際に増えたダメージのほうにする。
+      const amount = event.afterDamage - event.beforeDamage;
+      return {
+        text: `${pokemon(event.target)}にダメカンを ${event.count} 個`,
+        ...(amount > 0
+          ? { hit: { target: event.target, text: `-${amount}`, tone: "negative" } }
+          : {}),
+      };
+    }
+    case "damage-healed":
+      return {
+        text: `${pokemon(event.target)}の HP を ${event.amount} 回復`,
+        tone: "positive",
+        hit: { target: event.target, text: `+${event.amount}`, tone: "positive" },
+      };
+    case "condition-applied":
+      return { text: `${pokemon(event.target)}が${conditionName(event.condition)}になった` };
+    case "condition-removed":
+      return { text: `${pokemon(event.target)}の${conditionName(event.condition)}が治った` };
+    case "pokemon-knocked-out":
+      return { text: `${pokemon(event.target)}がきぜつした`, tone: "attention" };
+    // まとめて取ると 1 枚ごとのイベントが続けて並ぶ。選んで取るときは 1 枚ずつ別の局面で届くので、
+    // 枚数は `count`（今回取る総数）ではなく残りで伝え、続いたものは 1 つに畳む。
+    case "prize-taken":
+    case "prize-taken-hidden": {
+      const side = sidesOf(views[0]).find(([player]) => player === event.player)?.[1];
+      const left = side === undefined ? "" : `（残り ${side.prizeCount} 枚）`;
+      return { text: `${who(event.player)}がサイドを取った${left}`, key: `prize-${event.player}` };
+    }
+    case "mulligan-taken":
+      return { text: `${who(event.player)}の手札にたねポケモンが無く、引き直した` };
+    case "turn-started":
+      return { text: `${who(event.player)}の番`, tone: "turn" };
+    default:
+      return null;
+  }
+}
+
+function conditionName(condition) {
+  return CONDITIONS[condition.kind] ?? condition.kind;
+}
+
+/** 場のポケモンを「持ち主の名前」で呼ぶ。見つからなければ null。 */
+function pokemonName(inPlayId, views, who) {
+  for (const view of views) {
+    for (const [player, side] of sidesOf(view)) {
+      for (const pokemon of [side.active, ...side.bench]) {
+        if (pokemon == null || pokemon.concealed === true || pokemon.inPlayId !== inPlayId)
+          continue;
+        return `${who(player)}の${nameOf(pokemon.stack[pokemon.stack.length - 1].defId)}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** 座席の番号と、その座席の場の組。座席と観戦で盤面の形が違う。 */
+function sidesOf(view) {
+  if (!view) return [];
+  if (view.viewer === "spectator") return view.players.map((side, player) => [player, side]);
+  return [
+    [view.viewer, view.self],
+    [1 - view.viewer, view.opponent],
+  ];
+}
+
+/** 盤面を描き直したあとに呼ぶ。数字を浮かべる先のポケモンは、描き直しで作り直されている。 */
+function showResults(results, board) {
+  for (const result of results) {
+    if (result === null || result.repeated) continue;
+    showResult(result);
+    if (result.hit !== undefined) floatHit(board, result.hit);
+  }
+}
+
+/**
+ * 同時に出しておく結果の数。溢れたら古いものから消すが、コインは残す。1 つの手でもコイン、
+ * ダメージ、特殊状態、きぜつ、番の交代と重なりうるので、古い順だとコインから先に消える。
+ */
+const RESULT_LIMIT = 5;
+const RESULT_MS = 4_000;
+/** コインは回り終えてから読むので、そのぶん長く残す。 */
+const COIN_RESULT_MS = 6_000;
+
+function showResult({ text, tone = "neutral", coins }) {
+  const item = el("div", "result");
+  item.dataset.tone = tone;
+  if (coins !== undefined) item.append(coinRow(coins));
+  item.append(el("p", "result-text", text));
+  const box = $("results");
+  box.append(item);
+  while (box.childElementCount > RESULT_LIMIT) {
+    const older = [...box.children].filter((child) => child !== item);
+    (older.find((child) => child.querySelector(".coin") === null) ?? older[0]).remove();
+  }
+  setTimeout(() => item.remove(), coins === undefined ? RESULT_MS : COIN_RESULT_MS);
+}
+
+/** 読み上げには結果の文が同じことを言うので、コインの絵は読ませない。 */
+function coinRow({ results, faces }) {
+  const row = el("div", "coins");
+  row.setAttribute("aria-hidden", "true");
+  for (const [index, heads] of results.entries()) {
+    const coin = el(
+      "span",
+      "coin",
+      el(
+        "span",
+        "coin-inner",
+        el("span", "coin-face heads", faces[0]),
+        el("span", "coin-face tails", faces[1]),
+      ),
+    );
+    coin.dataset.face = heads ? "heads" : "tails";
+    coin.style.setProperty("--order", String(index));
+    row.append(coin);
+  }
+  return row;
+}
+
+/** 盤面の外に置く。盤面は局面が届くたびに作り直すので、中に置くと次の局面で消える。 */
+function floatHit(board, { target, text, tone }) {
+  const pokemon = board.querySelector(`.pokemon[data-in-play-id="${CSS.escape(target)}"]`);
+  if (pokemon === null) return;
+  const rect = pokemon.getBoundingClientRect();
+  const hit = el("span", "hit", text);
+  hit.dataset.tone = tone;
+  hit.setAttribute("aria-hidden", "true");
+  hit.style.left = `${rect.left + rect.width / 2}px`;
+  hit.style.top = `${rect.top + rect.height / 3}px`;
+  document.body.append(hit);
+  setTimeout(() => hit.remove(), RESULT_MS);
 }
 
 function watchUrl(spectatorToken) {
@@ -1671,21 +2675,29 @@ function openWatch(token) {
           $("watch-status").textContent = "";
           watchSeats = message.seats;
           renderWatch(message.view);
+          showFirstPlayer(token, message.firstPlayer, message.view);
           renderWatchClock(message.clock);
           return;
-        case "spectator-delta":
-          for (const played of message.events) addEvent(played.kind, "watch-events");
+        case "spectator-delta": {
+          const results = describeResults(message.events, [message.view, lastWatchView], watchName);
+          logEvents(message.events, results, "watch-events");
           renderWatch(message.view);
+          showResults(results, $("watch"));
           renderWatchClock(message.clock);
           return;
+        }
         case "spectator-ended":
           ended = true;
           renderWatch(message.view);
           $("watch-clock").textContent = describeWatchEnd(message.matchResult);
+          showResult({ text: describeWatchEnd(message.matchResult) });
           return;
         case "error":
           refusal = message.message;
-          if (synced) addEvent(message.message, "watch-events");
+          if (synced) {
+            addEvent(message.message, "watch-events");
+            showResult({ text: message.message, tone: "attention" });
+          }
           return;
         default:
           return;
@@ -1719,7 +2731,9 @@ function renderWatch(view) {
   for (const seat of [0, 1]) {
     const info = watchSeats?.[seat];
     $(`watch-name-${seat}`).textContent =
-      info === undefined ? `座席 ${seat}` : `${info.displayName}（${info.rating}）`;
+      info === undefined
+        ? `座席 ${seat}`
+        : `${info.displayName}（${info.rating === null ? "AI" : info.rating}）`;
     renderSide($(`watch-side-${seat}`), view.players[seat], seat === 1);
   }
   renderStadium($("watch-stadium"), view.stadium);
@@ -2013,7 +3027,12 @@ async function goToPly(ply) {
  */
 function readerBoard(views, seat) {
   if (!views) return null;
-  return { self: views[seat].self, opponent: views[seat === 0 ? 1 : 0].self };
+  return {
+    viewer: seat,
+    self: views[seat].self,
+    opponent: views[seat === 0 ? 1 : 0].self,
+    choices: views[seat].choices,
+  };
 }
 
 function renderReplayBoard({ views, seat }) {

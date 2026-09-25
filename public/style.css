@@ -47,6 +47,26 @@ button.danger {
   border: 1px solid #b7791f;
   border-radius: 8px;
 }
+.move-prompt {
+  margin: 0 0 6px;
+}
+.setup h3 {
+  font-size: 0.9rem;
+  margin: 8px 0 4px;
+}
+.setup > button {
+  margin-top: 10px;
+}
+button[aria-pressed="true"] {
+  outline: 2px solid #2b6cb0;
+  background: #dbe8f6;
+}
+.mulligans {
+  margin: 8px 0;
+}
+.mulligan {
+  font-size: 0.85rem;
+}
 .moves {
   display: flex;
   flex-wrap: wrap;
@@ -54,6 +74,14 @@ button.danger {
 }
 .moves button {
   text-align: left;
+}
+.event-log {
+  margin: 16px 0 0;
+  font-size: 0.85rem;
+}
+.event-log summary {
+  cursor: pointer;
+  opacity: 0.7;
 }
 .events {
   max-height: 260px;
@@ -180,6 +208,14 @@ button.secondary {
   margin: 8px 0;
 }
 
+.bot-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 8px 0;
+}
+
 .deck-code {
   display: flex;
   flex-wrap: wrap;
@@ -230,9 +266,20 @@ button.secondary {
 .mat.mirrored {
   grid-template-areas: "piles field prizes";
 }
-.mat > .prizes {
+/* ロストゾーンは卓と同じくサイドの隣に置く。バトル場の側に来るよう、向かいの側では上下を返す。 */
+.mat > .prize-side {
   grid-area: prizes;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   --w: 40px;
+}
+.mat.mirrored > .prize-side {
+  flex-direction: column-reverse;
+}
+.prize-side > [data-zone="lost"] {
+  --w: 56px;
 }
 .mat > .field {
   grid-area: field;
@@ -243,6 +290,14 @@ button.secondary {
   flex-direction: column;
   gap: 8px;
   --w: 56px;
+}
+/* 山札はバトル場の側、トラッシュは手前に置くので、向かいの側では上下を返す。 */
+.mat.mirrored > .piles {
+  flex-direction: column-reverse;
+}
+/* 盤面を右の欄と並べる横に広い画面でだけ出す。狭い画面では見出しの説明が同じことを言っている。 */
+.table-hint {
+  display: none;
 }
 .field {
   display: flex;
@@ -383,6 +438,11 @@ button.secondary {
   flex-direction: column;
   align-items: center;
 }
+/* 指せる手のボタンにマウスを載せると、その手が向かうポケモンを囲む。 */
+.pokemon.aimed > .card {
+  outline: 3px solid #d69e2e;
+  outline-offset: 2px;
+}
 /* 倒したカードが隣へはみ出さないよう、縦と横の差のぶんを空けておく。 */
 .zone.active .pokemon {
   padding: 0 calc(var(--w) * 0.2);
@@ -466,6 +526,42 @@ button.secondary {
   opacity: 0.8;
 }
 
+.card-preview {
+  position: fixed;
+  z-index: 10;
+  width: var(--w);
+  pointer-events: none;
+  /*
+   * 縦に収まらない画面では、カードの縦から逆算して幅を詰める。差し引くのは余白と、画像が無いときの説明の行。
+   * `vh` はスマートフォンのアドレスバーが隠れたときの高さなので、`dvh` でいま見えている高さを使う。
+   */
+  --w: min(420px, 90vw, calc((100dvh - 96px) * 63 / 88));
+  padding: 6px;
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+}
+.card-preview p {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+}
+/* 長押しで文字の選択や画像のメニューが始まると、プレビューに重なる。マウスでは選べるままにする。 */
+@media (pointer: coarse) {
+  .card {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .card-row .card.thumb {
   --w: 36px;
   padding: 1px;
@@ -489,8 +585,19 @@ button.secondary {
     justify-content: center;
     --w: 44px;
   }
-  .mat > .prizes {
+  .mat > .prize-side {
+    flex-direction: row;
+    justify-content: center;
     --w: 30px;
+  }
+  .mat.mirrored > .prize-side {
+    flex-direction: row-reverse;
+  }
+  .mat.mirrored > .piles {
+    flex-direction: row-reverse;
+  }
+  .prize-side > [data-zone="lost"] {
+    --w: 44px;
   }
   .zone.active {
     --w: 84px;
@@ -501,5 +608,349 @@ button.secondary {
   }
   .zone.hand {
     --w: 52px;
+  }
+}
+
+/*
+ * 横に広い画面の対戦と観戦では、両者の盤面を 1 画面に収める。盤面を左に、時計と指せる手とできごとを右の欄に置く。
+ * カードの大きさは、ベンチの 1 枚の幅 `--b` から比で決める。縦に積むのは相手の手札、相手の場、自分の場、
+ * 自分の手札で、合わせて `--b` のおよそ 9.8 倍になる。横は、ベンチ 5 匹とサイドと山札の列でおよそ 8.5 倍になる。
+ * 見えている高さと盤面の幅のうち、きついほうから決める。リプレイはページの流れの中にあるので、ここに含めない。
+ */
+@media (min-width: 1024px) {
+  body:has(> .table:not([hidden])) {
+    max-width: none;
+    padding: 8px 16px;
+  }
+  /* 見出しの説明は盤面を押し下げるので出さず、カードを大きく出す方法だけを右の欄に残す。 */
+  body:has(> .table:not([hidden])) > header {
+    display: none;
+  }
+  .table-hint {
+    display: block;
+  }
+  /*
+   * 対戦のあいだは、下に続くリプレイの欄を出さない。出すとページがスクロールでき、盤面の上でホイールを回すと
+   * 盤面ごと上へずれる。決着したら、その対戦をリプレイで開けるように戻す。
+   */
+  body:has(> #table:not([hidden]):not([data-ended])) > #history {
+    display: none;
+  }
+  .table:not([hidden]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 400px);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "board status"
+      "board panel";
+    column-gap: 16px;
+    height: calc(100dvh - 16px);
+  }
+  .table-status {
+    grid-area: status;
+  }
+  /* 対戦準備で引き直しの手札と選ぶボタンが並ぶと縦に入りきらないことがあり、そのときは欄の中でスクロールする。 */
+  .table-panel {
+    grid-area: panel;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .table-panel h2 {
+    margin-top: 8px;
+  }
+  /* 指せる手が多い局面でも、投了のボタンとできごとの記録を押し出さない。 */
+  .table-panel > .moves {
+    flex: 0 1 auto;
+    min-height: 3em;
+    overflow-y: auto;
+  }
+  .table-panel > .note {
+    margin: 8px 0 0;
+  }
+
+  .table > .board {
+    grid-area: board;
+    min-height: 0;
+    overflow-y: auto;
+    container-type: inline-size;
+    gap: 8px;
+  }
+  .table .board > * {
+    --b: min(clamp(44px, calc((100dvh - 112px) / 9.8), 104px), calc((100cqi - 120px) / 8.5));
+    /* 手札の段の左右に空ける幅。左に名前を置き、右も同じだけ空けて手札を中央にそろえる。 */
+    --name: 8rem;
+  }
+  /* 名前は手札の段の左に置き、1 段ぶんの高さを使わない。 */
+  .table .board-side {
+    position: relative;
+  }
+  .table .board-side > h2 {
+    position: absolute;
+    left: 0;
+    max-width: var(--name);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .table .board-side:first-child > h2 {
+    top: 0;
+  }
+  .table .board-side:last-child > h2 {
+    bottom: 0;
+  }
+  /*
+   * スタジアムは卓と同じく両者のあいだに置く。バトル場の横が空いているので、段は足さない。
+   * バトル場のポケモンにカードが多くついて横に広がっても重ならないよう、少し離しておく。
+   */
+  .table .board-center {
+    position: relative;
+    z-index: 1;
+    height: 0;
+    --w: calc(var(--b) * 0.8);
+  }
+  .table .board-center > .zone {
+    position: absolute;
+    top: 50%;
+    right: calc(50% + var(--b) * 2.2);
+    transform: translateY(-50%);
+  }
+
+  .table .mat {
+    grid-template-columns: 1fr auto 1fr;
+    gap: 8px;
+    padding: 8px 16px;
+  }
+  .table .mat > .prize-side {
+    justify-self: start;
+    --w: calc(var(--b) * 0.5);
+  }
+  .table .mat > .piles {
+    justify-self: end;
+    --w: calc(var(--b) * 0.72);
+  }
+  .table .mat.mirrored > .prize-side {
+    justify-self: end;
+  }
+  .table .mat.mirrored > .piles {
+    justify-self: start;
+  }
+  .table .prize-side > [data-zone="lost"] {
+    --w: calc(var(--b) * 0.72);
+  }
+  .table .field {
+    gap: 8px;
+  }
+  .table .zone.active {
+    --w: calc(var(--b) * 1.3);
+  }
+  .table .zone.bench {
+    --w: var(--b);
+  }
+  .table .attached {
+    --w: calc(var(--b) * 0.38);
+  }
+  /* 場の見出しは縦書きでカードの左に出し、段を増やさない。 */
+  .table .field .zone-label,
+  .table .board-center .zone-label {
+    position: absolute;
+    top: 0;
+    right: 100%;
+    margin-right: 4px;
+    writing-mode: vertical-rl;
+    text-align: start;
+  }
+
+  /*
+   * 手札は 1 段に並べ、入りきらないぶんだけ重ねる。`--cards` は描くときに枚数を入れてある。
+   * `--label` を rem で持つのは、見出しとカードで文字の大きさが違い、em では幅が食い違うため。
+   */
+  .table .board .zone.hand {
+    --w: var(--b);
+    --label: 4.5rem;
+    --label-gap: 8px;
+    --fit: calc(
+      (100% - var(--label) - var(--label-gap) - var(--cards) * var(--w)) / (var(--cards) - 1)
+    );
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 0;
+    margin: 0;
+    padding-inline: var(--name);
+  }
+  .table .board .zone.hand > .card + .card {
+    margin-left: min(4px, var(--fit));
+  }
+  /* 中身の見えない手札は枚数を伝えるだけなので、小さく深く重ねる。 */
+  .table .board .zone.hand:has(> .card.back) {
+    --w: calc(var(--b) * 0.5);
+  }
+  .table .board .zone.hand > .card.back + .card.back {
+    margin-left: min(calc(var(--w) * -0.55), var(--fit));
+  }
+  .table .board .zone.hand > .zone-label {
+    flex: none;
+    width: var(--label);
+    text-align: start;
+    margin-left: var(--label-gap);
+  }
+}
+
+/*
+ * 結果は画面の上の端に重ねて出す。真ん中のバトル場とダメージの数字は隠さない。
+ * 押す場所を塞がないよう、触っても下の盤面へ通す。カードのプレビューは結果の上に出す。
+ */
+.results {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  z-index: 9;
+  width: min(320px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.result {
+  padding: 8px 12px;
+  border-left: 4px solid var(--line);
+  border-radius: 8px;
+  background: Canvas;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+  animation: result-in 0.2s ease-out;
+}
+.result[data-tone="turn"] {
+  border-left-color: #2b6cb0;
+}
+.result[data-tone="attention"] {
+  border-left-color: #b7791f;
+}
+.result[data-tone="positive"] {
+  border-left-color: #1d6b3a;
+}
+.result[data-tone="negative"] {
+  border-left-color: #c0392b;
+}
+.result-text {
+  margin: 0;
+}
+@keyframes result-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+.coins {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  perspective: 400px;
+}
+.coin {
+  width: 56px;
+  height: 56px;
+}
+.coin-inner {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  animation: coin-spin 1s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  animation-delay: calc(var(--order) * 150ms);
+}
+/* 回り終えた向きを、アニメーションが無くても同じにしておく。 */
+.coin[data-face="tails"] .coin-inner {
+  transform: rotateY(180deg);
+  --turns: 1980deg;
+}
+.coin[data-face="heads"] .coin-inner {
+  --turns: 1800deg;
+}
+.coin-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1c2530;
+  backface-visibility: hidden;
+}
+.coin-face.heads {
+  background: radial-gradient(circle at 35% 30%, #fff3b0, #d4a017 70%);
+  box-shadow: inset 0 0 0 3px #b8860b;
+}
+.coin-face.tails {
+  background: radial-gradient(circle at 35% 30%, #f4f6f8, #9aa5b1 70%);
+  box-shadow: inset 0 0 0 3px #6b7785;
+  transform: rotateY(180deg);
+}
+@keyframes coin-spin {
+  from {
+    transform: rotateY(0deg) translateY(0);
+  }
+  50% {
+    transform: rotateY(calc(var(--turns) / 2)) translateY(-16px);
+  }
+  to {
+    transform: rotateY(var(--turns)) translateY(0);
+  }
+}
+
+.hit {
+  position: fixed;
+  z-index: 9;
+  transform: translate(-50%, -50%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  animation: hit-rise 1.6s ease-out forwards;
+}
+.hit[data-tone="negative"] {
+  background: #c0392b;
+}
+.hit[data-tone="positive"] {
+  background: #1d6b3a;
+}
+@keyframes hit-rise {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -20%) scale(1.4);
+  }
+  20% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -150%);
+  }
+}
+
+/* 狭い画面には盤面の横に空きが無く、どこに出しても盤面に重なる。スマートフォンのトーストにならって下に出す。 */
+@media (max-width: 640px) {
+  .results {
+    top: auto;
+    bottom: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result,
+  .coin-inner,
+  .hit {
+    animation: none;
   }
 }

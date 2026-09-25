@@ -11,11 +11,12 @@
 import { randomUUID } from "node:crypto";
 import type { DeckList, Player } from "./engine.js";
 import { describeViolation, validateDeck } from "./deck.js";
-import type { SeatInfo } from "./match.js";
+import type { BotSeat, SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
 import { ACCOUNT_NOT_FOUND, type Account, type AccountStore } from "./accounts.js";
 import { commitSeed, noShares, type SeedShares } from "./fingerprint.js";
 import { allRevealed, SHARE_REVEAL_DEADLINE_MS, type PendingMatch } from "./pending.js";
+import { BOT_PLAYER_PREFIX, type Bot } from "./bots.js";
 
 export interface JoinRequest {
   /** プレイヤーのシークレット（7.2 節）。これが無い対戦は始めない。 */
@@ -32,6 +33,16 @@ export interface JoinRequest {
   seedShareCommit?: string;
 }
 
+/** 終わっていない AI との対戦があるので、次を始めない（7.3 節）。 */
+export const BOT_MATCH_LIVE = "bot-match-live";
+
+function accountMissing(): JoinOutcome {
+  return { ok: false, code: ACCOUNT_NOT_FOUND, errors: ["アカウントが見つからない"] };
+}
+
+/** AI と対戦するときの要求（7.3 節）。相手を待たないので、ルームコードは無い。 */
+export type BotJoinRequest = Omit<JoinRequest, "roomCode">;
+
 export interface Ticket {
   ticket: string;
   seat: SeatInfo;
@@ -42,7 +53,7 @@ export interface Ticket {
 
 export type JoinOutcome =
   /** `code` は画面が文言で分岐せずに済むようにする（§4）。無い断りはデッキの違反である。 */
-  | { ok: false; errors: string[]; code?: string }
+  | { ok: false; errors: string[]; code?: string; seat?: Seated }
   | { ok: true; ticket: string }
   | { ok: true; ticket: string; seat: Seated };
 
@@ -110,6 +121,12 @@ export class Lobby {
   private readonly queue: Ticket[] = [];
   /** マッチングが成立した人の座席。本人が引き換えに来るまで置く。 */
   private readonly seated = new Map<string, Seated>();
+  /**
+   * AI の重みを読んでいる途中のプレイヤー。読み込みは待つので、そのあいだに同じ人の要求が
+   * いくつ来ても「続いている対戦」はまだ無い。これが無いと、1 人で読み込みの列に何本でも並べられ、
+   * ほかの人の読み込みがそのぶん待たされる。
+   */
+  private readonly botJoining = new Set<string>();
 
   constructor(
     private readonly registry: MatchRegistry,
@@ -175,6 +192,104 @@ export class Lobby {
     const seats = this.start(waiting, ticket);
     this.rememberSeated(waiting.ticket, seats[0]);
     return { ok: true, ticket: ticket.ticket, seat: seats[1] };
+  }
+
+  /**
+   * AI と対戦する（7.3 節）。相手を待たないので、その場で席が決まる。
+   *
+   * 人の座席の扱いは `join` と同じで、シークレットを先に見て、デッキを検査し、
+   * 入ると決まってから表示名を書く。AI の座席はシェアを出さない。シャッフルの公正さを
+   * 疑う理由があるのは人の側だけで、その人のシェアは `join` と同じく混ざる。
+   */
+  joinBot(
+    request: BotJoinRequest,
+    known: Account | null,
+    bot: Bot,
+    botDeck: DeckList,
+  ): JoinOutcome {
+    const refusal = this.refuseBot(request, known, botDeck);
+    if (refusal !== null) return refusal;
+    if (known === null) return accountMissing();
+    const nowMs = this.now();
+    const account =
+      request.displayName === undefined
+        ? this.accounts.touch(known, nowMs)
+        : this.accounts.rename(known, request.displayName, nowMs);
+    // 待っているものは降ろす。AI と指しているあいだに、キューで当たった人との対戦が始まらないようにする。
+    this.dropWaiting(account.playerId);
+
+    // レーティングはメモリから読み直す。`known` を引いてから重みを読み終えるまでに、別の対戦が決着していることがある。
+    const human: SeatInfo = {
+      playerId: account.playerId,
+      displayName: account.displayName,
+      rating: this.accounts.byPlayerId(account.playerId)?.rating ?? account.rating,
+    };
+    const botSeat: SeatInfo = {
+      playerId: `${BOT_PLAYER_PREFIX}${bot.identity.name}`,
+      displayName: `AI ${bot.identity.name}`,
+      rating: null,
+      bot: bot.identity,
+    };
+    // AI は座席 1 に座る。先攻は seed が決めるので、この順は有利不利を生まない。
+    const [seated] = this.open(
+      [request.deck, botDeck],
+      [human, botSeat],
+      [request.seedShareCommit ?? null, null],
+      { seat: 1, bot },
+    );
+    const ticket = newToken();
+    this.rememberSeated(ticket, seated);
+    return { ok: true, ticket, seat: seated };
+  }
+
+  /**
+   * AI との対戦を断る理由。無ければ null。呼び手は重みを読む前に一度これを通す（読み込みは Durable Object を止める）。
+   *
+   * **AI との対戦は 1 人 1 局までにする。** AI の座席は重みを抱え、放っておかれた対戦も
+   * 持ち時間が尽きるまでメモリに残る。何局でも開けると、1 人で Durable Object のメモリを埋められる。
+   */
+  refuseBot(request: BotJoinRequest, known: Account | null, botDeck: DeckList): JoinOutcome | null {
+    if (known === null) return accountMissing();
+    // 続いている対戦はデッキより先に見る。いま組んでいるデッキが通らなくても、続いている対戦へは戻れる。
+    // 続いている対戦の席を一緒に返す。シークレットが持ち主を示しているので、渡してよい。
+    // 返さないと、画面を失った人は座席トークンを持たず、その対戦の持ち時間が尽きるまで次を始められない。
+    const live = this.registry.botMatchOf(known.playerId);
+    if (live !== null) {
+      return {
+        ok: false,
+        code: BOT_MATCH_LIVE,
+        errors: ["終わっていない AI との対戦がある。その対戦へ戻る。"],
+        seat: live,
+      };
+    }
+    const violations = validateDeck(request.deck);
+    if (violations.length > 0) {
+      return { ok: false, errors: violations.map(describeViolation) };
+    }
+    const botViolations = validateDeck(botDeck);
+    if (botViolations.length > 0) {
+      return {
+        ok: false,
+        errors: botViolations.map((violation) => `AI のデッキ: ${describeViolation(violation)}`),
+      };
+    }
+    if (this.botJoining.has(known.playerId)) {
+      return {
+        ok: false,
+        code: BOT_MATCH_LIVE,
+        errors: ["AI との対戦を用意している途中である。"],
+      };
+    }
+    return null;
+  }
+
+  /** 重みを読むあいだ、同じプレイヤーの次の要求を断る。`finally` で必ず外すこと。 */
+  holdBotJoin(playerId: string): void {
+    this.botJoining.add(playerId);
+  }
+
+  releaseBotJoin(playerId: string): void {
+    this.botJoining.delete(playerId);
   }
 
   /**
@@ -338,23 +453,38 @@ export class Lobby {
    * シェアが開くまで `seed` が決まらないので、局面も時計もまだ無い（6.4 節）。
    */
   private start(first: Ticket, second: Ticket): [Seated, Seated] {
-    const nowMs = this.now();
-    const pending: PendingMatch = {
-      matchId: randomUUID(),
-      decks: [first.deck, second.deck],
+    return this.open(
+      [first.deck, second.deck],
       /**
        * レーティングは今この場で読み直す（7.2 節）。待っている間に別のタブの対戦が終われば
        * レーティングは動いている。チケットを取ったときの値を残すと、記録が「席が決まった時点」でなくなる。
        * 記録の `startedAt` も同じ時点にそろえる。
        */
-      seats: [this.seatNow(first), this.seatNow(second)],
+      [this.seatNow(first), this.seatNow(second)],
+      [first.shareCommit, second.shareCommit],
+      null,
+    );
+  }
+
+  private open(
+    decks: [DeckList, DeckList],
+    seats: [SeatInfo, SeatInfo],
+    shareCommits: SeedShares,
+    bot: BotSeat | null,
+  ): [Seated, Seated] {
+    const nowMs = this.now();
+    const pending: PendingMatch = {
+      matchId: randomUUID(),
+      decks,
+      seats,
       seatTokens: [newToken(), newToken()],
       spectatorToken: newToken(),
       startedAt: new Date(nowMs).toISOString(),
       server: commitSeed(),
-      shareCommits: [first.shareCommit, second.shareCommit],
+      shareCommits,
       shares: noShares(),
       deadlineMs: nowMs + SHARE_REVEAL_DEADLINE_MS,
+      bot,
     };
     if (allRevealed(pending)) this.registry.start(pending, nowMs);
     else this.registry.addPending(pending);

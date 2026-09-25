@@ -7,7 +7,7 @@
  * D1 の `matches` は索引で、R2 から作り直せる値だけを持つ。**行があることは、
  * その対戦をレーティングへ入れ終えたことも表す。** 行を足すのとレーティングを動かすのを
  * 1 つのトランザクションで行うので（`AccountStore.applyResult`）、片方だけが残ることはない。
- * 座席のプレイヤーが D1 に無ければ、行だけを足す（6.5 節）。
+ * 座席のプレイヤーが D1 に無ければ、行だけを足す（6.5 節）。AI との対戦も行だけを足す（7.3 節）。
  */
 
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types/index.ts";
@@ -248,6 +248,11 @@ export class MatchArchive {
         JSON.stringify(record.matchResult),
         record.moves.length,
       );
+    // AI との対戦はレーティングを動かさない（7.3 節）。索引の行だけを書く。
+    if (record.seats.some((seat) => seat.bot !== undefined)) {
+      await this.db.batch([row]);
+      return;
+    }
     await this.accounts.applyResult(
       [record.seats[0].playerId, record.seats[1].playerId],
       scoreForSeatZero(record.matchResult),
