@@ -72,6 +72,16 @@ export { policyOf, type PolicyFile } from "../engine/src/learning/residual.js";
 export { decodePpoWeights, PPO_MAGIC } from "../engine/src/learning/ppo-net.js";
 /** テストが世代 0 の重みを作るのに使う。サーバは重みを作らない。 */
 export { encodePpoWeights, newPpoWeightsFile } from "../engine/src/learning/ppo-net.js";
-export { sampleFrom, softmax, type ScoredPolicy } from "../engine/src/learning/policy.js";
+export { sampleFrom } from "../engine/src/learning/policy.js";
+export {
+  GameKnowledge,
+  NO_KNOWLEDGE,
+  tracksKnowledge,
+  type HiddenKnowledge,
+} from "../engine/src/learning/knowledge.js";
+/** テストが、サーバとは別の道で AI の座席の知識を求め直すのに使う。 */
+export { SeatKnowledge } from "../engine/src/learning/knowledge.js";
+/** 座席の方策が候補ごとに付ける確率。エンジンの自己対戦と同じ分布を返すので、AI の座席もここから引く。 */
+export { probabilitiesOf } from "../engine/harness/seat-agent.js";
 /** 学習と評価に使っているデッキ。AI の座席はこれを握る（7.3 節）。 */
 export { metaDecks } from "../engine/harness/meta-decks.js";

@@ -16,10 +16,12 @@ import {
   cardsInZone,
   createGame,
   createRng,
+  GameKnowledge,
   isBasicPokemon,
   legalMoves,
   movesEqual,
   nextInt,
+  NO_KNOWLEDGE,
   opponent,
   playerView,
   projectEvents,
@@ -35,6 +37,7 @@ import type {
   GameOutcome,
   GameState,
   InPlayId,
+  HiddenKnowledge,
   Move,
   Player,
   PlayerEvent,
@@ -120,6 +123,11 @@ export interface Match {
   readonly firstPlayer: Player;
   /** AI の座席。人どうしの対戦では null。 */
   readonly bot: BotSeat | null;
+  /**
+   * AI の座席の追跡器。伏せたカードの知識を使う方策のときだけ、その座席を追う。方策は手と手のあいだの
+   * 記憶を持たず、重みは対戦どうしで共有するので、局ごとの記憶は対戦の側に置く。
+   */
+  readonly botKnowledge: GameKnowledge;
   state: GameState;
   /**
    * 対戦準備で、座席がまとめて出したバトル場とベンチ（2.4 節）。エンジンの順番が来るまで預かる。
@@ -181,6 +189,10 @@ export interface CreateMatchOptions {
 export function createMatch(options: CreateMatchOptions): Match {
   const seedCommitment = options.seedCommitment ?? commitSeed();
   const created = createGame({ seed: seedCommitment.seed, decks: options.decks });
+  const bot = options.bot ?? null;
+  const tracked = (seat: Player) => bot?.seat === seat && bot.bot.tracksKnowledge;
+  const botKnowledge = new GameKnowledge(options.decks, [tracked(0), tracked(1)]);
+  botKnowledge.observe(created.events);
   return {
     matchId: options.matchId,
     seedCommitment,
@@ -191,7 +203,8 @@ export function createMatch(options: CreateMatchOptions): Match {
     spectatorToken: options.spectatorToken,
     startedAt: options.startedAt,
     firstPlayer: firstPlayerOf(created.events),
-    bot: options.bot ?? null,
+    bot,
+    botKnowledge,
     state: created.state,
     setupPlans: [null, null],
     setupSinceMs: [options.nowMs, options.nowMs],
@@ -301,6 +314,7 @@ function record(
   for (const event of applied.events) {
     if (event.kind === "mulligan-taken") match.setupSinceMs[event.player] = timing.nowMs;
   }
+  match.botKnowledge.observe(applied.events);
 
   if (match.state.phase === "gameover") {
     finish(match, { kind: "normal", winner: match.state.outcome?.winner ?? null }, timing.nowMs);
@@ -569,6 +583,11 @@ export function engineOutcome(match: Match): GameOutcome | null {
 
 export function viewFor(match: Match, seat: Player): PlayerView {
   return playerView(match.state, seat);
+}
+
+/** AI の座席がその局面で知っている、自分の伏せたカード。知識を使わない方策には何も知らない入力を渡す。 */
+export function botKnowledgeFor(match: Match, view: PlayerView): HiddenKnowledge {
+  return match.bot === null ? NO_KNOWLEDGE : match.botKnowledge.snapshot(match.bot.seat, view);
 }
 
 export function spectatorViewFor(match: Match): SpectatorView {

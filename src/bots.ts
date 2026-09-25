@@ -2,7 +2,8 @@
  * AI の座席（`docs/spec/battle-server.md` 7.3 節）。
  *
  * 学習した方策の重みを R2 の `bots/` に置き、名前で引いて片方の座席に座らせる。
- * 方策が受け取るのは座席の射影（`viewFor`）と合法手だけで、人の座席と同じものしか見ない。
+ * 方策が受け取るのは座席の射影（`viewFor`）と合法手、それにその座席へ射影したイベントから追った
+ * 自分の伏せたカードの知識で、人の座席に届くもの以上は見ない。
  * 手はサーバの中で選び、人の手と同じ `submitMove` を通す。
  */
 
@@ -14,10 +15,12 @@ import {
   metaDecks,
   policyOf,
   PPO_MAGIC,
+  probabilitiesOf,
   sampleFrom,
-  softmax,
+  tracksKnowledge,
   type CardDefId,
   type DeckList,
+  type HiddenKnowledge,
   type Move,
   type PlayerView,
   type PolicyFile,
@@ -45,8 +48,13 @@ export interface BotIdentity {
 
 export interface Bot {
   identity: BotIdentity;
+  /**
+   * 自分の伏せたカード（山札とサイド）の知識を入力に使う方策か。使う方策には、対戦が座席の追跡器を持って
+   * `choose` へ渡す。使わない方策へ渡した知識は、方策の側が捨てる。
+   */
+  tracksKnowledge: boolean;
   /** 合法手の中から 1 つ選び、その位置を返す。 */
-  choose(view: PlayerView, legal: readonly Move[]): number;
+  choose(view: PlayerView, legal: readonly Move[], knowledge: HiddenKnowledge): number;
 }
 
 /**
@@ -75,8 +83,12 @@ export function botFromBytes(
       generation: file.generation,
       weightsSha256: createHash("sha256").update(buffer).digest("hex"),
     },
-    choose: (view, legal) =>
-      sampleFrom(softmax(policy.scores(view, legal), policy.temperature ?? 1), uniform()),
+    tracksKnowledge: tracksKnowledge(policy),
+    choose: (view, legal, knowledge) =>
+      sampleFrom(
+        probabilitiesOf(policy, () => view, legal, knowledge),
+        uniform(),
+      ),
   };
 }
 
