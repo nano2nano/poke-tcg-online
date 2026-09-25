@@ -13,6 +13,7 @@
 import {
   applyMove,
   benchCapacity,
+  cardsInZone,
   createGame,
   createRng,
   GameKnowledge,
@@ -30,10 +31,12 @@ import type {
   CardDefId,
   CardInstance,
   Choice,
+  ChoiceAnswer,
   DeckList,
   DomainEvent,
   GameOutcome,
   GameState,
+  InPlayId,
   HiddenKnowledge,
   Move,
   Player,
@@ -151,6 +154,13 @@ export interface Match {
    * 求めるときに乱数を使うので、送るたびに求め直すと、同じ局面の `delta` と `sync` で食い違いうる。
    */
   deckPlacement: DeckPlacementView | null;
+  /** 効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード（`answerDestinations` で使う）。 */
+  effectReveals: EffectReveals | null;
+  /**
+   * 手番側の座席へ送る `answerDestinations`。`deckPlacement` と同じく、手を適用するたびに 1 度だけ求める。
+   * AI の座席では画面が無いので求めない。
+   */
+  answerDestinations: (AnswerDestination | null)[] | null;
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
   version: number;
   clocks: [Clock, Clock];
@@ -201,6 +211,8 @@ export function createMatch(options: CreateMatchOptions): Match {
     mulligans: revealedHands(created.events),
     deckStack: null,
     deckPlacement: null,
+    effectReveals: null,
+    answerDestinations: null,
     version: 0,
     clocks: [createClock(options.bankMs), createClock(options.bankMs)],
     moves: [],
@@ -280,6 +292,11 @@ function record(
   match.state = applied.state;
   match.deckStack = nextDeckStack(match.deckStack, answered, move, applied);
   match.deckPlacement = deckPlacementOf(match.state, match.deckStack);
+  match.effectReveals = nextEffectReveals(match.effectReveals, applied);
+  match.answerDestinations =
+    toMove(match) === match.bot?.seat
+      ? null
+      : answerDestinationsOf(match.state, match.effectReveals);
   match.version += 1;
   match.moves.push({
     move,
@@ -615,10 +632,11 @@ export interface DeckPlacementView {
 const PLACEMENT_LOOKAHEAD_LIMIT = 16;
 
 /**
- * 乱数の種と山札の並びを替えて試す回数。山札を切る効果では、置いたカードがたまたま端に並ぶ確率が
- * 1 回ごとにおよそ山札の枚数分の 1 で、コインで行き先が変わる効果なら 2 分の 1 で、回数だけ掛け合わさる。
+ * 座席に見えないカードの並びと乱数の種を替えて試す回数（`disguised`）。山札を切る効果では、置いたカードが
+ * たまたま端に並ぶ確率が 1 回ごとにおよそ山札の枚数分の 1 で、コインで行き先が変わる効果なら 2 分の 1 で、
+ * 回数だけ掛け合わさる。
  */
-const PLACEMENT_TRIES = 8;
+const DISGUISE_TRIES = 8;
 
 export function deckPlacementFor(match: Match, seat: Player): DeckPlacementView | null {
   return toMove(match) === seat ? match.deckPlacement : null;
@@ -646,7 +664,7 @@ export function deckPlacementOf(
   try {
     const edge = stackedEdge(state, seat, source, placed);
     if (edge === null) return null;
-    for (let tried = 1; tried < PLACEMENT_TRIES; tried++) {
+    for (let tried = 1; tried < DISGUISE_TRIES; tried++) {
       if (stackedEdge(state, seat, source, placed) !== edge) return null;
     }
     if (!everyAnswerStacks(state, seat, placed, edge)) return null;
@@ -715,21 +733,50 @@ function everyAnswerStacks(
     });
 }
 
-/** 選ぶ座席に見えない山札の並びと、乱数の種を差し替えた局面。先に置いた分はその位置に残す。 */
-function disguised(state: GameState, seat: Player, placed: readonly CardInstance[]): GameState {
+/** `disguised` が山札のほかに混ぜるもの。 */
+interface DisguiseScope {
+  /** 自分のウラのサイドを山札と一緒に混ぜる。座席はどちらに何があるかを見ていない。 */
+  ownPrizes?: boolean;
+  /** 相手の手札・山札・ウラのサイドをまとめて混ぜる。 */
+  rival?: boolean;
+}
+
+/**
+ * 選ぶ座席に見えないカードの並びと、乱数の種を差し替えた局面。`kept` はその位置に残す。
+ * 既定では自分の山札だけを混ぜる。ゾーンごとの枚数は変えない。
+ */
+export function disguised(
+  state: GameState,
+  seat: Player,
+  kept: readonly CardInstance[],
+  scope: DisguiseScope = {},
+): GameState {
   let rng = createRng(randomBytes(16).toString("hex"));
-  const kept = new Set(placed.map((card) => card.instanceId));
-  const deck = [...state.players[seat].deck];
-  const slots = deck.flatMap((card, index) => (kept.has(card.instanceId) ? [] : [index]));
-  for (let last = slots.length - 1; last > 0; last--) {
-    const [pick, next] = nextInt(rng, last + 1);
-    rng = next;
-    const a = slots[last] as number;
-    const b = slots[pick] as number;
-    [deck[a], deck[b]] = [deck[b] as CardInstance, deck[a] as CardInstance];
-  }
   const players: GameState["players"] = [state.players[0], state.players[1]];
-  players[seat] = { ...state.players[seat], deck };
+  for (const player of [0, 1] as const) {
+    const side = state.players[player];
+    const own = player === seat;
+    if (!own && scope.rival !== true) continue;
+    const zones = { hand: [...side.hand], deck: [...side.deck], prizes: [...side.prizes] };
+    const pooled = own
+      ? [zones.deck, ...(scope.ownPrizes === true ? [zones.prizes] : [])]
+      : [zones.deck, zones.prizes, zones.hand];
+    const fixed = new Set([...kept.map((card) => card.instanceId), ...side.revealedPrizes]);
+    const slots = pooled.flatMap((zone) =>
+      zone.flatMap((card, index) => (fixed.has(card.instanceId) ? [] : [{ zone, index }])),
+    );
+    for (let last = slots.length - 1; last > 0; last--) {
+      const [pick, next] = nextInt(rng, last + 1);
+      rng = next;
+      const a = slots[last] as { zone: CardInstance[]; index: number };
+      const b = slots[pick] as { zone: CardInstance[]; index: number };
+      [a.zone[a.index], b.zone[b.index]] = [
+        b.zone[b.index] as CardInstance,
+        a.zone[a.index] as CardInstance,
+      ];
+    }
+    players[player] = { ...side, ...zones };
+  }
   return { ...state, rng, players };
 }
 
@@ -754,10 +801,15 @@ function chosenIntoDeck(move: Move, events: DomainEvent[], owner: Player): CardI
     if (event.kind !== "card-moved" || event.to.kind !== "deck" || event.to.player !== owner) {
       continue;
     }
-    if (answer.kind === "card" && event.card.instanceId === answer.card) return event.card;
-    if (answer.kind === "cardDef" && event.card.defId === answer.defId) return event.card;
+    if (answerPicks(answer, event.card)) return event.card;
   }
   return null;
+}
+
+/** カードを選ぶ答えが、そのカードを指すか。`cardDef` は同じカードのどれを選んだかを持たない。 */
+function answerPicks(answer: ChoiceAnswer, card: CardInstance): boolean {
+  if (answer.kind === "card") return card.instanceId === answer.card;
+  return answer.kind === "cardDef" && card.defId === answer.defId;
 }
 
 function continuesStack(stack: DeckStack, choice: Choice): boolean {
@@ -781,6 +833,269 @@ function nextDeckStack(
   if (!continuesStack(current, next)) return null;
   const moved = chosenIntoDeck(move, applied.events, answered.owner);
   return moved === null ? current : { ...current, placed: [...current.placed, moved] };
+}
+
+/**
+ * 効果の選択への答えで、選んだカードがどこへ行くか（3.2 節の `answerDestinations`）。
+ * `attached` は、カードを選ぶ答えならそのカードを、場のポケモンを選ぶ答えならそこへついたカードを `cards` に持つ。
+ */
+export type AnswerDestination =
+  | {
+      to: "hand" | "discard" | "lostZone" | "deck" | "prizes" | "active" | "bench";
+      player: Player;
+    }
+  | { to: "attached" | "evolved"; target: InPlayId; cards: CardDefId[] }
+  /** 今の答えでは動かず、同じ効果のあとの選択で行き先が決まる。行きうる先を持つ。 */
+  | { to: "later"; options: LaterDestination[] };
+
+type MovedDestination = Exclude<AnswerDestination, { to: "later" }>;
+type LaterDestination = MovedDestination["to"];
+
+/** 行き先をあとの選択までたどるときに、答える回数の上限。越えたら行き先を付けない。 */
+const LATER_LOOKAHEAD_LIMIT = 48;
+
+export function answerDestinationsFor(
+  match: Match,
+  seat: Player,
+): (AnswerDestination | null)[] | null {
+  return toMove(match) === seat ? match.answerDestinations : null;
+}
+
+/** 1 つの効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード。 */
+export interface EffectReveals {
+  owner: Player;
+  /** 効果を起こしたカードのインスタンス ID。 */
+  source: string;
+  defIds: CardDefId[];
+  /** 山札全体を見せたか。エンジンは並びと関係の無い順で見せるので、座席は中身だけを知っている。 */
+  wholeDeck: boolean;
+  /** 山札の一部として見せたカード（上から何枚かなど）。座席は位置も知っている。 */
+  pinned: CardInstance[];
+}
+
+/**
+ * 効果の選択のあいだ、合法手ごとの、その答えで選んだカードの行き先（`legalMoves` と同じ並び）。
+ * そのほかの局面と、行き先が 1 つも分からないときは null。
+ *
+ * エンジンの選択はカードかポケモンを選ばせるだけで、選んだものをどうするかを座席へ渡さない。
+ * 「手札に加える 1 枚」と「ポケモンにつける 1 枚」を同じ候補から続けて選ぶ効果では、
+ * それが無いとどちらを選んでいるのか分からない。名前でカードを特別扱いせず、答えてみて見分ける。
+ *
+ * `deckPlacementOf` と同じく、試すのは選ぶ座席に見えないカードの並びと乱数の種を差し替えた局面で、
+ * どの回でも同じ行き先になった答えにだけ付ける。
+ */
+export function answerDestinationsOf(
+  state: GameState,
+  reveals: EffectReveals | null,
+): (AnswerDestination | null)[] | null {
+  const choice = state.choices.at(-1);
+  if (choice?.source == null) return null;
+  const shown = reveals !== null && continuesEffect(reveals, choice) ? reveals : null;
+  const known = knownTo(state, choice.owner, shown?.defIds ?? []);
+  // あとの選択までたどり、その先で山札の外の見えないカードに触れうるので、相手のカードも混ぜる。
+  // この効果で山札全体を見せたなら、座席は山札に何があるかを知っているので、サイドとは混ぜない。
+  // 混ぜると、山札にあるカードを無いことにしてしまう。並びのまま見せたカードは位置を動かさない。
+  const scope: DisguiseScope = { ownPrizes: shown?.wholeDeck !== true, rival: true };
+  const legal = legalMoves(state);
+  let found: (AnswerDestination | null)[] = legal.map(() => null);
+  for (let tried = 0; tried < DISGUISE_TRIES; tried++) {
+    const current = disguised(state, choice.owner, shown?.pinned ?? [], scope);
+    const each = legal.map((move, index) =>
+      tried > 0 && found[index] === null ? null : destinationOf(state, current, move, known),
+    );
+    found =
+      tried === 0
+        ? each
+        : each.map((destination, index) =>
+            JSON.stringify(destination) === JSON.stringify(found[index]) ? destination : null,
+          );
+    if (found.every((destination) => destination === null)) return null;
+  }
+  return found;
+}
+
+/**
+ * 座席が正体を知っているカードか。場のポケモンを選ぶ答えで、ついたカードの `defId` を渡してよいかの判定に使う。
+ * 山札とウラのサイドのカードは、この効果で見せたものと同じカードだけを知っているとみなす。
+ * `disguised` が両方を混ぜることがあるので、見せたのと同じカードがサイドにあった 1 枚になることもある。
+ */
+function knownTo(
+  state: GameState,
+  seat: Player,
+  shown: readonly CardDefId[],
+): (card: CardInstance) => boolean {
+  const known = [...state.players[seat].hand];
+  for (const side of state.players) {
+    known.push(...side.discard, ...side.lostZone);
+    for (const pokemon of [side.active, ...side.bench]) {
+      if (pokemon !== null) known.push(...pokemon.stack, ...pokemon.attached);
+    }
+  }
+  const ids = new Set(known.map((card) => card.instanceId));
+  const shownDefIds = new Set(shown);
+  const own = state.players[seat];
+  const hidden = new Set([...own.deck, ...own.prizes].map((card) => card.instanceId));
+  return (card) =>
+    ids.has(card.instanceId) || (hidden.has(card.instanceId) && shownDefIds.has(card.defId));
+}
+
+/**
+ * 答えを 1 つ適用して、選んだカードが最初に動いた先。今の答えで動かなければ、同じ効果のあとの選択を
+ * すべての答えでたどり、行きうる先を `later` で返す。
+ * 山札から選んで相手に見せるだけの選択では、見せることは効果の目的ではなく、
+ * 選んだカードはあとの選択しだいで手札に入ったりポケモンについたりする。
+ * `state` は本物の局面、`current` はそれを `disguised` で差し替えた局面で、適用するのは `current` である。
+ */
+function destinationOf(
+  state: GameState,
+  current: GameState,
+  move: Move,
+  known: (card: CardInstance) => boolean,
+): AnswerDestination | null {
+  if (move.type !== "AnswerChoice") return null;
+  const answer = move.answer;
+  if (answer.kind !== "card" && answer.kind !== "cardDef" && answer.kind !== "inPlay") return null;
+  const source = state.choices.at(-1)?.source?.instanceId;
+  try {
+    const applied = applyMove(current, move);
+    if (answer.kind === "inPlay") {
+      const attached = applied.events.flatMap((event) =>
+        (event.kind === "energy-attached" || event.kind === "tool-attached") &&
+        event.target === answer.target
+          ? [event.card]
+          : [],
+      );
+      if (attached.length === 0 || !attached.every(known)) return null;
+      return { to: "attached", target: answer.target, cards: attached.map((card) => card.defId) };
+    }
+    // 同じカードが選んだゾーンの外にもあると、`cardDef` の答えはそちらの移動にも当たる。
+    const prompt = state.choices.at(-1)?.prompt;
+    const from =
+      answer.kind === "cardDef" && prompt?.kind === "selectFromHiddenZone"
+        ? new Set(cardsInZone(current, prompt.zone).map((card) => card.instanceId))
+        : null;
+    const chosen = (card: CardInstance): boolean =>
+      answerPicks(answer, card) && (from === null || from.has(card.instanceId));
+    const moved = movedTo(applied.events, chosen);
+    if (moved !== null || source === undefined) return moved;
+    const options = laterDestinations(applied.state, move.player, source, chosen);
+    return options === null || options.length === 0 ? null : { to: "later", options };
+  } catch {
+    // `deckPlacementOf` と同じく、先読みの例外で指された手を止めない。ほかの答えの行き先は残す。
+    return null;
+  }
+}
+
+function movedTo(
+  events: DomainEvent[],
+  chosen: (card: CardInstance) => boolean,
+): MovedDestination | null {
+  for (const event of events) {
+    switch (event.kind) {
+      case "card-moved":
+      case "pokemon-played":
+        if (!chosen(event.card)) break;
+        if (event.to.kind === "stadium") return null;
+        return { to: event.to.kind, player: event.to.player };
+      case "card-drawn":
+        if (chosen(event.card)) return { to: "hand", player: event.player };
+        break;
+      case "card-discarded":
+        if (chosen(event.card)) return { to: "discard", player: event.player };
+        break;
+      case "energy-attached":
+      case "tool-attached":
+        if (chosen(event.card)) {
+          return { to: "attached", target: event.target, cards: [event.card.defId] };
+        }
+        break;
+      case "pokemon-evolved":
+        if (chosen(event.card)) {
+          return { to: "evolved", target: event.target, cards: [event.card.defId] };
+        }
+        break;
+    }
+  }
+  return null;
+}
+
+export function ownsDestination(state: GameState, seat: Player, moved: MovedDestination): boolean {
+  if ("player" in moved) return moved.player === seat;
+  const side = state.players[seat];
+  return [side.active, ...side.bench].some((pokemon) => pokemon?.inPlayId === moved.target);
+}
+
+/**
+ * 同じ効果の選択が続くあいだ、座席のすべての答えをたどって、選んだカードの行きうる先を集める。
+ * どの道でも動かなかったぶんは数えない。相手のゾーンや相手のポケモンへ行く道があるか、上限を越えたら null。
+ */
+function laterDestinations(
+  state: GameState,
+  seat: Player,
+  source: string,
+  chosen: (card: CardInstance) => boolean,
+): LaterDestination[] | null {
+  const found = new Set<LaterDestination>();
+  let left = LATER_LOOKAHEAD_LIMIT;
+  const visit = (current: GameState): boolean => {
+    const choice = current.choices.at(-1);
+    if (choice?.owner !== seat || choice.source?.instanceId !== source) return true;
+    for (const move of legalMoves(current)) {
+      left -= 1;
+      if (left < 0) return false;
+      const applied = applyMove(current, move);
+      const moved = movedTo(applied.events, chosen);
+      if (moved === null) {
+        if (!visit(applied.state)) return false;
+      } else if (!ownsDestination(applied.state, seat, moved)) {
+        return false;
+      } else {
+        found.add(moved.to);
+      }
+    }
+    return true;
+  };
+  return visit(state) ? [...found].sort() : null;
+}
+
+function continuesEffect(reveals: EffectReveals, choice: Choice): boolean {
+  return choice.owner === reveals.owner && choice.source?.instanceId === reveals.source;
+}
+
+/**
+ * 手を 1 つ適用したあとの `effectReveals`。同じ効果の選択が続くあいだだけ、
+ * 選ぶ座席へ山札から見せたカードを足していく。
+ */
+function nextEffectReveals(
+  reveals: EffectReveals | null,
+  applied: { state: GameState; events: DomainEvent[] },
+): EffectReveals | null {
+  const next = applied.state.choices.at(-1);
+  if (next?.source == null) return null;
+  const kept = reveals !== null && continuesEffect(reveals, next) ? reveals : null;
+  const result: EffectReveals = {
+    owner: next.owner,
+    source: next.source.instanceId,
+    defIds: [...(kept?.defIds ?? [])],
+    wholeDeck: kept?.wholeDeck ?? false,
+    pinned: [...(kept?.pinned ?? [])],
+  };
+  const deck = applied.state.players[next.owner].deck;
+  for (const event of applied.events) {
+    if (
+      event.kind !== "cards-revealed" ||
+      event.player !== next.owner ||
+      event.zone.kind !== "deck" ||
+      event.zone.player !== next.owner
+    ) {
+      continue;
+    }
+    result.defIds.push(...event.cards.map((card) => card.defId));
+    const shown = new Set(event.cards.map((card) => card.instanceId));
+    if (deck.every((card) => shown.has(card.instanceId))) result.wholeDeck = true;
+    else result.pinned.push(...event.cards);
+  }
+  return result;
 }
 
 export function clockView(match: Match, nowMs: number): ClockView {

@@ -15,6 +15,7 @@ import type {
   SpectatorView,
 } from "./engine.js";
 import type {
+  AnswerDestination,
   DeckPlacementView,
   MatchResult,
   MulliganReveal,
@@ -114,6 +115,8 @@ export interface SyncMessage {
   setup: SetupView | null;
   /** 選んだカードを山札の端へ順に置く選択なら、今選ぶカードがどこへ入るか。選ぶ座席にだけ入る（3.2 節）。 */
   deckPlacement: DeckPlacementView | null;
+  /** 効果の選択なら、`legalMoves` と同じ並びで、その答えで選んだカードの行き先。選ぶ座席にだけ入る（3.2 節）。 */
+  answerDestinations: (AnswerDestination | null)[] | null;
   /** 対戦準備で引き直すときに見せた手札。両座席に同じものが入る（2.4 節）。 */
   mulligans: MulliganReveal[];
   /** 先攻。決めた `game-started` は対戦を作るときのイベントで、`delta` には載らない。 */
@@ -134,6 +137,7 @@ export interface DeltaMessage {
   legalMoves: Move[] | null;
   setup: SetupView | null;
   deckPlacement: DeckPlacementView | null;
+  answerDestinations: (AnswerDestination | null)[] | null;
   /** 対戦準備のあいだだけ載せる。無ければ、前に届いたものから変わっていない。 */
   mulligans?: MulliganReveal[];
   clock: ClockView;

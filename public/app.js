@@ -22,7 +22,7 @@ let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
 /** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
-let lastMoves = { moves: null, playing: false, setup: null, placement: null };
+let lastMoves = { moves: null, playing: false, setup: null, placement: null, destinations: null };
 /** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
 let setupDraft = { active: null, bench: [], sent: false };
 /** 対戦準備で引き直すときに見せた手札。名前の表が遅れて届いたら描き直す。 */
@@ -260,7 +260,13 @@ function redraw() {
   restore();
   if (lastView !== null) {
     renderView(lastView);
-    renderMoves(lastMoves.moves, lastMoves.playing, lastMoves.setup, lastMoves.placement);
+    renderMoves(
+      lastMoves.moves,
+      lastMoves.playing,
+      lastMoves.setup,
+      lastMoves.placement,
+      lastMoves.destinations,
+    );
     renderMulligans(lastMulligans);
   }
   if (lastWatchView !== null) renderWatch(lastWatchView);
@@ -1442,7 +1448,13 @@ function receive(message) {
       showResults(results, $("table"));
       renderClock(message.clock);
       setupDraft.sent = false;
-      renderMoves(message.legalMoves, true, message.setup, message.deckPlacement ?? null);
+      renderMoves(
+        message.legalMoves,
+        true,
+        message.setup,
+        message.deckPlacement ?? null,
+        message.answerDestinations ?? null,
+      );
       // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
       renderMulligans(message.mulligans ?? lastMulligans);
       return;
@@ -1886,9 +1898,10 @@ function renderClock(clock) {
  * `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。
  * `setup` はサーバが送る準備の状態で、あるあいだは同じ選択を 1 手ずつ指すボタンを並べない。
  * `placement` は、選んだカードを山札の端へ順に置く選択のあいだだけサーバが送る（`deckPlacement`）。
+ * `destinations` は、効果の選択のあいだサーバが送る、`moves` と同じ並びの行き先（`answerDestinations`）。
  */
-function renderMoves(moves, playing = true, setup = null, placement = null) {
-  lastMoves = { moves, playing, setup, placement };
+function renderMoves(moves, playing = true, setup = null, placement = null, destinations = null) {
+  lastMoves = { moves, playing, setup, placement, destinations };
   const prompt = $("move-prompt");
   prompt.textContent = !playing
     ? ""
@@ -1908,9 +1921,9 @@ function renderMoves(moves, playing = true, setup = null, placement = null) {
   const shown = foldMoves(moves, lastView);
   // 畳んだときだけ、見せた手の位置を添える。記録で、見せなかった手と選ばなかった手を分けるため（6.2 節）。
   const offered = shown.length === moves.length ? {} : { offered: shown.map(({ index }) => index) };
-  for (const { move } of shown) {
+  for (const { move, index } of shown) {
     const button = document.createElement("button");
-    button.textContent = describeMove(move, lastView, placement);
+    button.textContent = describeMove(move, lastView, placement, destinations?.[index] ?? null);
     button.addEventListener("click", () => send({ t: "move", stateVersion, move, ...offered }));
     button.dataset.aim = JSON.stringify(moveTargets(move));
     for (const type of ["pointerenter", "pointerleave", "focus", "blur"]) {
@@ -2138,7 +2151,7 @@ const SETUP_ANSWERS = {
  * 名前を引くのは その手を指す直前の盤面 からである。指したあとの盤面では、
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
-function describeMove(move, view = lastView, placement = null) {
+function describeMove(move, view = lastView, placement = null, destination = null) {
   const card = (instanceId) => cardName(instanceId, view);
   const target = (inPlayId) => pokemonLabel(inPlayId, view, false);
   switch (move.type) {
@@ -2179,7 +2192,7 @@ function describeMove(move, view = lastView, placement = null) {
     case "EndTurn":
       return "番を終わる";
     case "AnswerChoice":
-      return describeAnswer(move.answer, view, placement);
+      return describeAnswer(move.answer, view, placement, destination);
     default:
       return move.type;
   }
@@ -2206,11 +2219,10 @@ function attackName(move, view) {
  * カード、場の個体、位置、番号のいずれかである。
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
-function describeAnswer(answer, view, placement = null) {
+function describeAnswer(answer, view, placement = null, destination = null) {
   const choice = view?.choices?.at(-1);
   if (placement !== null && (answer.kind === "card" || answer.kind === "cardDef")) {
-    const card = answer.kind === "card" ? cardWithPlace(answer.card, view) : nameOf(answer.defId);
-    return `${card} を${placementPlace(placement)}に置く`;
+    return `${answerCardName(answer, view)} を${placementPlace(placement)}に置く`;
   }
   const setup = SETUP_ANSWERS[choice?.kind];
   if (setup?.[answer.kind] !== undefined) {
@@ -2218,6 +2230,8 @@ function describeAnswer(answer, view, placement = null) {
       ? `${handCardName(answer.card, view)} ${setup.card}`
       : setup[answer.kind];
   }
+  const moved = destination === null ? null : destinationText(answer, destination, view);
+  if (moved !== null) return moved;
   switch (answer.kind) {
     case "accept":
       return "はい";
@@ -2246,6 +2260,62 @@ function describeAnswer(answer, view, placement = null) {
       return `${answer.count} 枚引く`;
     default:
       return JSON.stringify(answer);
+  }
+}
+
+function answerCardName(answer, view) {
+  return answer.kind === "card" ? cardWithPlace(answer.card, view) : nameOf(answer.defId);
+}
+
+/**
+ * 行き先ごとの言い方。`whose` は、相手のゾーンなら「相手の」、自分のなら空文字。
+ * 並びは、あとで決まる行き先を並べる順でもある（手札に加えるが先）。サーバは名前順で送る。
+ */
+const DESTINATION_PHRASES = {
+  hand: (whose) => `${whose}手札に加える`,
+  attached: () => "ポケモンにつける",
+  evolved: () => "進化させる",
+  discard: (whose) => (whose === "" ? "トラッシュする" : "相手のトラッシュに置く"),
+  lostZone: (whose) => `${whose}ロストゾーンに置く`,
+  deck: (whose) => `${whose}山札にもどす`,
+  prizes: (whose) => `${whose}サイドに置く`,
+  active: (whose) => `${whose}バトル場に出す`,
+  bench: (whose) => `${whose}ベンチに出す`,
+};
+
+/**
+ * 選んだものの行き先を添えた見出し。書けない組み合わせなら null。
+ *
+ * 同じ候補から「手札に加える 1 枚」と「ポケモンにつける 1 枚」を続けて選ぶ効果では、
+ * カードの名前だけのボタンが 2 回並び、どちらを選んでいるのか分からない。
+ */
+function destinationText(answer, destination, view) {
+  if (answer.kind === "inPlay") {
+    if (destination.to !== "attached") return null;
+    const cardNames = destination.cards.map(nameOf).join("、");
+    return `${cardNames} を ${pokemonLabel(destination.target, view, false)} につける`;
+  }
+  if (answer.kind !== "card" && answer.kind !== "cardDef") return null;
+  const card = answerCardName(answer, view);
+  switch (destination.to) {
+    case "attached":
+      return `${card} を ${pokemonLabel(destination.target, view, false)} につける`;
+    case "evolved":
+      return `${pokemonLabel(destination.target, view, false)} を ${card} に進化させる`;
+    case "later": {
+      const phrases = Object.keys(DESTINATION_PHRASES)
+        .filter((to) => destination.options.includes(to))
+        .map((to) => DESTINATION_PHRASES[to](""));
+      if (phrases.length === 0 || phrases.length !== destination.options.length) return null;
+      return phrases.length === 1
+        ? `${card} を選ぶ（あとで${phrases[0]}）`
+        : `${card} を選ぶ（${phrases.join("か、")}かは、あとで選ぶ）`;
+    }
+    default: {
+      const phrase = DESTINATION_PHRASES[destination.to];
+      if (phrase === undefined) return null;
+      return `${card} を${phrase(destination.player === view?.viewer ? "" : "相手の")}`;
+    }
   }
 }
 

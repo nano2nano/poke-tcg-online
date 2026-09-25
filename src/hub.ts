@@ -11,6 +11,7 @@
 
 import type { DomainEvent, Move, Player } from "./engine.js";
 import {
+  answerDestinationsFor,
   botKnowledgeFor,
   clockView,
   concede,
@@ -475,6 +476,7 @@ export class MatchHub {
       legalMoves: legalMovesFor(match, seat),
       setup: setupViewFor(match, seat),
       deckPlacement: deckPlacementFor(match, seat),
+      answerDestinations: answerDestinationsFor(match, seat),
       mulligans: match.mulligans,
       firstPlayer: match.firstPlayer,
       clock: clockView(match, this.now()),
@@ -492,6 +494,7 @@ export class MatchHub {
       legalMoves: legalMovesFor(match, seat),
       setup: setupViewFor(match, seat),
       deckPlacement: deckPlacementFor(match, seat),
+      answerDestinations: answerDestinationsFor(match, seat),
       // マリガンは準備の中でしか起きないので、対戦が始まったあとは送り直さない。
       ...(match.state.phase === "setup" ? { mulligans: match.mulligans } : {}),
       clock: clockView(match, this.now()),
