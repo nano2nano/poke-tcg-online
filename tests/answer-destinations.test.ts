@@ -200,6 +200,18 @@ function expectDestinationHolds(match: Match, seat: Player): number {
   return checked;
 }
 
+/** 本物の局面で適用すると、選んだカードが手札に入る答えの、合法手の中の位置。 */
+function toHandAnswers({ match, seat }: Played): number[] {
+  const hand = (state: GameState) => state.players[seat].hand.length;
+  return legalMoves(match.state).flatMap((move, index) =>
+    move.type === "AnswerChoice" &&
+    move.answer.kind === "cardDef" &&
+    hand(applyMove(match.state, move).state) === hand(match.state) + 1
+      ? [index]
+      : [],
+  );
+}
+
 describe("効果の選択で選んだカードの行き先", () => {
   it("手札に加える答えとポケモンにつける答えを見分け、どちらも実際の行き先と合う", () => {
     const played = afterPlaying(handThenAttach()) as Played;
@@ -295,33 +307,25 @@ function ids(cards: readonly CardInstance[]): string[] {
 }
 
 describe("行き先を求めるときの差し替え", () => {
-  /** 最初の 1 枚を選んで見せたところ。見せたカードはまだ山札にある。 */
-  function afterFirstPick(): { state: GameState; seat: Player; shown: CardInstance[] } {
-    const played = afterPlaying(handThenAttach()) as Played;
-    const { match, seat } = played;
-    const pick = legalMoves(match.state).find(
-      (move) => move.type === "AnswerChoice" && move.answer.kind !== "decline",
-    ) as Move;
-    submitMove(match, seat, match.version, pick, 0);
-    const shown = match.effectReveals?.cards ?? [];
-    expect(shown).toHaveLength(1);
-    // ウラのサイドを 1 枚表にしておき、それも動かないことを確かめる。
+  /** トレーナーズを使ったところ。山札の 1 枚を残す印に選び、ウラのサイドを 1 枚表にしておく。 */
+  function withKeptCard(): { state: GameState; seat: Player; kept: CardInstance } {
+    const { match, seat } = afterPlaying(handThenAttach()) as Played;
     const side = match.state.players[seat];
+    const kept = side.deck[Math.floor(side.deck.length / 2)] as CardInstance;
     const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
     players[seat] = { ...side, revealedPrizes: [(side.prizes[0] as CardInstance).instanceId] };
-    return { state: { ...match.state, players }, seat, shown };
+    return { state: { ...match.state, players }, seat, kept };
   }
 
-  it("自分の山札とウラのサイド、相手の手札・山札・サイドをまとめて混ぜ、見せたカードと表のサイドは動かさない", () => {
-    const { state, seat, shown } = afterFirstPick();
+  it("自分の山札とウラのサイド、相手の手札・山札・サイドをまとめて混ぜ、残すカードと表のサイドは動かさない", () => {
+    const { state, seat, kept } = withKeptCard();
     const own = state.players[seat];
     const rival = state.players[(1 - seat) as Player];
-    const [kept] = shown as [CardInstance];
     const keptAt = own.deck.findIndex((card) => card.instanceId === kept.instanceId);
     let ownPrizesMoved = false;
     let rivalHandMoved = false;
     for (let tried = 0; tried < 20; tried++) {
-      const after = disguised(state, seat, shown, { ownPrizes: true, rival: true });
+      const after = disguised(state, seat, [kept], { ownPrizes: true, rival: true });
       const mine = after.players[seat];
       const theirs = after.players[(1 - seat) as Player];
       // 見えているゾーンは変えず、ゾーンごとの枚数も変えない。
@@ -350,27 +354,85 @@ describe("行き先を求めるときの差し替え", () => {
     expect(rivalHandMoved).toBe(true);
   });
 
-  it("自分の山札から選んでいるあいだは、山札とサイドを混ぜず、選べないカードを選べることにしない", () => {
-    // 2 種類目のエネルギーをウラのサイドに置く。座席は山札を見て、それが無いことを知っている。
-    const { match, seat } = afterPlaying(handThenAttach(), 1) as Played;
-    const [, energyB] = twoBasicEnergies();
+  /**
+   * 2 種類目のエネルギーを 1 枚だけ入れた山札で使い、その 1 枚が山札にあるところ。山札は 2 種類の
+   * エネルギー 1 枚ずつを含む 4 枚まで減らす。サイドと混ぜれば、どちらかがほぼ毎回サイドへ移る。
+   */
+  function withOneOfSecond(): { match: Match; seat: Player; energyA: CardDefId } {
+    const played = afterPlaying(handThenAttach(), 1) as Played;
+    const { match, seat } = played;
+    const [energyA, energyB] = twoBasicEnergies();
     const side = match.state.players[seat];
-    const at = side.deck.findIndex((card) => card.defId === energyB);
-    const prize = side.prizes.findIndex((card) => card.defId !== energyB);
-    if (at < 0 || prize < 0) throw new Error("2 種類目のエネルギーが山札に無い");
-    const deck = [...side.deck];
-    const prizes = [...side.prizes];
-    [deck[at], prizes[prize]] = [prizes[prize] as CardInstance, deck[at] as CardInstance];
+    const pickOf = (defId: CardDefId) =>
+      side.deck.filter((card) => card.defId === defId).slice(0, 1);
+    const others = side.deck.filter((card) => card.defId !== energyA && card.defId !== energyB);
+    const deck = [...pickOf(energyB), ...pickOf(energyA), ...others.slice(0, 2)];
+    if (deck.length !== 4) throw new Error("山札に 2 種類のエネルギーがそろっていない");
+    const kept = new Set(ids(deck));
     const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
-    players[seat] = { ...side, deck, prizes };
-    const state = { ...match.state, players };
-    const [destination] = answerDestinationsOf(state, null) ?? [];
-    expect(destination).toEqual({ to: "later", options: ["hand"] });
+    players[seat] = {
+      ...side,
+      deck,
+      discard: [...side.discard, ...side.deck.filter((card) => !kept.has(card.instanceId))],
+    };
+    match.state = { ...match.state, players };
+    return { match, seat, energyA };
+  }
+
+  it("山札全体を見せた効果では山札とサイドを混ぜず、山札にあるカードを無いことにしない", () => {
+    // 座席は山札を見ているので、1 種類目を選べば、2 枚目に 2 種類目を選んで一方をつけられると知っている。
+    const { match, energyA } = withOneOfSecond();
+    expect(match.effectReveals?.wholeDeck).toBe(true);
+    const index = legalMoves(match.state).findIndex(
+      (move) =>
+        move.type === "AnswerChoice" &&
+        move.answer.kind === "cardDef" &&
+        move.answer.defId === energyA,
+    );
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect((answerDestinationsOf(match.state, match.effectReveals) ?? [])[index]).toEqual({
+      to: "later",
+      options: ["attached", "hand"],
+    });
+  });
+
+  it("山札全体を見せた効果では、そのあとの選択でもサイドと混ぜず、どの段でも行き先を出す", () => {
+    const { match, seat } = withOneOfSecond();
+    const steps = walk({ match, seat });
+    expect(steps.length).toBeGreaterThanOrEqual(3);
+    for (const step of steps) expect(step.length).toBeGreaterThan(0);
+  });
+
+  it("山札の上から何枚かを並びのまま見せた効果では、その位置を動かさずに行き先を出す", () => {
+    ensureCards();
+    const found = [...loadGeneratedCards()]
+      .filter(
+        (def) =>
+          def.kind === "trainer" &&
+          (def.trainerKind === "supporter" || def.trainerKind === "item") &&
+          classifyDefId(def.defId) === "implemented",
+      )
+      .map((def) => def.defId)
+      .sort()
+      .map((trainer) => afterPlaying(trainer))
+      .find(
+        (played) =>
+          played !== null &&
+          played.match.effectReveals?.wholeDeck === false &&
+          (played.match.effectReveals?.pinned.length ?? 0) > 0 &&
+          toHandAnswers(played).length > 0,
+      );
+    if (found == null) throw new Error("上から何枚かを見せて手札に加える効果が見つからない");
+    // 見せた窓を山札全体と混ぜると、選んだカードが窓の外へ出て、答えを試せなくなる。
+    const destinations = answerDestinationsFor(found.match, found.seat) ?? [];
+    for (const index of toHandAnswers(found)) {
+      expect(destinations[index]).toEqual({ to: "hand", player: found.seat });
+    }
   });
 
   it("既定では自分の山札だけを混ぜる", () => {
-    const { state, seat, shown } = afterFirstPick();
-    const after = disguised(state, seat, shown);
+    const { state, seat, kept } = withKeptCard();
+    const after = disguised(state, seat, [kept]);
     expect(ids(after.players[seat].prizes)).toEqual(ids(state.players[seat].prizes));
     expect(after.players[(1 - seat) as Player]).toBe(state.players[(1 - seat) as Player]);
   });

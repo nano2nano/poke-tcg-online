@@ -866,7 +866,11 @@ export interface EffectReveals {
   owner: Player;
   /** 効果を起こしたカードのインスタンス ID。 */
   source: string;
-  cards: CardInstance[];
+  defIds: CardDefId[];
+  /** 山札全体を見せたか。エンジンは並びと関係の無い順で見せるので、座席は中身だけを知っている。 */
+  wholeDeck: boolean;
+  /** 山札の一部として見せたカード（上から何枚かなど）。座席は位置も知っている。 */
+  pinned: CardInstance[];
 }
 
 /**
@@ -886,21 +890,16 @@ export function answerDestinationsOf(
 ): (AnswerDestination | null)[] | null {
   const choice = state.choices.at(-1);
   if (choice?.source == null) return null;
-  const shown = reveals !== null && continuesEffect(reveals, choice) ? reveals.cards : [];
-  const known = knownTo(state, choice.owner, shown);
-  // 見せたカードは座席が位置も知っているので動かさない。あとの選択までたどり、その先で山札の外の
-  // 見えないカードに触れうるので、相手のカードも混ぜる。自分の山札から選んでいるあいだは座席が
-  // 山札を見ているので、サイドと混ぜると、選べないカードを選べることにしてしまう。
-  const prompt = choice.prompt;
-  const looking =
-    prompt.kind === "selectFromHiddenZone" &&
-    prompt.zone.kind === "deck" &&
-    prompt.zone.player === choice.owner;
-  const scope: DisguiseScope = { ownPrizes: !looking, rival: true };
+  const shown = reveals !== null && continuesEffect(reveals, choice) ? reveals : null;
+  const known = knownTo(state, choice.owner, shown?.defIds ?? []);
+  // あとの選択までたどり、その先で山札の外の見えないカードに触れうるので、相手のカードも混ぜる。
+  // この効果で山札全体を見せたなら、座席は山札に何があるかを知っているので、サイドとは混ぜない。
+  // 混ぜると、山札にあるカードを無いことにしてしまう。並びのまま見せたカードは位置を動かさない。
+  const scope: DisguiseScope = { ownPrizes: shown?.wholeDeck !== true, rival: true };
   const legal = legalMoves(state);
   let found: (AnswerDestination | null)[] = legal.map(() => null);
   for (let tried = 0; tried < DISGUISE_TRIES; tried++) {
-    const current = disguised(state, choice.owner, shown, scope);
+    const current = disguised(state, choice.owner, shown?.pinned ?? [], scope);
     const each = legal.map((move, index) =>
       tried > 0 && found[index] === null ? null : destinationOf(state, current, move, known),
     );
@@ -918,12 +917,12 @@ export function answerDestinationsOf(
 /**
  * 座席が正体を知っているカードか。場のポケモンを選ぶ答えで、ついたカードの `defId` を渡してよいかの判定に使う。
  * 山札とウラのサイドのカードは、この効果で見せたものと同じカードだけを知っているとみなす。
- * `disguised` が両方を混ぜるので、見せたのと同じカードがサイドにあった 1 枚になることもある。
+ * `disguised` が両方を混ぜることがあるので、見せたのと同じカードがサイドにあった 1 枚になることもある。
  */
 function knownTo(
   state: GameState,
   seat: Player,
-  shown: readonly CardInstance[],
+  shown: readonly CardDefId[],
 ): (card: CardInstance) => boolean {
   const known = [...state.players[seat].hand];
   for (const side of state.players) {
@@ -933,7 +932,7 @@ function knownTo(
     }
   }
   const ids = new Set(known.map((card) => card.instanceId));
-  const shownDefIds = new Set(shown.map((card) => card.defId));
+  const shownDefIds = new Set(shown);
   const own = state.players[seat];
   const hidden = new Set([...own.deck, ...own.prizes].map((card) => card.instanceId));
   return (card) =>
@@ -1073,16 +1072,30 @@ function nextEffectReveals(
 ): EffectReveals | null {
   const next = applied.state.choices.at(-1);
   if (next?.source == null) return null;
-  const kept = reveals !== null && continuesEffect(reveals, next) ? reveals.cards : [];
-  const shown = applied.events.flatMap((event) =>
-    event.kind === "cards-revealed" &&
-    event.player === next.owner &&
-    event.zone.kind === "deck" &&
-    event.zone.player === next.owner
-      ? event.cards
-      : [],
-  );
-  return { owner: next.owner, source: next.source.instanceId, cards: [...kept, ...shown] };
+  const kept = reveals !== null && continuesEffect(reveals, next) ? reveals : null;
+  const result: EffectReveals = {
+    owner: next.owner,
+    source: next.source.instanceId,
+    defIds: [...(kept?.defIds ?? [])],
+    wholeDeck: kept?.wholeDeck ?? false,
+    pinned: [...(kept?.pinned ?? [])],
+  };
+  const deck = applied.state.players[next.owner].deck;
+  for (const event of applied.events) {
+    if (
+      event.kind !== "cards-revealed" ||
+      event.player !== next.owner ||
+      event.zone.kind !== "deck" ||
+      event.zone.player !== next.owner
+    ) {
+      continue;
+    }
+    result.defIds.push(...event.cards.map((card) => card.defId));
+    const shown = new Set(event.cards.map((card) => card.instanceId));
+    if (deck.every((card) => shown.has(card.instanceId))) result.wholeDeck = true;
+    else result.pinned.push(...event.cards);
+  }
+  return result;
 }
 
 export function clockView(match: Match, nowMs: number): ClockView {
