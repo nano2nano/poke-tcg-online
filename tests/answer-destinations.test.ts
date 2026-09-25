@@ -13,6 +13,7 @@ import {
   loadGeneratedCards,
   type CardDefId,
   type CardInstance,
+  type DomainEvent,
   type GameState,
   type Move,
   type Player,
@@ -23,6 +24,7 @@ import {
   answerDestinationsOf,
   createMatch,
   disguised,
+  movedTo,
   ownsDestination,
   submitMove,
   toMove,
@@ -453,5 +455,52 @@ describe("あとの選択でたどる行き先の持ち主", () => {
     expect(
       ownsDestination(match.state, seat, { to: "attached", target: theirs.inPlayId, cards: [] }),
     ).toBe(false);
+  });
+});
+
+describe("答えを適用したときに選んだカードが動いた先", () => {
+  const base = {
+    seq: 0,
+    turn: 1,
+    window: { kind: "turn", player: 0 },
+    actor: 0,
+    source: null,
+  } as const;
+  const deck = { kind: "deck", player: 0 } as const;
+
+  it("山札の中で並びが変わっただけの同じカードより、山札を出た 1 枚の行き先を取る", () => {
+    const [energy] = twoBasicEnergies();
+    const left: CardInstance = { instanceId: "残した方", defId: energy };
+    const picked: CardInstance = { instanceId: "選んだ方", defId: energy };
+    const events: DomainEvent[] = [
+      { ...base, kind: "card-moved", card: left, from: deck, to: deck },
+      {
+        ...base,
+        kind: "energy-attached",
+        player: 0,
+        card: picked,
+        target: "ip-選んだ先",
+        fromHand: false,
+      },
+    ];
+    expect(movedTo(events, (card) => card.defId === energy)).toEqual({
+      to: "attached",
+      target: "ip-選んだ先",
+      cards: [energy],
+    });
+  });
+
+  it("山札の中で動いただけなら、それを行き先にする", () => {
+    const [energy] = twoBasicEnergies();
+    const events: DomainEvent[] = [
+      {
+        ...base,
+        kind: "card-moved",
+        card: { instanceId: "下へ", defId: energy },
+        from: deck,
+        to: deck,
+      },
+    ];
+    expect(movedTo(events, (card) => card.defId === energy)).toEqual({ to: "deck", player: 0 });
   });
 });
