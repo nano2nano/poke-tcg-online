@@ -12,6 +12,8 @@
 import type { DomainEvent, Move, Player } from "./engine.js";
 import {
   answerDestinationsFor,
+  botCandidates,
+  botExtrasFor,
   botKnowledgeFor,
   clockView,
   concede,
@@ -352,7 +354,13 @@ export class MatchHub {
     let move: Move | undefined;
     try {
       const view = viewFor(match, seat);
-      move = legal[bot.choose(view, legal, botKnowledgeFor(match, view))];
+      const candidates = botCandidates(match, legal);
+      move =
+        candidates[
+          bot.choose(view, candidates, botKnowledgeFor(match, view), () =>
+            botExtrasFor(match, seat, view),
+          )
+        ];
     } catch (error) {
       console.error(
         `AI ${bot.identity.name} が手を選べなかった。投了で終える（${match.matchId}）:`,

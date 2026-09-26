@@ -16,6 +16,7 @@ import {
   cardsInZone,
   createGame,
   createRng,
+  derivedView,
   GameKnowledge,
   isBasicPokemon,
   legalMoves,
@@ -25,6 +26,7 @@ import {
   opponent,
   playerView,
   projectEvents,
+  RevisitTracker,
   spectatorView,
 } from "./engine.js";
 import type {
@@ -32,6 +34,7 @@ import type {
   CardInstance,
   Choice,
   ChoiceAnswer,
+  DecisionExtras,
   DeckList,
   DomainEvent,
   GameOutcome,
@@ -129,6 +132,12 @@ export interface Match {
    * 記憶を持たず、重みは対戦どうしで共有するので、局ごとの記憶は対戦の側に置く。
    */
   readonly botKnowledge: GameKnowledge;
+  /**
+   * 同じ番で既に来た局面の記録。AI の座席には、そこへ戻る手を見せない。自己対戦が学習した方策に
+   * 見せる候補と同じ絞り方で、これが無いと、何回でも使える特性で盤面を往復して番が終わらない方策がある。
+   * 人どうしの対戦では null で、局面を記録しない。
+   */
+  readonly botRevisit: RevisitTracker | null;
   state: GameState;
   /**
    * 対戦準備で、座席がまとめて出したバトル場とベンチ（2.4 節）。エンジンの順番が来るまで預かる。
@@ -194,6 +203,8 @@ export function createMatch(options: CreateMatchOptions): Match {
   const tracked = (seat: Player) => bot?.seat === seat && bot.bot.tracksKnowledge;
   const botKnowledge = new GameKnowledge(options.decks, [tracked(0), tracked(1)]);
   botKnowledge.observe(created.events);
+  const botRevisit = bot === null ? null : new RevisitTracker();
+  botRevisit?.arrive(created.state);
   return {
     matchId: options.matchId,
     seedCommitment,
@@ -206,6 +217,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     firstPlayer: firstPlayerOf(created.events),
     bot,
     botKnowledge,
+    botRevisit,
     state: created.state,
     setupPlans: [null, null],
     setupSinceMs: [options.nowMs, options.nowMs],
@@ -316,6 +328,7 @@ function record(
     if (event.kind === "mulligan-taken") match.setupSinceMs[event.player] = timing.nowMs;
   }
   match.botKnowledge.observe(applied.events);
+  match.botRevisit?.arrive(match.state);
 
   if (match.state.phase === "gameover") {
     finish(match, { kind: "normal", winner: match.state.outcome?.winner ?? null }, timing.nowMs);
@@ -589,6 +602,19 @@ export function viewFor(match: Match, seat: Player): PlayerView {
 /** AI の座席がその局面で知っている、自分の伏せたカード。知識を使わない方策には何も知らない入力を渡す。 */
 export function botKnowledgeFor(match: Match, view: PlayerView): HiddenKnowledge {
   return match.bot === null ? NO_KNOWLEDGE : match.botKnowledge.snapshot(match.bot.seat, view);
+}
+
+/**
+ * AI の座席に見せる候補。同じ番で既に来た局面へ戻る手を外す（`botRevisit`）。
+ * 返す列は `legal` の部分列で、順を保つ。
+ */
+export function botCandidates(match: Match, legal: Move[]): Move[] {
+  return match.botRevisit === null ? legal : match.botRevisit.filter(match.state, legal).admitted;
+}
+
+/** AI の座席の方策へ渡す導出値と記憶。要素の集合を読む方策（形式 6）だけが求める。 */
+export function botExtrasFor(match: Match, seat: Player, view: PlayerView): DecisionExtras {
+  return { derived: derivedView(match.state, seat), memory: match.botKnowledge.memory(seat, view) };
 }
 
 export function spectatorViewFor(match: Match): SpectatorView {
