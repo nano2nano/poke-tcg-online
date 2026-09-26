@@ -2429,7 +2429,11 @@ interface HeldCard {
 interface CrowdedSync {
   view: {
     choices: object[];
-    self: { hand: HeldCard[]; active: { inPlayId: string; attached: HeldCard[] } };
+    self: {
+      hand: HeldCard[];
+      active: { inPlayId: string; attached: HeldCard[] };
+      deckCount: number;
+    };
   };
   legalMoves: object[];
 }
@@ -2601,6 +2605,60 @@ test("効果の選択では、選んだカードの行き先をボタンに出�
   // 行き先の書けない組み合わせは、元の見出しに戻す。
   const [unknown] = await labelsWith(targets.map(() => ({ to: "hand", player: 0 })));
   expect(unknown).toBe(pokemon);
+});
+
+test("山札全体を見て選ぶあいだは、見ている山札を並べ、選べないカードは暗くする", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync & { revealedDeck: string[] | null };
+  const defIds = [...new Set(sync.view.self.hand.map((card) => card.defId))];
+  const [a, b, c, d] = defIds as [string, string, string, string];
+  const choiceId = "山札から選ぶ";
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt: {
+        kind: "selectFromHiddenZone",
+        zone: { kind: "deck", player: 0 },
+        candidates: [a, b],
+      },
+    },
+  ];
+  sync.legalMoves = [a, b].map((defId) => ({
+    type: "AnswerChoice",
+    player: 0,
+    choiceId,
+    answer: { kind: "cardDef", defId },
+  }));
+  const deck = page.locator("#revealed-deck");
+  const shown = deck.locator(".revealed-card");
+
+  sync.revealedDeck = [a, c, a, d, b];
+  sync.view.self.deckCount = sync.revealedDeck.length;
+  await openWith(page, sync);
+  await expect(deck).toBeVisible();
+  await expect(deck).toHaveAttribute("data-count", "5");
+  // 同じカードは 1 枚にまとめ、枚数を添える。
+  await expect(shown).toHaveCount(4);
+  await expect(shown.filter({ has: page.locator(`[data-def-id="${a}"]`) })).toHaveAttribute(
+    "data-count",
+    "2",
+  );
+  const pickable = deck.locator('.card[data-pickable="true"]');
+  await expect(pickable).toHaveCount(2);
+  expect(
+    await pickable.evaluateAll((faces) => faces.map((face) => face.dataset.defId).sort()),
+  ).toEqual([a, b].sort());
+  // 選ぶのはボタンのまま。
+  await expect(page.locator("#moves button")).toHaveCount(2);
+
+  sync.revealedDeck = null;
+  await openWith(page, sync);
+  await expect(page.locator("#moves button")).toHaveCount(2);
+  await expect(deck).toBeHidden();
 });
 
 test("山札の上へ順に置く選択では、何枚目に置くかを案内とボタンに出す", async ({ page }) => {

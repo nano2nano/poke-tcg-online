@@ -54,6 +54,28 @@ button.danger {
   font-size: 0.9rem;
   margin: 8px 0 4px;
 }
+.revealed-deck h3 {
+  font-size: 0.9rem;
+  margin: 0 0 4px;
+}
+.revealed-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-bottom: 6px;
+}
+.revealed-card {
+  --w: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 0.75rem;
+}
+.revealed-card > .card[data-pickable="false"] {
+  opacity: 0.45;
+}
 .setup > button {
   margin-top: 10px;
 }
