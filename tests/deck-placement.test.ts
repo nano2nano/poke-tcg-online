@@ -128,11 +128,15 @@ function stacking(edge: "top" | "bottom"): Played {
   return afterPlaying(trainer) as Played;
 }
 
-/** 効果の終わりまで先頭の候補で答えた局面と、そのあいだのイベント。 */
+/**
+ * 効果の終わりまで先頭の候補で答えた局面と、そのあいだのイベント。選べるカードが無い選択も
+ * 選択として来るので、答えが 1 つ（選ばない）しか無ければそれで答えて先へ進む。
+ */
 function answerToEnd(state: GameState, seat: Player): { state: GameState; events: DomainEvent[] } {
   const events: DomainEvent[] = [];
   while (state.choices.at(-1)?.owner === seat) {
-    const answer = legalMoves(state).find(isCardAnswer);
+    const legal = legalMoves(state);
+    const answer = legal.find(isCardAnswer) ?? (legal.length === 1 ? legal[0] : undefined);
     if (answer === undefined) break;
     const applied = applyMove(state, answer);
     events.push(...applied.events);

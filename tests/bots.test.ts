@@ -13,16 +13,23 @@ import {
   type Bot,
 } from "../src/bots.js";
 import { validateDeck } from "../src/deck.js";
-import { commitShare } from "../src/fingerprint.js";
+import { commitSeed, commitShare } from "../src/fingerprint.js";
 import {
   applyMove,
   createGame,
+  derivedView,
+  encodeEntityWeights,
   encodePpoWeights,
   legalMoves,
+  newEntityWeightsFile,
   newPpoWeightsFile,
   NO_KNOWLEDGE,
+  positionKey,
   projectEvents,
+  RevisitTracker,
   SeatKnowledge,
+  type DecisionExtras,
+  type GameState,
   type HiddenKnowledge,
   type Move,
   type Player,
@@ -31,10 +38,19 @@ import {
 import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { BOT_MATCH_LIVE, Lobby } from "../src/lobby.js";
 import type { MatchRecord } from "../src/log.js";
-import { legalMovesFor, submitMove, toMove, viewFor, type Match } from "../src/match.js";
+import {
+  botCandidates,
+  botExtrasFor,
+  createMatch,
+  legalMovesFor,
+  submitMove,
+  toMove,
+  viewFor,
+  type Match,
+} from "../src/match.js";
 import type { ClientMessage, ServerMessage } from "../src/protocol.js";
 import { MatchRegistry } from "../src/registry.js";
-import { ensureCards, newMatch } from "./helpers.js";
+import { ensureCards, legalDecks, newMatch } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
 // 重みを作るのも方策にするのも重く、重みを何本か扱うテストは既定の 5 秒に近い。遅い機械では越えるので、
@@ -65,6 +81,22 @@ function generationZero(label = "test-bot", knowledge: "tracked" | "zero" = "zer
     generated.set(key, bytes);
   }
   return bytes;
+}
+
+/** 形式 6（要素の集合を読む方策）の世代 0。出力の層が 0 なので、形式 5 と同じく全候補が同じ確率になる。 */
+function entityGenerationZero(label = "test-entity"): Uint8Array {
+  const key = `entity:${label}`;
+  let bytes = generated.get(key);
+  if (bytes === undefined) {
+    bytes = encodeEntityWeights(newEntityWeightsFile(label));
+    generated.set(key, bytes);
+  }
+  return bytes;
+}
+
+/** 形式 6 の方策に渡す値を、AI の座席と同じ道で作る。 */
+function extrasOf(match: Match, seat: Player): () => DecisionExtras {
+  return () => botExtrasFor(match, seat, viewFor(match, seat));
 }
 
 /** 候補が 2 つ以上ある局面まで、先頭の合法手で進める。 */
@@ -101,6 +133,7 @@ describe("重みから作る AI", () => {
         viewFor(match, seat),
         legal,
         NO_KNOWLEDGE,
+        extrasOf(match, seat),
       );
     expect(pick(0)).toBe(0);
     expect(pick(0.999_999)).toBe(legal.length - 1);
@@ -113,8 +146,87 @@ describe("重みから作る AI", () => {
     expect(botFromBytes("g0", generationZero("test-bot", "tracked")).tracksKnowledge).toBe(true);
   });
 
+  it("形式 6 の重みを読み、導出値と記憶を渡すと手を引く", () => {
+    const match = matchWithChoice();
+    const seat = toMove(match)!;
+    const legal = legalMoves(match.state);
+    const bytes = entityGenerationZero();
+    const bot = botFromBytes("e0", bytes, () => 0.999_999);
+    expect(bot.identity).toEqual({
+      name: "e0",
+      label: "test-entity",
+      generation: 0,
+      weightsSha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    expect(bot.tracksKnowledge).toBe(true);
+    const view = viewFor(match, seat);
+    expect(bot.choose(view, legal, NO_KNOWLEDGE, extrasOf(match, seat))).toBe(legal.length - 1);
+  });
+
+  it("形式 6 の重みの語彙がいまのエンジンと違えば読まない", () => {
+    ensureCards();
+    const file = newEntityWeightsFile("test-entity");
+    // 長さを変えずに 1 語だけ差し替える。長さが変われば表の形も変わり、語彙を見る前に読めなくなる。
+    const vocabulary = {
+      ...file.vocabulary,
+      token: [...file.vocabulary.token.slice(0, -1), "無い語"],
+    };
+    const bytes = encodeEntityWeights({ ...file, vocabulary });
+    expect(() => botFromBytes("e0", bytes)).toThrow();
+  });
+
   it("重みでないバイト列は読まない", () => {
     expect(() => botFromBytes("x", new TextEncoder().encode("not weights"))).toThrow();
+  });
+});
+
+describe("AI に見せる候補", () => {
+  /** 座席 1 に AI が就いた対戦を、main で座席 1 の候補が 2 つ以上ある局面まで、先頭の合法手で進める。 */
+  function botMatchInMain(): Match {
+    ensureCards();
+    const match = createMatch({
+      matchId: "match-bot-revisit",
+      decks: legalDecks(),
+      seats: [
+        { playerId: "player-a", displayName: "あ", rating: 1500 },
+        { playerId: "bot:g0", displayName: "AI g0", rating: null },
+      ],
+      seatTokens: ["token-a", "token-b"],
+      spectatorToken: "token-watch",
+      nowMs: 0,
+      startedAt: new Date(0).toISOString(),
+      seedCommitment: commitSeed("bot-revisit"),
+      bot: { seat: 1, bot: botFromBytes("g0", generationZero()) },
+    });
+    for (;;) {
+      const mover = toMove(match);
+      if (mover === null) throw new Error("座席 1 が main で選ぶ局面が来なかった");
+      const legal = legalMoves(match.state);
+      if (mover === 1 && match.state.phase === "main" && legal.length >= 2) return match;
+      submitMove(match, mover, match.version, legal[0] as Move, 0);
+    }
+  }
+
+  it("同じ番で既に来た局面へ戻る手を外し、ほかの手は順を保って残す", () => {
+    const match = botMatchInMain();
+    const legal = legalMovesFor(match, 1)!;
+    expect(botCandidates(match, legal)).toEqual(legal);
+
+    // 番を終えない手を 1 つ選び、その行き先に既に来たことにする。同じ行き先へ進む手はどれも外れる。
+    // 番を終える手の行き先は次の番の局面で、記録はそこで番ごと入れ替わる。
+    const key = (move: Move) => positionKey(applyMove(match.state, move).state);
+    const picked = legal.find((move) => move.type !== "EndTurn" && move.type !== "Attack");
+    if (picked === undefined) throw new Error("番を終えない手が候補に無い");
+    const visited = key(picked);
+    match.botRevisit!.arrive(applyMove(match.state, picked).state);
+    const kept = legal.filter((move) => key(move) !== visited);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(botCandidates(match, legal)).toEqual(kept);
+  });
+
+  it("人どうしの対戦では局面を記録しない", () => {
+    ensureCards();
+    expect(newMatch("no-bot").botRevisit).toBeNull();
   });
 });
 
@@ -201,42 +313,74 @@ async function playAgainst(arena: Arena, bot: Bot): Promise<MatchRecord> {
 }
 
 /**
- * 対戦の記録を初手から指し直し、AI の座席の追跡器を別に作って知識を求める。
- * サーバが手を適用するたびにイベントを食わせているかを、イベントを 1 つも取りこぼさない経路と突き合わせる。
+ * 対戦の記録を初手から指し直し、AI の座席の追跡器を別に作る。サーバが手を適用するたびに
+ * イベントを食わせているかを、イベントを 1 つも取りこぼさない経路と突き合わせる。
+ * 指し直しの途中の局面も返す。候補の絞り方を、サーバの局面の記録とは別に求め直すのに使う。
  */
-function replayedKnowledge(match: Match, seat: Player, view: PlayerView): HiddenKnowledge {
+function replayed(match: Match, seat: Player): { tracker: SeatKnowledge; states: GameState[] } {
   const tracker = new SeatKnowledge(match.decks[seat], seat);
   const created = createGame({ seed: match.seedCommitment.seed, decks: match.decks });
   tracker.observe(projectEvents(created.events, seat));
-  let state = created.state;
+  const states = [created.state];
   for (const { move } of match.moves) {
-    const applied = applyMove(state, move);
+    const applied = applyMove(states.at(-1)!, move);
     tracker.observe(projectEvents(applied.events, seat));
-    state = applied.state;
+    states.push(applied.state);
   }
-  return tracker.snapshot(view);
+  return { tracker, states };
 }
 
 /**
- * 渡された AI の前に立ち、AI が受け取った値が座席の射影と合法手そのものであることを確かめる。
- * 知識は、知識を使う AI には記録から求め直した値と同じもの、使わない AI には何も知らない入力が届く。
+ * 自己対戦が学習した方策に見せる候補を、指し直した局面から求め直す。main で候補が 2 つ以上あれば、
+ * 同じ番で既に来た局面（途中の選択の局面も含む）へ戻る手を外す。すべて外れるなら全部を残す。
  */
-function watched(arena: Arena, inner: Bot): Bot & { calls: number } {
+function expectedCandidates(states: readonly GameState[], legal: readonly Move[]): Move[] {
+  const now = states.at(-1)!;
+  if (now.phase !== "main" || legal.length <= 1) return [...legal];
+  const visited = new Set(
+    states
+      .filter((one) => one.turn === now.turn && one.turnPlayer === now.turnPlayer)
+      .map(positionKey),
+  );
+  const admitted = legal.filter((move) => !visited.has(positionKey(applyMove(now, move).state)));
+  return admitted.length === 0 ? [...legal] : admitted;
+}
+
+/**
+ * 渡された AI の前に立ち、AI が受け取った値が自己対戦の方策が受け取るものと同じであることを確かめる。
+ * 候補は同じ番で既に来た局面へ戻る手を外した合法手で、知識と記憶は、知識を使う AI には記録から
+ * 求め直した値と同じもの、使わない AI には何も知らない入力が届く。導出値は AI の座席と局面で照会したものが届く。
+ * `masked` は、外れた候補があった決定点の数。
+ */
+function watched(arena: Arena, inner: Bot): Bot & { calls: number; masked: number } {
   const bot = {
     identity: inner.identity,
     tracksKnowledge: inner.tracksKnowledge,
     calls: 0,
-    choose(view: PlayerView, legal: readonly Move[], knowledge: HiddenKnowledge): number {
+    masked: 0,
+    choose(
+      view: PlayerView,
+      legal: readonly Move[],
+      knowledge: HiddenKnowledge,
+      extras: () => DecisionExtras,
+    ): number {
       bot.calls += 1;
       const [match] = arena.registry.live();
       expect(view).toEqual(viewFor(match!, 1));
-      expect(legal).toEqual(legalMovesFor(match!, 1));
+      const { tracker, states } = replayed(match!, 1);
+      expect(states.at(-1)).toEqual(match!.state);
+      const all = legalMovesFor(match!, 1)!;
+      expect(legal).toEqual(expectedCandidates(states, all));
+      if (legal.length < all.length) bot.masked += 1;
+      const { derived, memory } = extras();
+      expect(derived).toEqual(derivedView(match!.state, 1));
       if (inner.tracksKnowledge) {
-        expect(knowledge).toEqual(replayedKnowledge(match!, 1, view));
+        expect(knowledge).toEqual(tracker.snapshot(view));
+        expect(memory).toEqual(tracker.memory(view));
       } else {
         expect(knowledge).toBe(NO_KNOWLEDGE);
       }
-      return inner.choose(view, legal, knowledge);
+      return inner.choose(view, legal, knowledge, extras);
     },
   };
   return bot;
@@ -271,6 +415,34 @@ describe("AI の座席", () => {
     expect(bot.calls).toBeGreaterThan(0);
   });
 
+  it("形式 6 の AI は、導出値と追跡器の記憶を受け取って決着まで指す", async () => {
+    const arena = newArena();
+    const bot = watched(arena, botFromBytes("e0", entityGenerationZero()));
+    const arrived = vi.spyOn(RevisitTracker.prototype, "arrive");
+    let match: Match | undefined;
+    let record: MatchRecord;
+    let seen: unknown[];
+    try {
+      record = await playAgainst(arena, {
+        ...bot,
+        choose: (...args) => {
+          match = arena.registry.live()[0];
+          return bot.choose(...args);
+        },
+      });
+      seen = arrived.mock.calls.map(([state]) => state);
+    } finally {
+      arrived.mockRestore();
+    }
+
+    expect(record.matchResult.kind).toBe("normal");
+    expect(record.seats[1].bot).toEqual(bot.identity);
+    expect(bot.calls).toBeGreaterThan(0);
+    // 局面の記録は、対戦の始まりと、どの道で適用した手のあとの局面も 1 つずつ漏らさず受け取る。
+    // 同じ番で戻る手はこの対戦ではまず起きないので、候補の突き合わせだけではここの漏れを見逃す。
+    expect(seen).toEqual(replayed(match!, 1).states);
+  });
+
   it("方策が投げたら、AI の投了で終える。選んでいない手を AI の手として残さない", async () => {
     const arena = newArena();
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -297,9 +469,9 @@ describe("AI の座席", () => {
       calls: 0,
       choose: inner.choose,
     };
-    bot.choose = (view, legal, knowledge) => {
+    bot.choose = (view, legal, knowledge, extras) => {
       bot.calls += 1;
-      return inner.choose(view, legal, knowledge);
+      return inner.choose(view, legal, knowledge, extras);
     };
     const { account, secret } = await arena.accounts.create("ひと", 0);
     const outcome = arena.lobby.joinBot(

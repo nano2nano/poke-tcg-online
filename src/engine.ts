@@ -71,18 +71,28 @@ export { createRng, nextInt } from "../engine/src/rng.js";
  */
 export { policyOf, type PolicyFile } from "../engine/src/learning/residual.js";
 export { decodePpoWeights, PPO_MAGIC } from "../engine/src/learning/ppo-net.js";
+export { decodeEntityWeights, ENTITY_MAGIC } from "../engine/src/learning/entity-net.js";
 /** テストが世代 0 の重みを作るのに使う。サーバは重みを作らない。 */
 export { encodePpoWeights, newPpoWeightsFile } from "../engine/src/learning/ppo-net.js";
-export { sampleFrom } from "../engine/src/learning/policy.js";
+export { encodeEntityWeights, newEntityWeightsFile } from "../engine/src/learning/entity-net.js";
+export { sampleFrom, type DecisionExtras } from "../engine/src/learning/policy.js";
 export {
   GameKnowledge,
   NO_KNOWLEDGE,
   tracksKnowledge,
   type HiddenKnowledge,
-} from "../engine/src/learning/knowledge.js";
+} from "../engine/src/knowledge/seat-knowledge.js";
 /** テストが、サーバとは別の道で AI の座席の知識を求め直すのに使う。 */
-export { SeatKnowledge } from "../engine/src/learning/knowledge.js";
+export { SeatKnowledge } from "../engine/src/knowledge/seat-knowledge.js";
 /** 座席の方策が候補ごとに付ける確率。エンジンの自己対戦と同じ分布を返すので、AI の座席もここから引く。 */
 export { probabilitiesOf } from "../engine/harness/seat-agent.js";
+/**
+ * AI の座席の方策へ、自己対戦が渡すのと同じ入力と候補を渡すのに要る。導出値は座席ごとの照会で、
+ * 局面の記録は同じ番で既に来た局面へ戻る手を候補から外すのに使う。
+ */
+export { derivedView } from "../engine/src/engine/derivedView.js";
+export { RevisitTracker } from "../engine/src/testing/revisit.js";
+/** テストが、サーバとは別の道で AI の座席の候補を求め直すのに使う。 */
+export { positionKey } from "../engine/src/testing/revisit.js";
 /** 学習と評価に使っているデッキ。AI の座席はこれを握る（7.3 節）。 */
 export { metaDecks } from "../engine/harness/meta-decks.js";

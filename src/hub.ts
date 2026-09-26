@@ -12,6 +12,8 @@
 import type { DomainEvent, Move, Player } from "./engine.js";
 import {
   answerDestinationsFor,
+  botCandidates,
+  botExtrasFor,
   botKnowledgeFor,
   clockView,
   concede,
@@ -337,8 +339,8 @@ export class MatchHub {
   }
 
   /**
-   * AI の 1 手。AI に渡すのは座席の射影と合法手と、その座席へ射影したイベントから追った知識だけで、
-   * 人の座席に届くもの以上は渡さない（1 節の S-2）。
+   * AI の 1 手。AI に渡すのは座席の射影と、同じ番で既に来た局面へ戻る手を外した合法手と、その座席へ射影した
+   * イベントから追った知識と記憶と、座席ごとの導出値だけで、人の座席に届くもの以上は渡さない（1 節の S-2）。
    *
    * **AI が指せなかったら、AI の投了で終える。** 方策が投げたときも、手が断られたときも同じである。
    * 代わりに一様に選んだ手を指すと、方策が選んでいない手が `source: "bot"` として記録に混ざる。
@@ -352,7 +354,13 @@ export class MatchHub {
     let move: Move | undefined;
     try {
       const view = viewFor(match, seat);
-      move = legal[bot.choose(view, legal, botKnowledgeFor(match, view))];
+      const candidates = botCandidates(match, legal);
+      move =
+        candidates[
+          bot.choose(view, candidates, botKnowledgeFor(match, view), () =>
+            botExtrasFor(match, seat, view),
+          )
+        ];
     } catch (error) {
       console.error(
         `AI ${bot.identity.name} が手を選べなかった。投了で終える（${match.matchId}）:`,

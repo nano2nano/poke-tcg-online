@@ -545,6 +545,7 @@ describe("答えを適用したときに選んだカードが動いた先", () =
         card: picked,
         target: "ip-選んだ先",
         fromHand: false,
+        from: deck,
       },
     ];
     expect(movedTo(events, (card) => card.defId === energy)).toEqual({
