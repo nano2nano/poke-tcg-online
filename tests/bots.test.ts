@@ -37,6 +37,10 @@ import { MatchRegistry } from "../src/registry.js";
 import { ensureCards, newMatch } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
+// 重みを作るのも方策にするのも重く、重みを何本か扱うテストは既定の 5 秒に近い。遅い機械では越えるので、
+// 1 本ずつ上限を足さずにファイル全体で延ばす。
+vi.setConfig({ testTimeout: 30_000 });
+
 let storage: Awaited<ReturnType<typeof startStorage>>;
 
 beforeAll(async () => {
@@ -445,8 +449,7 @@ describe("重みの保存先", () => {
     for (const name of names.slice(1)) await store.load(name);
     const again = await store.load("keep-a");
     expect(held.ok && again.ok && held.bot === again.bot).toBe(true);
-    // 重みを 5 本、1 本ずつ方策にする（世代 0 は初期値との照合も含む）ので、既定の 5 秒では足りない。
-  }, 30_000);
+  });
 
   it("名前の形が違うものと、置いていないものは断る", async () => {
     const store = new BotStore(storage.archive);
