@@ -2399,7 +2399,11 @@ interface HeldCard {
 interface CrowdedSync {
   view: {
     choices: object[];
-    self: { hand: HeldCard[]; active: { inPlayId: string; attached: HeldCard[] } };
+    self: {
+      hand: HeldCard[];
+      active: { inPlayId: string; attached: HeldCard[] };
+      deckCount: number;
+    };
   };
   legalMoves: object[];
 }
@@ -2597,6 +2601,7 @@ test("山札全体を見て選ぶあいだは、見ている山札を並べ、�
   const shown = deck.locator(".revealed-card");
 
   sync.revealedDeck = [a, c, a, d, b];
+  sync.view.self.deckCount = sync.revealedDeck.length;
   await openWith(page, sync);
   await expect(deck).toBeVisible();
   await expect(deck).toHaveAttribute("data-count", "5");

@@ -1955,6 +1955,7 @@ function renderMoves(
  * 山札を見て選ぶ効果で、見ている山札を並べる。エンジンの候補は条件に合うカードだけなので、
  * ボタンだけでは、選べないカードや、山札に何が残っていて何がサイドに落ちたかを読めない。
  * 同じカードは 1 枚にまとめて枚数を添え、選べるカードのほかは暗くする。選ぶのは下のボタンで行う。
+ * 選べるカードを枠で囲まないのは、盤面のほかのカードと同じく押すと拡大するからで、囲むと押せば選べるように見える。
  */
 function renderRevealedDeck(revealedDeck, moves) {
   const box = $("revealed-deck");
@@ -1971,7 +1972,7 @@ function renderRevealedDeck(revealedDeck, moves) {
   );
   const counts = new Map();
   for (const defId of revealedDeck) counts.set(defId, (counts.get(defId) ?? 0) + 1);
-  // サーバは山札の並びと関係の無い順で送るので、種類と名前で並べ直す。
+  // サーバの並びは見せた順で、探すときの手がかりにならないので、種類と名前で並べ直す。
   const kinds = Object.keys(KINDS);
   const rank = (defId) => {
     const index = kinds.indexOf(cards[defId]?.kind);
@@ -1981,7 +1982,7 @@ function renderRevealedDeck(revealedDeck, moves) {
     (a, b) => rank(a) - rank(b) || nameOf(a).localeCompare(nameOf(b), "ja"),
   );
   box.replaceChildren(
-    el("h3", "", `山札 ${revealedDeck.length} 枚`),
+    el("h3", "", revealedDeckHeading(revealedDeck.length, lastView?.self?.deckCount)),
     el(
       "div",
       "revealed-cards",
@@ -1996,6 +1997,16 @@ function renderRevealedDeck(revealedDeck, moves) {
       }),
     ),
   );
+}
+
+/**
+ * サーバは見せたあとに山札へ入ったカードを送らないので、並べた枚数が山札の枚数より少ないことがある。
+ * そのときに並べた枚数を山札の枚数と読ませない。
+ */
+function revealedDeckHeading(shown, deckCount) {
+  return deckCount === undefined || deckCount === shown
+    ? `山札 ${shown} 枚`
+    : `山札 ${deckCount} 枚のうち、見た ${shown} 枚`;
 }
 
 /**
