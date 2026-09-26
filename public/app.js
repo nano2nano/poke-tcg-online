@@ -2160,8 +2160,9 @@ function describeMove(move, view = lastView, placement = null, destination = nul
     case "Evolve":
       return `${target(move.target)} を ${card(move.cardInstanceId)} に進化させる`;
     case "AttachEnergy":
+      return `手札の ${card(move.cardInstanceId)} を ${target(move.target)} につける（手張り）`;
     case "AttachTool":
-      return `${card(move.cardInstanceId)} を ${target(move.target)} につける`;
+      return `手札の ${card(move.cardInstanceId)} を ${target(move.target)} につける`;
     case "PlayTrainer": {
       const defId = locateCard(move.cardInstanceId, view)?.defId;
       const verb = cards[defId]?.trainerKind === "stadium" ? "出す" : "使う";

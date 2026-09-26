@@ -44,6 +44,7 @@ import type {
   PlayerView,
   SpectatorView,
   Viewer,
+  Zone,
 } from "./engine.js";
 import { randomBytes } from "node:crypto";
 import { consume, createClock, isTimedOut, moveRemainingMs, type Clock } from "./clock.js";
@@ -986,16 +987,26 @@ function destinationOf(
   }
 }
 
-function movedTo(
+/**
+ * 選んだカードが最初に動いた先。同じゾーンの中で並びが変わっただけの移動は、ほかに動いた先が無いときだけ返す。
+ * 山札の上から何枚かを見て選ぶ効果では、選ばなかったカードを山札の下へもどす移動が先に出ることがある。
+ * 選ばなかった中に選んだのと同じカードがあると、そちらを行き先と取り違える。
+ */
+export function movedTo(
   events: DomainEvent[],
   chosen: (card: CardInstance) => boolean,
 ): MovedDestination | null {
+  let reordered: MovedDestination | null = null;
   for (const event of events) {
     switch (event.kind) {
       case "card-moved":
       case "pokemon-played":
         if (!chosen(event.card)) break;
         if (event.to.kind === "stadium") return null;
+        if (event.kind === "card-moved" && sameZone(event.from, event.to)) {
+          reordered ??= { to: event.to.kind, player: event.to.player };
+          break;
+        }
         return { to: event.to.kind, player: event.to.player };
       case "card-drawn":
         if (chosen(event.card)) return { to: "hand", player: event.player };
@@ -1016,7 +1027,11 @@ function movedTo(
         break;
     }
   }
-  return null;
+  return reordered;
+}
+
+function sameZone(from: Zone, to: Zone): boolean {
+  return JSON.stringify(from) === JSON.stringify(to);
 }
 
 export function ownsDestination(state: GameState, seat: Player, moved: MovedDestination): boolean {

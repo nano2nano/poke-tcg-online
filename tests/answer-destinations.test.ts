@@ -2,7 +2,7 @@
  * 効果の選択への答えで、選んだカードがどこへ行くか（`docs/spec/battle-server.md` 3.2 節の
  * `answerDestinations`）。
  *
- * カードの識別子を書かないので、当てはまるトレーナーズはカードプールから動かして探す。
+ * カードの識別子を書かないので、当てはまるトレーナーズやポケモンはカードプールから動かして探す。
  */
 
 import { describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   loadGeneratedCards,
   type CardDefId,
   type CardInstance,
+  type DomainEvent,
   type GameState,
   type Move,
   type Player,
@@ -23,6 +24,7 @@ import {
   answerDestinationsOf,
   createMatch,
   disguised,
+  movedTo,
   ownsDestination,
   submitMove,
   toMove,
@@ -50,6 +52,23 @@ function twoBasicEnergies(): [CardDefId, CardDefId] {
   return [first.defId, second.defId];
 }
 
+/** 両者が同じ山札で始める対戦。 */
+function matchWith(matchId: string, cards: CardDefId[]): Match {
+  return createMatch({
+    matchId,
+    decks: [{ cards }, { cards }],
+    seats: [
+      { playerId: "player-a", displayName: "あ", rating: 1500 },
+      { playerId: "player-b", displayName: "い", rating: 1500 },
+    ],
+    seatTokens: ["token-a", "token-b"],
+    spectatorToken: "token-watch",
+    nowMs: 0,
+    startedAt: new Date(0).toISOString(),
+    seedCommitment: commitSeed(matchId),
+  });
+}
+
 /**
  * 山札の多くをそのトレーナーズにして、最初に使える番で使ったところ。使えなければ null。
  * 2 種類目の基本エネルギーは `second` 枚入れる。
@@ -62,19 +81,7 @@ function afterPlaying(trainer: CardDefId, second = 12): Played | null {
   while (cards.length < 36) cards.push(trainer);
   while (cards.length < 60 - second) cards.push(energyA);
   while (cards.length < 60) cards.push(energyB);
-  const match = createMatch({
-    matchId: `destination-${trainer}`,
-    decks: [{ cards }, { cards }],
-    seats: [
-      { playerId: "player-a", displayName: "あ", rating: 1500 },
-      { playerId: "player-b", displayName: "い", rating: 1500 },
-    ],
-    seatTokens: ["token-a", "token-b"],
-    spectatorToken: "token-watch",
-    nowMs: 0,
-    startedAt: new Date(0).toISOString(),
-    seedCommitment: commitSeed(`destination-${trainer}`),
-  });
+  const match = matchWith(`destination-${trainer}`, cards);
   for (let step = 0; step < 200; step++) {
     const seat = toMove(match);
     if (seat === null) return null;
@@ -455,3 +462,165 @@ describe("あとの選択でたどる行き先の持ち主", () => {
     ).toBe(false);
   });
 });
+
+describe("答えを適用したときに選んだカードが動いた先", () => {
+  const base = {
+    seq: 0,
+    turn: 1,
+    window: { kind: "turn", player: 0 },
+    actor: 0,
+    source: null,
+  } as const;
+  const deck = { kind: "deck", player: 0 } as const;
+
+  it("山札の中で並びが変わっただけの同じカードより、山札を出た 1 枚の行き先を取る", () => {
+    const [energy] = twoBasicEnergies();
+    const left: CardInstance = { instanceId: "残した方", defId: energy };
+    const picked: CardInstance = { instanceId: "選んだ方", defId: energy };
+    const events: DomainEvent[] = [
+      { ...base, kind: "card-moved", card: left, from: deck, to: deck },
+      {
+        ...base,
+        kind: "energy-attached",
+        player: 0,
+        card: picked,
+        target: "ip-選んだ先",
+        fromHand: false,
+      },
+    ];
+    expect(movedTo(events, (card) => card.defId === energy)).toEqual({
+      to: "attached",
+      target: "ip-選んだ先",
+      cards: [energy],
+    });
+  });
+
+  it("山札の中で動いただけなら、それを行き先にする", () => {
+    const [energy] = twoBasicEnergies();
+    const events: DomainEvent[] = [
+      {
+        ...base,
+        kind: "card-moved",
+        card: { instanceId: "下へ", defId: energy },
+        from: deck,
+        to: deck,
+      },
+    ];
+    expect(movedTo(events, (card) => card.defId === energy)).toEqual({ to: "deck", player: 0 });
+  });
+
+  it("実際の効果でも、山札の下へもどした同じカードではなく、山札を出た 1 枚の行き先を出す", () => {
+    ensureCards();
+    const defs = [...loadGeneratedCards()].sort((a, b) => (a.defId < b.defId ? -1 : 1));
+    const energies = defs.filter((def) => def.kind === "energy" && def.basic);
+    const checked: AnswerDestination["to"][] = [];
+    for (const def of defs) {
+      if (def.kind !== "pokemon" || def.evolutionStage !== "basic") continue;
+      if (classifyDefId(def.defId) !== "implemented") continue;
+      // 局面を進めるのは重いので、残りを山札の下へもどすと書かれたカードだけを試す。
+      const texts = [...(def.abilities ?? []), ...def.attacks].map((each) => each.text ?? "");
+      if (!texts.some((text) => text.includes("山札の下にもどす"))) continue;
+      const energy =
+        energies.find((each) => each.kind === "energy" && each.energyType === def.type) ??
+        energies[0];
+      if (energy === undefined) throw new Error("基本エネルギーが無い");
+      const found = atReturnedCopy(def.defId, energy.defId);
+      if (found === null) continue;
+
+      const { match, seat, index } = found;
+      const move = legalMoves(match.state)[index];
+      if (move?.type !== "AnswerChoice" || move.answer.kind !== "cardDef") {
+        throw new Error("山札から選ぶ答えではない");
+      }
+      const landed = landedAt(
+        match.state,
+        applyMove(match.state, move).state,
+        seat,
+        move.answer.defId,
+      );
+      expect(answerDestinationsFor(match, seat)?.[index]).toEqual(landed);
+      checked.push(landed.to);
+    }
+    // 探し方が効かなくなって黙って試す数が減らないよう、手札に加える効果とポケモンにつける効果の両方を試したことを見る。
+    expect(checked).toEqual(expect.arrayContaining(["attached", "hand"]));
+  });
+});
+
+/**
+ * そのたねポケモンとエネルギーだけの山札で、特性、ベンチに出す、エネルギーをつける、ワザの順に使えるだけ使う。
+ * 効果の選択のうち、答えると選んだのと同じカードが山札の中で動き、それより後に同じカードが山札から減るものに来たら、
+ * その局面を返す。山札の中の移動が先に出るときだけ、それを行き先と取り違えうる。
+ */
+function atReturnedCopy(
+  pokemon: CardDefId,
+  energy: CardDefId,
+): { match: Match; seat: Player; index: number } | null {
+  const cards: CardDefId[] = [];
+  while (cards.length < 20) cards.push(pokemon);
+  while (cards.length < 60) cards.push(energy);
+  const match = matchWith(`returned-copy-${pokemon}`, cards);
+  const preferred = ["UseAbility", "PlayBasic", "AttachEnergy", "Attack", "EndTurn"];
+  for (let step = 0; step < 120; step++) {
+    const seat = toMove(match);
+    if (seat === null) return null;
+    const legal = legalMoves(match.state);
+    const choosing = match.state.choices.at(-1)?.owner === seat;
+    if (choosing) {
+      const index = legal.findIndex((move) => {
+        if (move.type !== "AnswerChoice" || move.answer.kind !== "cardDef") return false;
+        const picked = move.answer.defId;
+        const inDeck = (state: GameState) =>
+          state.players[seat].deck.filter((card) => card.defId === picked).length;
+        const applied = applyMove(match.state, move);
+        const first = applied.events.find(
+          (event) => "card" in event && event.card.defId === picked,
+        );
+        return (
+          inDeck(applied.state) < inDeck(match.state) &&
+          first?.kind === "card-moved" &&
+          first.from.kind === "deck" &&
+          first.to.kind === "deck" &&
+          first.to.player === seat
+        );
+      });
+      if (index >= 0) return { match, seat, index };
+    }
+    const next = choosing
+      ? legal.find((move) => move.type === "AnswerChoice" && move.answer.kind !== "decline")
+      : preferred
+          .map((type) => legal.find((move) => move.type === type))
+          .find((move) => move !== undefined);
+    submitMove(match, seat, match.version, next ?? (legal[0] as Move), 0);
+  }
+  return null;
+}
+
+/** 答えを適用する前と後を比べて、そのカードが座席のどこに増えたか。 */
+function landedAt(
+  before: GameState,
+  after: GameState,
+  seat: Player,
+  defId: CardDefId,
+): AnswerDestination {
+  const count = (cards: readonly CardInstance[]) =>
+    cards.filter((card) => card.defId === defId).length;
+  const [was, now] = [before.players[seat], after.players[seat]];
+  for (const zone of ["hand", "discard", "lostZone"] as const) {
+    if (count(now[zone]) > count(was[zone])) return { to: zone, player: seat };
+  }
+  for (const [place, pokemon] of [now.active, ...now.bench].entries()) {
+    if (pokemon === null) continue;
+    const old = [was.active, ...was.bench].find((each) => each?.inPlayId === pokemon.inPlayId);
+    if (old == null) {
+      if (count(pokemon.stack) > 0) return { to: place === 0 ? "active" : "bench", player: seat };
+      continue;
+    }
+    if (count(pokemon.attached) > count(old.attached)) {
+      return { to: "attached", target: pokemon.inPlayId, cards: [defId] };
+    }
+    if (count(pokemon.stack) > count(old.stack)) {
+      return { to: "evolved", target: pokemon.inPlayId, cards: [defId] };
+    }
+  }
+  throw new Error("選んだカードが座席のどこにも増えていない");
+}

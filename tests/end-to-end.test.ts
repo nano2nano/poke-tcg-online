@@ -465,7 +465,13 @@ describe("マッチングから決着まで", () => {
     });
     expect(result.failures).toEqual([]);
     expect(result.applied).toBe(record.moves.length);
-    expect(record.moves.length).toBeGreaterThan(10);
+    // 何手で決着するかはシャッフルしだいで、始まってすぐに決まる対局もある。手数ではなく、両者が指したことと、
+    // 記録が決着を持ち、それが両者へ伝えた勝者と合うことを見る（再生がその決着に届くことは `replay` が見る）。
+    expect(new Set(record.moves.map((logged) => logged.move.player))).toEqual(new Set([0, 1]));
+    expect(record.outcome).not.toBeNull();
+    for (const ending of endings) {
+      if (ending.t === "ended") expect(ending.matchResult.winner).toBe(record.outcome?.winner);
+    }
 
     // プレイヤーとその強さが対戦ごとに残る。あとから結び直すことはできない（7.2 節）。
     expect(record.seats.map((seat) => seat.playerId)).toEqual([
@@ -477,7 +483,9 @@ describe("マッチングから決着まで", () => {
     // 決着がレーティングへ入っている。記録に残るのは対戦を始めた時点の値なので、こちらだけが動く。
     const after = await postJson("/api/account/me", { secret: alpha.secret });
     expect(after.games).toBe(1);
-    expect(after.rating).not.toBe(INITIAL_RATING);
+    // 同じレーティングどうしの引き分けでは、どちらの値も動かない。
+    if (record.outcome?.winner === null) expect(after.rating).toBe(INITIAL_RATING);
+    else expect(after.rating).not.toBe(INITIAL_RATING);
 
     // 指した本人は、その対戦を読み返せる（6.6 節）。
     const mine = await postJson("/api/matches", { secret: alpha.secret });

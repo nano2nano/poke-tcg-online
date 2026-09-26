@@ -67,10 +67,17 @@ async function openPair(
 /** アカウントは localStorage ごとに別なので、テストごとに新しい文脈を使えば混ざらない。 */
 test.describe.configure({ mode: "parallel" });
 
-/** 対戦に入る。デッキを空のままにするとサンプルデッキが使われる。 */
+/**
+ * 対戦に入る。デッキを空のままにするとサンプルデッキが使われる。
+ *
+ * 参加の返事が届くまで待つ。画面は送る前から「デッキを送っています」と出すので、見出しを待つだけでは
+ * 続けて入ったほうの参加が先にサーバへ着くことがあり、先に待っていたほうが座る座席 0 が入れ替わる。
+ */
 async function join(page: Page, room: string): Promise<void> {
   await page.fill("#room", room);
+  const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
+  await answered;
 }
 
 /**
@@ -641,8 +648,11 @@ test("名前の表が局面より遅れて届いたら、準備の候補の名�
 });
 
 /**
- * 1 局を 12 手だけ指して投了し、その対戦のリプレイを開いたページを返す。
+ * 1 局を 12 手まで指して投了し、その対戦のリプレイを開いたページを返す。
  * リプレイのテストはどれもここから始めるので、1 つにまとめてある。
+ *
+ * シャッフルしだいで、12 手より前に決着する対局もある。そのときは投了せず、その対局を読み返す。
+ * 呼び出し側は 6 手先まで進めるので、それより短い対局はここで落とす。
  */
 async function replayOfFinishedMatch(
   browser: Browser,
@@ -660,23 +670,42 @@ async function replayOfFinishedMatch(
 
   // 読み返せる手数を作る。どちらが手番かは入れ替わるので、両方に聞く。
   const WANTED = 12;
+  const ended = a.locator("#table[data-ended]");
   let played = 0;
+  let decided = false;
   for (let attempt = 0; attempt < 60 && played < WANTED; attempt += 1) {
+    decided = (await ended.count()) > 0;
+    if (decided) break;
     if (await playOne(a)) played += 1;
     else if (await playOne(b)) played += 1;
   }
-  expect(played).toBe(WANTED);
 
   /**
    * 投了で終わらせる。指した手はログに残るので、そこまでは辿れる。決着を受け取った印は
    * レーティングの引き直しなので、その往復を待つ。画面の文言では判定しない。
+   * 最後の 1 手で決着していて、その知らせがまだ届いていないこともある。そのときも決着を受けて
+   * 引き直すので、待ち始めてから決着を見直す。
    */
   const settled = a.waitForResponse((response) => response.url().endsWith("/api/account/me"));
-  a.once("dialog", (dialog) => void dialog.accept());
-  await a.click("#concede-button");
-  await settled;
+  settled.catch(() => {});
+  if (!decided && (await ended.count()) === 0) {
+    expect(played).toBe(WANTED);
+    a.once("dialog", (dialog) => void dialog.accept());
+    await a.click("#concede-button");
+    await settled;
+  }
 
-  await a.click("#history-button");
+  /**
+   * 決着した対戦を保存し終えるのは、決着を座席へ送ったあとである。一覧に出るまで開き直す。
+   * 一覧の応答を待ってから次を出す。重ねて出すと、遅れて届いた古い空の一覧が出た一覧を消す。
+   */
+  const listed = a.locator("#history-list button").first();
+  await expect(async () => {
+    const answered = a.waitForResponse((response) => response.url().endsWith("/api/matches"));
+    await a.click("#history-button");
+    await answered;
+    await expect(listed).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
   /**
    * **最初の 1 枚が描けるまで待ってから返す。**
    *
@@ -685,8 +714,9 @@ async function replayOfFinishedMatch(
    * 初回フレームが落ちるとリプレイは閉じ、以降の「1 手 ▶」は押せないまま固まる。
    */
   const firstFrame = a.waitForResponse((response) => response.url().endsWith("/api/replay"));
-  await a.locator("#history-list button").first().click();
-  await firstFrame;
+  await listed.click();
+  const { frame } = (await (await firstFrame).json()) as { frame: { moveCount: number } };
+  expect(frame.moveCount).toBeGreaterThanOrEqual(6);
   await expect(a.locator("#replay")).toBeVisible();
   await expect(a.locator("#replay-status")).toContainText(/(^|[^0-9])0 \//);
 
@@ -2419,6 +2449,12 @@ async function openWith(page: Page, sync: object): Promise<{ move: object; offer
     ws.send(JSON.stringify(sync));
   });
   await page.reload();
+  // 名前の表は盤面より遅れて届くことがあり、届くまでは見出しもカードもカードの識別子のまま描かれる。
+  // 届く早さは開くたびに違うので、届く前に返すと、開き直した前後の見出しを比べたときに食い違う。
+  await expect(page.locator("#table .card[data-def-id]").first()).not.toHaveAttribute(
+    "data-kind",
+    "",
+  );
   return sent;
 }
 
