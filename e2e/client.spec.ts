@@ -2399,10 +2399,7 @@ interface HeldCard {
 interface CrowdedSync {
   view: {
     choices: object[];
-    self: {
-      hand: HeldCard[];
-      active: { inPlayId: string; stack: HeldCard[]; attached: HeldCard[] };
-    };
+    self: { hand: HeldCard[]; active: { inPlayId: string; attached: HeldCard[] } };
   };
   legalMoves: object[];
 }
@@ -2422,6 +2419,12 @@ async function openWith(page: Page, sync: object): Promise<{ move: object; offer
     ws.send(JSON.stringify(sync));
   });
   await page.reload();
+  // 名前の表は盤面より遅れて届くことがあり、届くまでは見出しもカードもカードの識別子のまま描かれる。
+  // 届く早さは開くたびに違うので、届く前に返すと、開き直した前後の見出しを比べたときに食い違う。
+  await expect(page.locator("#table .card[data-def-id]").first()).not.toHaveAttribute(
+    "data-kind",
+    "",
+  );
   return sent;
 }
 
@@ -2524,18 +2527,10 @@ test("効果の選択では、選んだカードの行き先をボタンに出�
       answer: { kind: "cardDef", defId },
     }));
   };
-  // 名前の表は盤面より遅れて届き、届くまでの見出しはカードの識別子のままになる。
-  // 開き直すたびに届く早さが違うので、届いてから読まないと、同じ見出しどうしを比べても食い違う。
-  const rawIds = [...sync.view.self.hand, ...sync.view.self.active.stack].map((card) => card.defId);
   const labelsWith = async (destinations: object[] | null): Promise<string[]> => {
     sync.answerDestinations = destinations;
     await openWith(page, sync);
     await expect(buttons).toHaveCount(sync.legalMoves.length);
-    await expect
-      .poll(async () =>
-        (await buttons.allTextContents()).some((label) => rawIds.some((id) => label.includes(id))),
-      )
-      .toBe(false);
     return buttons.allTextContents();
   };
 
