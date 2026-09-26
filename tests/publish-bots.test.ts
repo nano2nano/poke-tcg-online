@@ -29,6 +29,7 @@ function runDir(state: unknown): string {
 }
 
 const pointers = {
+  gate: "measure" as const,
   current: "ppo-clip-g23.weights",
   anchors: [0, 5, 10, 15, 20, 23].map((generation) => ({
     generation,
@@ -40,6 +41,7 @@ describe("走りの状態", () => {
   it("いまの方策と凍結した世代を読む", () => {
     const dir = runDir({
       version: 4,
+      config: { gate: "measure", trust: "clip" },
       attempts: 30,
       current: { weights: pointers.current, adam: null },
       anchors: pointers.anchors,
@@ -48,7 +50,15 @@ describe("走りの状態", () => {
   });
 
   it("いまの方策が無い状態は読まない", () => {
-    expect(() => readRunPointers(runDir({ anchors: [] }))).toThrow(/current\.weights/);
+    expect(() => readRunPointers(runDir({ config: { gate: "filter" }, anchors: [] }))).toThrow(
+      /current\.weights/,
+    );
+  });
+
+  it("ゲートの扱いが分からない状態は読まない", () => {
+    expect(() =>
+      readRunPointers(runDir({ current: { weights: pointers.current }, anchors: [] })),
+    ).toThrow(/config\.gate/);
   });
 });
 

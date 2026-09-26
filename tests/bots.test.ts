@@ -26,6 +26,7 @@ import {
   NO_KNOWLEDGE,
   positionKey,
   projectEvents,
+  RevisitTracker,
   SeatKnowledge,
   type DecisionExtras,
   type GameState,
@@ -348,7 +349,7 @@ function expectedCandidates(states: readonly GameState[], legal: readonly Move[]
 /**
  * 渡された AI の前に立ち、AI が受け取った値が自己対戦の方策が受け取るものと同じであることを確かめる。
  * 候補は同じ番で既に来た局面へ戻る手を外した合法手で、知識と記憶は、知識を使う AI には記録から
- * 求め直した値と同じもの、使わない AI には何も知らない入力が届く。導出値は座席の照会そのものである。
+ * 求め直した値と同じもの、使わない AI には何も知らない入力が届く。導出値は AI の座席と局面で照会したものが届く。
  * `masked` は、外れた候補があった決定点の数。
  */
 function watched(arena: Arena, inner: Bot): Bot & { calls: number; masked: number } {
@@ -417,11 +418,24 @@ describe("AI の座席", () => {
   it("形式 6 の AI は、導出値と追跡器の記憶を受け取って決着まで指す", async () => {
     const arena = newArena();
     const bot = watched(arena, botFromBytes("e0", entityGenerationZero()));
-    const record = await playAgainst(arena, bot);
+    const arrived = vi.spyOn(RevisitTracker.prototype, "arrive");
+    let match: Match | undefined;
+    const record = await playAgainst(arena, {
+      ...bot,
+      choose: (...args) => {
+        match = arena.registry.live()[0];
+        return bot.choose(...args);
+      },
+    });
+    const seen = arrived.mock.calls.map(([state]) => state);
+    arrived.mockRestore();
 
     expect(record.matchResult.kind).toBe("normal");
     expect(record.seats[1].bot).toEqual(bot.identity);
     expect(bot.calls).toBeGreaterThan(0);
+    // 局面の記録は、対戦の始まりと、どの道で適用した手のあとの局面も 1 つずつ漏らさず受け取る。
+    // 同じ番で戻る手はこの対戦ではまず起きないので、候補の突き合わせだけではここの漏れを見逃す。
+    expect(seen).toEqual(replayed(match!, 1).states);
   });
 
   it("方策が投げたら、AI の投了で終える。選んでいない手を AI の手として残さない", async () => {

@@ -1,26 +1,30 @@
 /**
- * 学習の走りの方策を、AI の座席の重み（R2 の `bots/`、仕様 7.3 節）へ上げ続ける。
+ * 学習の走りの方策を、AI の座席の重み（R2 の `bots/`、仕様 7.3 節）へアップロードし続ける。
  *
  *   npx tsx tools/publish-bots.ts <走りのディレクトリ> [--name=learning] [--every=300] [--keep-every=10] [--local] [--once]
  *
- * 走りの状態（`run-state.json`）が指すいまの方策を見て、変わっていたら上げる。いまの方策はゲートを
- * 通った世代なので、落ちた挑戦者は上がらない。上げる名前は 2 つある。
+ * 走りの状態（`run-state.json`）が指すいまの方策を見て、変わっていたらアップロードする。いまの方策は、
+ * ゲートが昇格を決める走り（`--gate=filter`）ではゲートを通った世代で、落ちた挑戦者は上がらない。
+ * ゲートを測るだけの走り（`--gate=measure`）では、ゲートの結果によらず更新がそのまま次の方策になるので、
+ * 毎回の更新が上がる。どちらの走りかは起動したときに印字する。アップロードする名前は 2 つある。
  *
- * - `<name>`: いまの方策。上げるたびに置き換える。指している最中の対戦は読んだ重みのまま最後まで指す。
- * - `<name>-g<世代>`: `--keep-every` の倍数の世代を残す。強くなっていく途中の世代と指し比べられる。0 なら残さない。
+ * - `<name>`: いまの方策。アップロードするたびに置き換える。指している最中の対戦は読んだ重みのまま最後まで指す。
+ * - `<name>-g<世代>`: 凍結した世代のうち `--keep-every` の倍数を残す。強くなっていく途中の世代と指し比べられる。
+ *   出発点の世代も凍結した世代に入っているので残る。0 なら残さない。
  *
- * 上げる前に、このリポジトリのエンジンで重みを読み、1 手選ばせる。読めない重み（特徴の語彙が違うエンジンで
- * 作ったもの）は上げずに止まる。本番の Worker も同じエンジンで出したものでないと、上げた重みを読めない。
+ * アップロードする前に、このリポジトリのエンジンで重みを読み、1 手選ばせる。確かめたバイト列をそのまま
+ * アップロードする。読めない重み（特徴の語彙が違うエンジンで作ったもの）はアップロードせずに止まる。
+ * 本番の Worker も同じエンジンで出したものでないと、アップロードした重みを読めない。
  *
  * 走りの邪魔をしないよう、優先度を最も低くして走り、GPU は使わない。走りのディレクトリには何も書かない。
- * どこまで上げたかは覚えないので、立ち上げ直すと、いまの方策と残す世代をもう一度上げる（中身は同じ）。
- * R2 へは `wrangler` で上げる。資格情報は手元の `wrangler login` のもの。
+ * どこまでアップロードしたかは覚えないので、立ち上げ直すと、いまの方策と残す世代をもう一度アップロードする
+ * （中身は同じ）。R2 へは `wrangler` でアップロードする。資格情報は手元の `wrangler login` のもの。
  */
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { constants, setPriority } from "node:os";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, setPriority, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -42,18 +46,25 @@ export const RUN_STATE = "run-state.json";
 
 /** 走りの状態のうち、ここで読む欄。 */
 export interface RunPointers {
+  /** ゲートが昇格を決めるか（`filter`）、測るだけか（`measure`）。 */
+  gate: "filter" | "measure";
   /** いまの方策（走りのディレクトリの中のファイル名）。 */
   current: string;
-  /** 凍結した世代。ゲートを通った世代はすべてここに残る。 */
+  /** 凍結した世代。出発点と、いまの方策になった世代はすべてここに残る。 */
   anchors: { generation: number; weights: string }[];
 }
 
 export function readRunPointers(run: string): RunPointers {
   const path = join(run, RUN_STATE);
   const state = JSON.parse(readFileSync(path, "utf8")) as {
+    config?: { gate?: unknown };
     current?: { weights?: unknown };
     anchors?: { generation?: unknown; weights?: unknown }[];
   };
+  const gate = state.config?.gate;
+  if (gate !== "filter" && gate !== "measure") {
+    throw new Error(`${path} のゲートの扱い（config.gate）が filter でも measure でもない`);
+  }
   const current = state.current?.weights;
   if (typeof current !== "string") throw new Error(`${path} にいまの方策（current.weights）が無い`);
   const anchors = (state.anchors ?? []).map((one) => {
@@ -62,7 +73,7 @@ export function readRunPointers(run: string): RunPointers {
     }
     return { generation: one.generation, weights: one.weights };
   });
-  return { current, anchors };
+  return { gate, current, anchors };
 }
 
 export interface Upload {
@@ -130,7 +141,19 @@ function bucketName(): string {
   return names[0]!;
 }
 
-function upload(bucket: string, name: string, file: string, local: boolean): void {
+/** 渡したバイト列をアップロードする。確かめたあとで走りがファイルを書き換えても、確かめた中身が上がる。 */
+function upload(bucket: string, name: string, bytes: Uint8Array, local: boolean): void {
+  const dir = mkdtempSync(join(tmpdir(), "publish-bots-"));
+  const file = join(dir, "weights");
+  try {
+    writeFileSync(file, bytes);
+    putObject(bucket, name, file, local);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function putObject(bucket: string, name: string, file: string, local: boolean): void {
   execFileSync(
     "npx",
     [
@@ -172,7 +195,7 @@ function parseOptions(argv: readonly string[]): Options {
   const name = flags.get("name") ?? "learning";
   // 残す世代の名前（`-g<世代>` を足したもの）も名前の形に収まるよう、先に長さを空けておく。
   if (!BOT_NAME_PATTERN.test(`${name}-g99999`)) {
-    throw new Error(`--name=${name} は AI の名前に使えない（英数字と . _ -、70 文字まで）`);
+    throw new Error(`--name=${name} は AI の名前に使えない（英数字と . _ -、73 文字まで）`);
   }
   const number = (key: string, fallback: number): number => {
     const value = Number(flags.get(key) ?? fallback);
@@ -201,29 +224,47 @@ async function main(): Promise<void> {
   registerPoolCards();
   const bucket = bucketName();
   const published = new Map<string, string>();
+  const seenGate: { value: RunPointers["gate"] | null } = { value: null };
   const where = options.local ? "手元" : "本番";
   console.log(
-    `${options.run} のいまの方策を ${where}の ${bucket}/${BOT_PREFIX}${options.name} へ上げる（${options.everySeconds} 秒ごとに見る）`,
+    `${options.run} のいまの方策を ${where}の ${bucket}/${BOT_PREFIX}${options.name} へアップロードする（${options.everySeconds} 秒ごとに見る）`,
   );
   for (;;) {
-    publishOnce(options, bucket, published);
+    publishOnce(options, bucket, published, seenGate);
     if (options.once) return;
     await sleep(options.everySeconds * 1000);
   }
 }
 
 /**
- * 1 回見て、要るものを上げる。走りの状態がまだ無いときと、上げるのに失敗したときは、印字して次に見るときに
- * やり直す（`--once` なら投げる）。重みを読めないときは、次に見ても読めないので投げる。
+ * 1 回見て、要るものをアップロードする。走りの状態か重みのファイルを読めないとき（走りがまだ始まっていない、
+ * 続きの前の片付けで消えた）と、アップロードに失敗したときは、印字して次に見るときにやり直す
+ * （`--once` なら投げる）。重みをエンジンが読めないときは、次に見ても読めないので投げる。
  */
-function publishOnce(options: Options, bucket: string, published: Map<string, string>): void {
+function publishOnce(
+  options: Options,
+  bucket: string,
+  published: Map<string, string>,
+  seenGate: { value: RunPointers["gate"] | null },
+): void {
+  const retry = (what: string, error: unknown): void => {
+    if (options.once) throw error;
+    console.log(`${clock()} ${what}。次に見るときにやり直す: ${messageOf(error)}`);
+  };
   let pointers: RunPointers;
   try {
     pointers = readRunPointers(options.run);
   } catch (error) {
-    if (options.once) throw error;
-    console.log(`${clock()} 走りの状態を読めない。次に見るときにやり直す: ${messageOf(error)}`);
+    retry("走りの状態を読めない", error);
     return;
+  }
+  if (seenGate.value !== pointers.gate) {
+    seenGate.value = pointers.gate;
+    console.log(
+      pointers.gate === "filter"
+        ? "ゲートが昇格を決める走り。ゲートを通った世代だけがいまの方策になる"
+        : "ゲートを測るだけの走り。ゲートの結果によらず、毎回の更新がいまの方策になる",
+    );
   }
   const files = new Map<string, { bytes: Buffer; sha256: string }>();
   const read = (weights: string): { bytes: Buffer; sha256: string } => {
@@ -235,16 +276,20 @@ function publishOnce(options: Options, bucket: string, published: Map<string, st
     }
     return file;
   };
-  for (const one of plan(pointers, (weights) => read(weights).sha256, published, options)) {
+  let uploads: Upload[];
+  try {
+    uploads = plan(pointers, (weights) => read(weights).sha256, published, options);
+  } catch (error) {
+    retry("重みのファイルを読めない", error);
+    return;
+  }
+  for (const one of uploads) {
     const { bytes, sha256 } = read(one.weights);
     const bot = checkLoads(one.name, bytes);
     try {
-      upload(bucket, one.name, join(options.run, one.weights), options.local);
+      upload(bucket, one.name, bytes, options.local);
     } catch (error) {
-      if (options.once) throw error;
-      console.log(
-        `${clock()} ${one.name} を上げられなかった。次に見るときにやり直す: ${messageOf(error)}`,
-      );
+      retry(`${one.name} をアップロードできなかった`, error);
       return;
     }
     published.set(one.name, sha256);

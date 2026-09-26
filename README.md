@@ -63,7 +63,9 @@ R2 へ置くのは写したほうのファイル（この例なら `migrated/ppo
 
 ### 学習の途中の方策と指す
 
-走っている学習のいまの方策（ゲートを通った世代）を、決まった名前へ上げ続ける。学習と同じ機械の別の端末で回す。
+走っている学習のいまの方策を、決まった名前へアップロードし続ける。学習と同じ機械の別の端末で回す。
+いまの方策は、ゲートが昇格を決める走り（`--gate=filter`）ではゲートを通った世代で、ゲートを測るだけの走り
+（`--gate=measure`）では毎回の更新である。
 
 ```sh
 npx tsx tools/publish-bots.ts ../poke-tcg-engine/runs/x --name=learning           # Cloudflare へ。5 分ごとに見る
@@ -72,8 +74,8 @@ npx tsx tools/publish-bots.ts ../poke-tcg-engine/runs/x --name=learning --local 
 
 画面の「AI と対戦する」で `learning` を選ぶと、そのときのいまの方策と指せる。10 世代ごとの世代も
 `learning-g10`、`learning-g20` のように残る（`--keep-every=0` で残さない）。見る間隔は `--every=<秒>`、1 回だけ上げるなら `--once`。
-上げる前にこのリポジトリのエンジンで重みを読むので、`engine/` が学習を回しているエンジンと同じ特徴の語彙でなければ止まる。
-Cloudflare へ上げた重みを本番で読むには、本番の Worker もこの `engine/` で出ている必要がある。
+アップロードする前にこのリポジトリのエンジンで重みを読むので、`engine/` が学習を回しているエンジンと同じ特徴の語彙でなければ止まる。
+Cloudflare へアップロードした重みを本番で読むには、本番の Worker もこの `engine/` で出ている必要がある。
 
 ## 検査
 
