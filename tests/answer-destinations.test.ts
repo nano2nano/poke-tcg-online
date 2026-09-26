@@ -24,6 +24,7 @@ import {
   createMatch,
   disguised,
   ownsDestination,
+  revealedDeckFor,
   submitMove,
   toMove,
   type AnswerDestination,
@@ -212,6 +213,30 @@ function toHandAnswers({ match, seat }: Played): number[] {
   );
 }
 
+/** 山札の上から何枚かを並びのまま見せて、そこから手札に加えるトレーナーズを使ったところ。 */
+function topCardsToHand(): Played {
+  ensureCards();
+  const found = [...loadGeneratedCards()]
+    .filter(
+      (def) =>
+        def.kind === "trainer" &&
+        (def.trainerKind === "supporter" || def.trainerKind === "item") &&
+        classifyDefId(def.defId) === "implemented",
+    )
+    .map((def) => def.defId)
+    .sort()
+    .map((trainer) => afterPlaying(trainer))
+    .find(
+      (played) =>
+        played !== null &&
+        played.match.effectReveals?.wholeDeck === null &&
+        (played.match.effectReveals?.pinned.length ?? 0) > 0 &&
+        toHandAnswers(played).length > 0,
+    );
+  if (found == null) throw new Error("上から何枚かを見せて手札に加える効果が見つからない");
+  return found;
+}
+
 describe("効果の選択で選んだカードの行き先", () => {
   it("手札に加える答えとポケモンにつける答えを見分け、どちらも実際の行き先と合う", () => {
     const played = afterPlaying(handThenAttach()) as Played;
@@ -382,7 +407,7 @@ describe("行き先を求めるときの差し替え", () => {
   it("山札全体を見せた効果では山札とサイドを混ぜず、山札にあるカードを無いことにしない", () => {
     // 座席は山札を見ているので、1 種類目を選べば、2 枚目に 2 種類目を選んで一方をつけられると知っている。
     const { match, energyA } = withOneOfSecond();
-    expect(match.effectReveals?.wholeDeck).toBe(true);
+    expect(Array.isArray(match.effectReveals?.wholeDeck)).toBe(true);
     const index = legalMoves(match.state).findIndex(
       (move) =>
         move.type === "AnswerChoice" &&
@@ -404,25 +429,7 @@ describe("行き先を求めるときの差し替え", () => {
   });
 
   it("山札の上から何枚かを並びのまま見せた効果では、その位置を動かさずに行き先を出す", () => {
-    ensureCards();
-    const found = [...loadGeneratedCards()]
-      .filter(
-        (def) =>
-          def.kind === "trainer" &&
-          (def.trainerKind === "supporter" || def.trainerKind === "item") &&
-          classifyDefId(def.defId) === "implemented",
-      )
-      .map((def) => def.defId)
-      .sort()
-      .map((trainer) => afterPlaying(trainer))
-      .find(
-        (played) =>
-          played !== null &&
-          played.match.effectReveals?.wholeDeck === false &&
-          (played.match.effectReveals?.pinned.length ?? 0) > 0 &&
-          toHandAnswers(played).length > 0,
-      );
-    if (found == null) throw new Error("上から何枚かを見せて手札に加える効果が見つからない");
+    const found = topCardsToHand();
     // 見せた窓を山札全体と混ぜると、選んだカードが窓の外へ出て、答えを試せなくなる。
     const destinations = answerDestinationsFor(found.match, found.seat) ?? [];
     for (const index of toHandAnswers(found)) {
@@ -453,5 +460,57 @@ describe("あとの選択でたどる行き先の持ち主", () => {
     expect(
       ownsDestination(match.state, seat, { to: "attached", target: theirs.inPlayId, cards: [] }),
     ).toBe(false);
+  });
+});
+
+describe("山札から選ぶあいだに見せる山札", () => {
+  const defIdsOf = (cards: readonly CardInstance[]): CardDefId[] =>
+    cards.map((card) => card.defId).sort();
+  const searchingDeck = (match: Match, seat: Player): boolean => {
+    const prompt = match.state.choices.at(-1)?.prompt;
+    return (
+      prompt?.kind === "selectFromHiddenZone" &&
+      prompt.zone.kind === "deck" &&
+      prompt.zone.player === seat
+    );
+  };
+
+  it("山札全体を見せた効果では、山札から選ぶ段ごとに、選ぶ座席にだけ今の山札の中身を渡す", () => {
+    const played = afterPlaying(handThenAttach()) as Played;
+    let searched = 0;
+    let otherwise = 0;
+    walk(played, ({ match, seat }) => {
+      expect(revealedDeckFor(match, (1 - seat) as Player)).toBeNull();
+      const shown = revealedDeckFor(match, seat);
+      if (!searchingDeck(match, seat)) {
+        // ポケモンにつける先を選ぶ段などでは出さない。
+        expect(shown).toBeNull();
+        otherwise += 1;
+        return;
+      }
+      expect([...(shown ?? [])].sort()).toEqual(defIdsOf(match.state.players[seat].deck));
+      searched += 1;
+    });
+    expect(searched).toBeGreaterThanOrEqual(1);
+    expect(otherwise).toBeGreaterThanOrEqual(1);
+    // 効果を終えたら出さない。
+    expect(revealedDeckFor(played.match, played.seat)).toBeNull();
+  });
+
+  it("見せたあとに山札を出たカードは除き、あとから入ったカードは足さない", () => {
+    const { match, seat } = afterPlaying(handThenAttach()) as Played;
+    const side = match.state.players[seat];
+    const [left, ...rest] = side.deck;
+    const [entered, ...hand] = side.hand;
+    if (left === undefined || entered === undefined) throw new Error("山札か手札が空");
+    const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
+    players[seat] = { ...side, deck: [...rest, entered], hand, discard: [...side.discard, left] };
+    match.state = { ...match.state, players };
+    expect([...(revealedDeckFor(match, seat) ?? [])].sort()).toEqual(defIdsOf(rest));
+  });
+
+  it("山札の上から何枚かを見せた効果では出さない", () => {
+    const { match, seat } = topCardsToHand();
+    expect(revealedDeckFor(match, seat)).toBeNull();
   });
 });

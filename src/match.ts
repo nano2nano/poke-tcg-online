@@ -861,14 +861,42 @@ export function answerDestinationsFor(
   return toMove(match) === seat ? match.answerDestinations : null;
 }
 
+/**
+ * 山札から選んでいるあいだ、この効果で見せた山札のうち、まだ山札にあるカード（3.2 節の `revealedDeck`）。
+ * 並びは見せた順で、山札の並びとは関係が無い。山札全体を見せていない効果と、ほかの局面では null。
+ *
+ * 選択の候補は条件に合うカードだけなので、画面はこれが無いと、山札を見て選ぶ効果で
+ * 選べないカードや残りの中身を座席へ見せられない。
+ */
+export function revealedDeckFor(match: Match, seat: Player): CardDefId[] | null {
+  const choice = match.state.choices.at(-1);
+  const reveals = match.effectReveals;
+  if (
+    toMove(match) !== seat ||
+    choice === undefined ||
+    reveals?.wholeDeck == null ||
+    choice.prompt.kind !== "selectFromHiddenZone" ||
+    choice.prompt.zone.kind !== "deck" ||
+    choice.prompt.zone.player !== seat
+  ) {
+    return null;
+  }
+  // 見せたあとに山札へ入ったカードは足さない。どこから入ったかで、座席が正体を知っているかが変わる。
+  const inDeck = new Set(match.state.players[seat].deck.map((card) => card.instanceId));
+  return reveals.wholeDeck.filter((card) => inDeck.has(card.instanceId)).map((card) => card.defId);
+}
+
 /** 1 つの効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード。 */
 export interface EffectReveals {
   owner: Player;
   /** 効果を起こしたカードのインスタンス ID。 */
   source: string;
   defIds: CardDefId[];
-  /** 山札全体を見せたか。エンジンは並びと関係の無い順で見せるので、座席は中身だけを知っている。 */
-  wholeDeck: boolean;
+  /**
+   * 山札全体を見せたときの、最後に見せた中身。見せていなければ null。
+   * エンジンは並びと関係の無い順で見せるので、座席は中身だけを知っている。
+   */
+  wholeDeck: CardInstance[] | null;
   /** 山札の一部として見せたカード（上から何枚かなど）。座席は位置も知っている。 */
   pinned: CardInstance[];
 }
@@ -895,7 +923,7 @@ export function answerDestinationsOf(
   // あとの選択までたどり、その先で山札の外の見えないカードに触れうるので、相手のカードも混ぜる。
   // この効果で山札全体を見せたなら、座席は山札に何があるかを知っているので、サイドとは混ぜない。
   // 混ぜると、山札にあるカードを無いことにしてしまう。並びのまま見せたカードは位置を動かさない。
-  const scope: DisguiseScope = { ownPrizes: shown?.wholeDeck !== true, rival: true };
+  const scope: DisguiseScope = { ownPrizes: shown?.wholeDeck == null, rival: true };
   const legal = legalMoves(state);
   let found: (AnswerDestination | null)[] = legal.map(() => null);
   for (let tried = 0; tried < DISGUISE_TRIES; tried++) {
@@ -1077,7 +1105,7 @@ function nextEffectReveals(
     owner: next.owner,
     source: next.source.instanceId,
     defIds: [...(kept?.defIds ?? [])],
-    wholeDeck: kept?.wholeDeck ?? false,
+    wholeDeck: kept?.wholeDeck ?? null,
     pinned: [...(kept?.pinned ?? [])],
   };
   const deck = applied.state.players[next.owner].deck;
@@ -1092,7 +1120,7 @@ function nextEffectReveals(
     }
     result.defIds.push(...event.cards.map((card) => card.defId));
     const shown = new Set(event.cards.map((card) => card.instanceId));
-    if (deck.every((card) => shown.has(card.instanceId))) result.wholeDeck = true;
+    if (deck.every((card) => shown.has(card.instanceId))) result.wholeDeck = [...event.cards];
     else result.pinned.push(...event.cards);
   }
   return result;

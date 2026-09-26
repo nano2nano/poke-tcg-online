@@ -22,7 +22,14 @@ let stateVersion = 0;
 /** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
 let lastView = null;
 /** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
-let lastMoves = { moves: null, playing: false, setup: null, placement: null, destinations: null };
+let lastMoves = {
+  moves: null,
+  playing: false,
+  setup: null,
+  placement: null,
+  destinations: null,
+  revealedDeck: null,
+};
 /** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
 let setupDraft = { active: null, bench: [], sent: false };
 /** 対戦準備で引き直すときに見せた手札。名前の表が遅れて届いたら描き直す。 */
@@ -266,6 +273,7 @@ function redraw() {
       lastMoves.setup,
       lastMoves.placement,
       lastMoves.destinations,
+      lastMoves.revealedDeck,
     );
     renderMulligans(lastMulligans);
   }
@@ -1454,6 +1462,7 @@ function receive(message) {
         message.setup,
         message.deckPlacement ?? null,
         message.answerDestinations ?? null,
+        message.revealedDeck ?? null,
       );
       // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
       renderMulligans(message.mulligans ?? lastMulligans);
@@ -1899,9 +1908,18 @@ function renderClock(clock) {
  * `setup` はサーバが送る準備の状態で、あるあいだは同じ選択を 1 手ずつ指すボタンを並べない。
  * `placement` は、選んだカードを山札の端へ順に置く選択のあいだだけサーバが送る（`deckPlacement`）。
  * `destinations` は、効果の選択のあいだサーバが送る、`moves` と同じ並びの行き先（`answerDestinations`）。
+ * `revealedDeck` は、山札全体を見て選ぶあいだだけサーバが送る、見ている山札の中身（`revealedDeck`）。
  */
-function renderMoves(moves, playing = true, setup = null, placement = null, destinations = null) {
-  lastMoves = { moves, playing, setup, placement, destinations };
+function renderMoves(
+  moves,
+  playing = true,
+  setup = null,
+  placement = null,
+  destinations = null,
+  revealedDeck = null,
+) {
+  lastMoves = { moves, playing, setup, placement, destinations, revealedDeck };
+  renderRevealedDeck(playing && moves !== null ? revealedDeck : null, moves);
   const prompt = $("move-prompt");
   prompt.textContent = !playing
     ? ""
@@ -1931,6 +1949,53 @@ function renderMoves(moves, playing = true, setup = null, placement = null, dest
     }
     container.append(button);
   }
+}
+
+/**
+ * 山札を見て選ぶ効果で、見ている山札を並べる。エンジンの候補は条件に合うカードだけなので、
+ * ボタンだけでは、選べないカードや、山札に何が残っていて何がサイドに落ちたかを読めない。
+ * 同じカードは 1 枚にまとめて枚数を添え、選べるカードのほかは暗くする。選ぶのは下のボタンで行う。
+ */
+function renderRevealedDeck(revealedDeck, moves) {
+  const box = $("revealed-deck");
+  box.hidden = revealedDeck === null;
+  if (revealedDeck === null) {
+    box.replaceChildren();
+    return;
+  }
+  box.dataset.count = String(revealedDeck.length);
+  const pickable = new Set(
+    moves.flatMap((move) =>
+      move.type === "AnswerChoice" && move.answer.kind === "cardDef" ? [move.answer.defId] : [],
+    ),
+  );
+  const counts = new Map();
+  for (const defId of revealedDeck) counts.set(defId, (counts.get(defId) ?? 0) + 1);
+  // サーバは山札の並びと関係の無い順で送るので、種類と名前で並べ直す。
+  const kinds = Object.keys(KINDS);
+  const rank = (defId) => {
+    const index = kinds.indexOf(cards[defId]?.kind);
+    return index === -1 ? kinds.length : index;
+  };
+  const defIds = [...counts.keys()].sort(
+    (a, b) => rank(a) - rank(b) || nameOf(a).localeCompare(nameOf(b), "ja"),
+  );
+  box.replaceChildren(
+    el("h3", "", `山札 ${revealedDeck.length} 枚`),
+    el(
+      "div",
+      "revealed-cards",
+      ...defIds.map((defId) => {
+        const face = zoomable(cardFace(defId), "山札", [defId]);
+        const can = pickable.has(defId);
+        face.dataset.pickable = String(can);
+        if (!can) face.append(el("span", "visually-hidden", "（選べません）"));
+        const item = el("div", "revealed-card", face, el("span", "", `×${counts.get(defId)}`));
+        item.dataset.count = String(counts.get(defId));
+        return item;
+      }),
+    ),
+  );
 }
 
 /**
