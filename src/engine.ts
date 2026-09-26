@@ -52,6 +52,7 @@ export type {
   PlayerView,
   SpectatorView,
   Viewer,
+  Zone,
 } from "../engine/src/index.js";
 
 /**
