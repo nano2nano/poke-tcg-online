@@ -66,13 +66,22 @@ describe("上げるもの", () => {
   const sha = (weights: string) => `sha-of-${weights}`;
   const options = { name: "learning", keepEvery: 10 };
 
-  it("残す世代を先に、いまの方策を最後に並べる", () => {
+  it("いまの方策を先に、残す世代をあとに並べる", () => {
     expect(plan(pointers, sha, new Map(), options)).toEqual([
+      { name: "learning", weights: "ppo-clip-g23.weights" },
       { name: "learning-g0", weights: "ppo-clip-g0.weights" },
       { name: "learning-g10", weights: "ppo-clip-g10.weights" },
       { name: "learning-g20", weights: "ppo-clip-g20.weights" },
-      { name: "learning", weights: "ppo-clip-g23.weights" },
     ]);
+  });
+
+  it("読めないファイルも候補に残す。読めないことはアップロードするときに知らせる", () => {
+    const unreadable = (weights: string) =>
+      weights === "ppo-clip-g10.weights" ? null : sha(weights);
+    const published = new Map([["learning-g10", sha("ppo-clip-g10.weights")]]);
+    expect(plan(pointers, unreadable, published, options).map((one) => one.name)).toContain(
+      "learning-g10",
+    );
   });
 
   it("同じ中身を上げた名前は上げ直さない。いまの方策が変われば上げる", () => {

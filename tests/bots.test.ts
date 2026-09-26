@@ -420,15 +420,20 @@ describe("AI の座席", () => {
     const bot = watched(arena, botFromBytes("e0", entityGenerationZero()));
     const arrived = vi.spyOn(RevisitTracker.prototype, "arrive");
     let match: Match | undefined;
-    const record = await playAgainst(arena, {
-      ...bot,
-      choose: (...args) => {
-        match = arena.registry.live()[0];
-        return bot.choose(...args);
-      },
-    });
-    const seen = arrived.mock.calls.map(([state]) => state);
-    arrived.mockRestore();
+    let record: MatchRecord;
+    let seen: unknown[];
+    try {
+      record = await playAgainst(arena, {
+        ...bot,
+        choose: (...args) => {
+          match = arena.registry.live()[0];
+          return bot.choose(...args);
+        },
+      });
+      seen = arrived.mock.calls.map(([state]) => state);
+    } finally {
+      arrived.mockRestore();
+    }
 
     expect(record.matchResult.kind).toBe("normal");
     expect(record.seats[1].bot).toEqual(bot.identity);
