@@ -67,10 +67,17 @@ async function openPair(
 /** アカウントは localStorage ごとに別なので、テストごとに新しい文脈を使えば混ざらない。 */
 test.describe.configure({ mode: "parallel" });
 
-/** 対戦に入る。デッキを空のままにするとサンプルデッキが使われる。 */
+/**
+ * 対戦に入る。デッキを空のままにするとサンプルデッキが使われる。
+ *
+ * 参加の返事が届くまで待つ。画面は送る前から「デッキを送っています」と出すので、見出しを待つだけでは
+ * 続けて入ったほうの参加が先にサーバへ着くことがあり、先に待っていたほうが座る座席 0 が入れ替わる。
+ */
 async function join(page: Page, room: string): Promise<void> {
   await page.fill("#room", room);
+  const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
+  await answered;
 }
 
 /**
