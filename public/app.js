@@ -1908,7 +1908,7 @@ function renderClock(clock) {
  * `setup` はサーバが送る準備の状態で、あるあいだは同じ選択を 1 手ずつ指すボタンを並べない。
  * `placement` は、選んだカードを山札の端へ順に置く選択のあいだだけサーバが送る（`deckPlacement`）。
  * `destinations` は、効果の選択のあいだサーバが送る、`moves` と同じ並びの行き先（`answerDestinations`）。
- * `revealedDeck` は、山札全体を見て選ぶあいだだけサーバが送る、見ている山札の中身（`revealedDeck`）。
+ * `revealedDeck` は、山札全体を見て選ぶあいだだけサーバが送る、見ている山札の中身。
  */
 function renderMoves(
   moves,
@@ -1954,8 +1954,8 @@ function renderMoves(
 /**
  * 山札を見て選ぶ効果で、見ている山札を並べる。エンジンの候補は条件に合うカードだけなので、
  * ボタンだけでは、選べないカードや、山札に何が残っていて何がサイドに落ちたかを読めない。
- * 同じカードは 1 枚にまとめて枚数を添え、選べるカードのほかは暗くする。選ぶのは下のボタンで行う。
- * 選べるカードを枠で囲まないのは、盤面のほかのカードと同じく押すと拡大するからで、囲むと押せば選べるように見える。
+ * 選ぶのは下のボタンで行い、選べるカードは枠で囲まない。盤面のほかのカードと同じく押すと拡大するので、
+ * 囲むと押せば選べるように見える。
  */
 function renderRevealedDeck(revealedDeck, moves) {
   const box = $("revealed-deck");
