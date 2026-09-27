@@ -118,6 +118,8 @@ describe("上げる前の読み込み", () => {
     ensureCards();
     const file = newEntityWeightsFile("test-entity");
     const vocabulary = { ...file.vocabulary, sub: [...file.vocabulary.sub.slice(0, -1), "無い語"] };
-    expect(() => checkLoads("e", encodeEntityWeights({ ...file, vocabulary }))).toThrow();
+    expect(() => checkLoads("e", encodeEntityWeights({ ...file, vocabulary }))).toThrow(
+      "語彙 sub がいまと違う",
+    );
   });
 });

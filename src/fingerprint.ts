@@ -36,7 +36,7 @@ export interface EngineFingerprint {
 }
 
 /**
- * ビルドのときに埋める値（`tools/build-worker.ts`、テストでは `vitest.config.ts`）。
+ * ビルドのときに埋める値（`vite.config.ts`、テストでは `vitest.config.ts`）。
  * Worker の中にはリポジトリのファイルも `git` も無いので、実行時には求められない。
  */
 declare const __ENGINE_COMMIT__: string;

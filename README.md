@@ -16,13 +16,14 @@
 
 ## 動かす
 
-Cloudflare Workers で動く。手元では `wrangler dev` が同じものを動かすので、Cloudflare のアカウントは要らない。
+Cloudflare Workers で動く。手元では `npm run dev`（Vite と Cloudflare のプラグイン）が同じものを workerd で動かすので、
+Cloudflare のアカウントは要らない。
 
 ```sh
 git clone --recurse-submodules https://github.com/nano2nano/poke-tcg-online
 cd poke-tcg-online
 npm ci
-npm run dev         # http://localhost:8787
+npm run dev         # http://localhost:5173
 ```
 
 `--recurse-submodules` を忘れた場合は `npm run engine:sync` でエンジンを取り込む。
@@ -80,7 +81,8 @@ Cloudflare へアップロードした重みを本番で読むには、本番の
 ## 検査
 
 ```sh
-npm run verify:all        # 型検査、書式、テスト
+npm run verify:all        # 型検査、書式、lint、テスト
+npm run lint              # oxlint（ルールと外した理由は .oxlintrc.json）
 npm test
 npm run test:e2e          # ブラウザで画面を動かす
 npm run replay:verify matches    # R2 から落とした対局ログを再生して検証する（docs/deploy.md）

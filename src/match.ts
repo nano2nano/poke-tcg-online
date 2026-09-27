@@ -1079,6 +1079,8 @@ export function movedTo(
           return { to: "evolved", target: event.target, cards: [event.card.defId] };
         }
         break;
+      default:
+        break;
     }
   }
   return reordered;

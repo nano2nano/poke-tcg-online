@@ -172,11 +172,13 @@ describe("重みから作る AI", () => {
       token: [...file.vocabulary.token.slice(0, -1), "無い語"],
     };
     const bytes = encodeEntityWeights({ ...file, vocabulary });
-    expect(() => botFromBytes("e0", bytes)).toThrow();
+    expect(() => botFromBytes("e0", bytes)).toThrow("語彙 token がいまと違う");
   });
 
   it("重みでないバイト列は読まない", () => {
-    expect(() => botFromBytes("x", new TextEncoder().encode("not weights"))).toThrow();
+    expect(() => botFromBytes("x", new TextEncoder().encode("not weights"))).toThrow(
+      "is not valid JSON",
+    );
   });
 });
 
@@ -467,11 +469,10 @@ describe("AI の座席", () => {
       identity: inner.identity,
       tracksKnowledge: false,
       calls: 0,
-      choose: inner.choose,
-    };
-    bot.choose = (view, legal, knowledge, extras) => {
-      bot.calls += 1;
-      return inner.choose(view, legal, knowledge, extras);
+      choose: (...args: Parameters<typeof inner.choose>) => {
+        bot.calls += 1;
+        return inner.choose(...args);
+      },
     };
     const { account, secret } = await arena.accounts.create("ひと", 0);
     const outcome = arena.lobby.joinBot(

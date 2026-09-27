@@ -2,7 +2,7 @@
  * エンジンの同一性を、手元のファイルから求める（`docs/spec/battle-server.md` 6.3 節）。
  *
  * Worker の中にはリポジトリのファイルも `git` も無い。そこでビルドのときにここで求めた値を
- * 埋め込む（`tools/build-worker.ts`）。テスト（`vitest.config.ts`）と手元の道具も同じ関数を通すので、
+ * 埋め込む（`vite.config.ts`）。テスト（`vitest.config.ts`）と手元の道具も同じ関数を通すので、
  * 対局ログに残る値と、それを読み返す側の値が食い違わない。
  */
 
@@ -50,7 +50,7 @@ export function cardIdsOf(cardDataText: string): string[] {
 }
 
 /**
- * `npm run deploy` を通さずに `wrangler deploy` を呼んでも、手を入れたエンジンで指した記録が
+ * `npm run deploy` の検査を通さずにビルドしても、手を入れたエンジンで指した記録が
  * 手を入れる前の commit を名乗らないようにする。
  */
 function commitOf(): string {

@@ -71,8 +71,8 @@ function seatOf(lobby: Lobby, ticket: string) {
 
 /** プレイヤーを 1 人作り、そのシークレットで入る要求を組む。 */
 async function player(arena: Pick<Arena, "accounts">, name: string, roomCode?: string) {
-  const deck = legalDecks()[0]!;
-  const { secret } = await await arena.accounts.create(name, 0);
+  const deck = legalDecks()[0];
+  const { secret } = await arena.accounts.create(name, 0);
   return roomCode === undefined ? { secret, deck } : { secret, deck, roomCode };
 }
 
@@ -107,7 +107,7 @@ describe("相手を見つける", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
-    const deck = legalDecks()[0]!;
+    const deck = legalDecks()[0];
     const { secret } = await arena.accounts.create("ふたつのタブ", 0);
 
     const first = await join(arena, { secret, deck });
@@ -128,7 +128,7 @@ describe("相手を見つける", () => {
     ensureCards();
     const arena = newArena();
     const { lobby } = arena;
-    const deck = legalDecks()[0]!;
+    const deck = legalDecks()[0];
     const { secret } = await arena.accounts.create("ふたつのタブ", 0);
 
     await join(arena, { secret, deck, roomCode: "へや" });
@@ -157,10 +157,10 @@ describe("相手を見つける", () => {
   it("記録に残るレーティングは、待ち始めた時点ではなく対戦が始まった時点のもの", async () => {
     ensureCards();
     const arena = newArena();
-    const { lobby, accounts } = arena;
+    const { accounts } = arena;
     const waiting = await accounts.create("さきに待つ人", 0);
     const other = await accounts.create("あとから来る人", 0);
-    const deck = legalDecks()[0]!;
+    const deck = legalDecks()[0];
 
     await join(arena, { secret: waiting.secret, deck, roomCode: "へや" });
     // 待っている間に、別のところで 1 局終わってレーティングが動く。
@@ -269,7 +269,7 @@ describe("席の引き換え", () => {
     expect(lobby.claim("そんなチケットは無い").kind).toBe("unknown");
 
     // こちらから降ろしたチケットだけが「降りている」になる。同じプレイヤーが別のタブから入り直す形。
-    const deck = legalDecks()[0]!;
+    const deck = legalDecks()[0];
     const { secret } = await arena.accounts.create("ふたつのタブ", 0);
     const first = await join(arena, { secret, deck, roomCode: "へや" });
     if (!first.ok) throw new Error("入れていない");
@@ -291,7 +291,7 @@ describe("席の引き換え", () => {
   it("席が溢れても、まだ対戦中の席は返し続ける", async () => {
     const arena = newArena();
     const { lobby } = arena;
-    const deck = legalDecks()[0]!;
+    const deck = legalDecks()[0];
     const seat = async (name: string): Promise<string> => {
       const a = (await arena.accounts.create(`${name}-a`, 0)).secret;
       const b = (await arena.accounts.create(`${name}-b`, 0)).secret;
@@ -318,7 +318,7 @@ describe("席の引き換え", () => {
   it("溢れても、終わったばかりの席までまとめて捨てない", async () => {
     const arena = newArena(4);
     const { lobby, registry } = arena;
-    const deck = legalDecks()[0]!;
+    const deck = legalDecks()[0];
     const seat = async (name: string): Promise<string> => {
       const a = (await arena.accounts.create(`${name}-a`, 0)).secret;
       const b = (await arena.accounts.create(`${name}-b`, 0)).secret;
@@ -362,7 +362,7 @@ describe("席の引き換え", () => {
   it("知らないチケットに `leave` を呼んでも、「降りている」にはならない", async () => {
     const arena = newArena();
     const { lobby } = arena;
-    const deck = legalDecks()[0]!;
+    const deck = legalDecks()[0];
     const { secret } = await arena.accounts.create("ひとり", 0);
 
     const mine = await join(arena, { secret, deck, roomCode: "へや" });

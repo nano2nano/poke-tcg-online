@@ -7,7 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import WebSocket from "ws";
+import { WebSocket } from "ws";
 import { INITIAL_RATING } from "../src/accounts.js";
 import { objectKey } from "../src/archive.js";
 import { engineFingerprint } from "../src/fingerprint.js";
@@ -115,7 +115,7 @@ function seatClient(seatToken: string, ended: (message: ServerMessage) => void):
   const socket = new WebSocket(`ws://${base}/ws?seatToken=${seatToken}`);
   opened.add(socket);
   socket.on("message", (raw) => {
-    const message = JSON.parse(String(raw)) as ServerMessage;
+    const message = JSON.parse((raw as Buffer).toString()) as ServerMessage;
     if (message.t === "ended") {
       ended(message);
       return;
@@ -252,47 +252,45 @@ describe("入れなかった理由", () => {
    * どちらかを足すたびに、ほかのテストと並んで走る CI で時間の上限へ近づく。
    */
   describe("どのエンドポイントでも、形の合わない本文は同じ形で断り、内側の例外メッセージを出さない", () => {
-    for (const path of malformedEndpoints) {
-      it(path, async () => {
-        const account = await postJson("/api/account", { displayName: "形が変な人" });
-        const secret = account.secret;
-        // 作れていないと、シークレットの欄が落ちた本文を送ることになり、見たい経路を通らない。
-        expect(typeof secret).toBe("string");
-        const [deck] = legalDecks();
-        // JSON として読めるが object ではないもの、object だが欄の型が違うもの、壊れた JSON。
-        const malformed: string[] = [
-          "null",
-          "7",
-          '"ただの文字列"',
-          "[1, 2, 3]",
-          "{",
-          JSON.stringify({ secret: null, deck }),
-          JSON.stringify({ secret, deck: { cards: "デッキ" } }),
-          JSON.stringify({ secret, deck: { cards: [1, 2] } }),
-          JSON.stringify({ secret, deck, displayName: null }),
-          JSON.stringify({ secret, deck, roomCode: 7 }),
-          JSON.stringify({ secret: 7 }),
-          JSON.stringify({ text: 7 }),
-          JSON.stringify({ matchId: 7, ply: "さいしょ" }),
-          JSON.stringify({ cards: [{ cardId: 7, count: 1 }] }),
-        ];
+    it.each(malformedEndpoints)("%s", async (path) => {
+      const account = await postJson("/api/account", { displayName: "形が変な人" });
+      const secret = account.secret;
+      // 作れていないと、シークレットの欄が落ちた本文を送ることになり、見たい経路を通らない。
+      expect(typeof secret).toBe("string");
+      const [deck] = legalDecks();
+      // JSON として読めるが object ではないもの、object だが欄の型が違うもの、壊れた JSON。
+      const malformed: string[] = [
+        "null",
+        "7",
+        '"ただの文字列"',
+        "[1, 2, 3]",
+        "{",
+        JSON.stringify({ secret: null, deck }),
+        JSON.stringify({ secret, deck: { cards: "デッキ" } }),
+        JSON.stringify({ secret, deck: { cards: [1, 2] } }),
+        JSON.stringify({ secret, deck, displayName: null }),
+        JSON.stringify({ secret, deck, roomCode: 7 }),
+        JSON.stringify({ secret: 7 }),
+        JSON.stringify({ text: 7 }),
+        JSON.stringify({ matchId: 7, ply: "さいしょ" }),
+        JSON.stringify({ cards: [{ cardId: 7, count: 1 }] }),
+      ];
 
-        for (const body of malformed) {
-          const response = await fetch(`http://${base}${path}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body,
-          });
-          // 形が合っていれば普通に答えてよい。落ちて 500 になっていないことがここの眼目である。
-          expect(response.status, `${path} ← ${body}`).toBeLessThan(500);
-          const answer = (await response.json()) as JsonBody;
-          const said = JSON.stringify(answer);
-          expect(said, `${path} ← ${body}`).not.toMatch(
-            /is not a function|Cannot read|TypeError|JSON at position|Unexpected token/,
-          );
-        }
-      });
-    }
+      for (const body of malformed) {
+        const response = await fetch(`http://${base}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        });
+        // 形が合っていれば普通に答えてよい。落ちて 500 になっていないことがここの眼目である。
+        expect(response.status, `${path} ← ${body}`).toBeLessThan(500);
+        const answer = (await response.json()) as JsonBody;
+        const said = JSON.stringify(answer);
+        expect(said, `${path} ← ${body}`).not.toMatch(
+          /is not a function|Cannot read|TypeError|JSON at position|Unexpected token/,
+        );
+      }
+    });
   });
 
   /**

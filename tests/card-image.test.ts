@@ -162,8 +162,8 @@ describe("Worker の配線", () => {
     // 公式へは読みに行かせずに、転送の処理まで届いていることだけを見る。
     const refused = await fetch(`http://${on.host}/api/card-image/abc`, { redirect: "manual" });
     expect(refused.status).toBe(404);
-    const off = await fetch(`http://${on.host}/api/card-image/abc`);
-    expect(await off.json()).not.toMatchObject({ code: "card-images-off" });
+    const followed = await fetch(`http://${on.host}/api/card-image/abc`);
+    expect(await followed.json()).not.toMatchObject({ code: "card-images-off" });
   });
 
   it("カードの表に、画像を頼むための cardID が載る", async () => {

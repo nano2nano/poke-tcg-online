@@ -112,11 +112,11 @@ npm run deploy
 ## 手元で動かす
 
 ```sh
-npm run dev      # http://localhost:8787
+npm run dev      # http://localhost:5173
 ```
 
 D1 と R2 は手元の偽物で動き、中身は `.wrangler/` に残る。Cloudflare のアカウントは要らない。
-カードの画像を切って動かすなら `npx wrangler dev --var CARD_IMAGES:off` にする。
+カードの画像を切って動かすなら、`npm run build` でビルドしてから `npx wrangler dev --var CARD_IMAGES:off` にする。
 
 ## 対局ログを取ってくる
 

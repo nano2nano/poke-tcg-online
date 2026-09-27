@@ -27,6 +27,7 @@ import { loadGeneratedCards } from "../src/engine.js";
  * テストが自分の仕掛けで落ちる。ここで見たいのは、握られずに飛んだ例外だけである。
  */
 const test = base.extend<{ pageErrors: string[] }>({
+  // oxlint-disable-next-line no-empty-pattern -- Playwright は第 1 引数の分割代入から使う fixture を読み取るので、空でも書く。
   pageErrors: async ({}, use) => {
     const errors: string[] = [];
     await use(errors);
@@ -550,14 +551,14 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
 
   const view = held.last!.view;
   const target = view.self.active.inPlayId as string;
-  const base = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
+  const header = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
   held.client!.send(
     JSON.stringify({
       ...held.last,
       t: "delta",
       events: [
         {
-          ...base,
+          ...header,
           actor: view.viewer,
           source: null,
           kind: "coin-flipped",
@@ -565,7 +566,7 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
           results: [true, false, true],
         },
         {
-          ...base,
+          ...header,
           actor: 1 - view.viewer,
           source: null,
           kind: "damage-dealt",
@@ -577,7 +578,7 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
         },
         // 結果を溢れさせる。古いものから消すときに、コインを先に消さない。
         ...Array.from({ length: 4 }, () => ({
-          ...base,
+          ...header,
           actor: null,
           source: null,
           kind: "turn-started",
@@ -601,8 +602,8 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
   // コインで埋まっていても、あとから届いた結果は出す。続けて取ったサイドは記録でも 1 行に畳む。
   const logged = await a.locator("#events li").count();
   const opponent = 1 - view.viewer;
-  const coin = { ...base, actor: opponent, source: null, kind: "coin-flipped", player: opponent };
-  const prize = { ...base, actor: opponent, source: null, kind: "prize-taken-hidden" };
+  const coin = { ...header, actor: opponent, source: null, kind: "coin-flipped", player: opponent };
+  const prize = { ...header, actor: opponent, source: null, kind: "prize-taken-hidden" };
   held.client!.send(
     JSON.stringify({
       ...held.last,
@@ -891,7 +892,7 @@ test("終わった座席を捨てても、別のタブが置いた座席は残�
   await stale.routeWebSocket(/\/ws\?/, async (ws) => {
     await fresh.evaluate((seat) => localStorage.setItem("poke-seat", seat), next);
     ws.send(JSON.stringify({ t: "error", message: "座席が見つからない", code: "seat-not-found" }));
-    ws.close();
+    void ws.close();
   });
   await stale.reload();
 
@@ -944,10 +945,7 @@ test("横に広い画面では、対戦のあいだリプレイの欄を出さ�
   await expect(a.locator("#history")).toBeHidden();
   // ページがスクロールできると、盤面の上でホイールを回したときに盤面ごとずれる。
   expect(
-    await a.evaluate(() => {
-      const root = Reflect.get(globalThis, "document").documentElement as { scrollHeight: number };
-      return root.scrollHeight - (Reflect.get(globalThis, "innerHeight") as number);
-    }),
+    await a.evaluate(() => document.documentElement.scrollHeight - innerHeight),
   ).toBeLessThanOrEqual(0);
 
   a.once("dialog", (dialog) => void dialog.accept());
@@ -1013,7 +1011,7 @@ test("対戦中に切れたら、読み込み直さずに同じ座席へ繋ぎ�
     const server = client.connectToServer();
     server.onMessage((raw) => {
       client.send(raw);
-      if (first && JSON.parse(String(raw)).t === "sync") client.close();
+      if (first && JSON.parse(String(raw)).t === "sync") void client.close();
     });
   });
 
@@ -1053,7 +1051,7 @@ test("繋ぎ直すあいだに対戦が終わっていたら、マッチング�
     const server = client.connectToServer();
     server.onMessage((raw) => {
       client.send(raw);
-      if (first && JSON.parse(String(raw)).t === "sync") client.close();
+      if (first && JSON.parse(String(raw)).t === "sync") void client.close();
     });
   });
 
@@ -1124,7 +1122,7 @@ test("繋ぎ直しを待っているタブは、同じ座席を別のタブが�
     client.connectToServer();
   });
   await seatPair(a, b, room);
-  (first as WebSocketRoute | null)?.close();
+  await (first as WebSocketRoute | null)?.close();
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
 
   const other = watch(await a.context().newPage(), pageErrors);
@@ -1149,7 +1147,7 @@ test("繋がらないあいだは、間隔を空けて繋ぎ直す", async ({ pa
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     opened += 1;
     ws.send(JSON.stringify({ t: "pending" }));
-    ws.close();
+    void ws.close();
   });
   await page.reload();
 
@@ -1298,7 +1296,7 @@ test("観戦中に切れたら、繋ぎ直して続きを映す", async ({ brows
     const server = client.connectToServer();
     server.onMessage((raw) => {
       client.send(raw);
-      if (first && JSON.parse(String(raw)).t === "spectator-sync") client.close();
+      if (first && JSON.parse(String(raw)).t === "spectator-sync") void client.close();
     });
   });
   await watcher.goto(link);
@@ -1390,7 +1388,7 @@ test("相手のシェアを待っているあいだに切れても、席を覚�
       client.send(raw);
       if (JSON.parse(String(raw)).t === "pending") {
         pendingSeen = true;
-        client.close();
+        void client.close();
       }
     });
   });
@@ -1594,7 +1592,7 @@ test("同じ名前のカードが並びきらなくても、ワザの名前を�
     .sort()
     .reverse()
     .find((defId) => (cards[defId]?.attacks ?? []).length > 0) as string;
-  const attack = (cards[target]?.attacks as string[])[0] as string;
+  const attack = cards[target]?.attacks?.[0] as string;
 
   await page.fill("#card-search", `${toHiragana(name)} ${attack}`);
   await expect(page.locator(`#card-results .card-row[data-def-id="${target}"]`)).toBeVisible();
@@ -1962,17 +1960,15 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   // 盤面の描き直しと同じく、載せているカードを差し替える。閉じずに、マウスの下に来た方へ移る。
   const hides = await preview.evaluateHandle((node) => {
     const seen = { count: 0 };
-    // この tsconfig は DOM の型を読まないので、ページの側から引く。
-    const Observer = Reflect.get(globalThis, "MutationObserver");
-    new Observer(() => {
-      if (node.hidden) seen.count += 1;
+    new MutationObserver(() => {
+      if (node instanceof HTMLElement && node.hidden) seen.count += 1;
     }).observe(node, { attributes: true, attributeFilter: ["hidden"] });
     return seen;
   });
   const other = "差し替えたカード";
-  await card.evaluate((node, defId) => {
+  await card.evaluate((node, replacedDefId) => {
     const replacement = node.cloneNode() as typeof node;
-    replacement.dataset.defId = defId;
+    replacement.dataset.defId = replacedDefId;
     node.replaceWith(replacement);
   }, other);
   await expect(preview.locator(".card")).toHaveAttribute("data-def-id", other);
@@ -2151,8 +2147,8 @@ test("公式サイトの返事を待つあいだにデッキを組み替えた�
  */
 function crowdedSync(handSize: number): object {
   const defs = loadGeneratedCards();
-  const pick = (test: (def: (typeof defs)[number]) => boolean): string =>
-    (defs.find(test) as (typeof defs)[number]).defId;
+  const pick = (matches: (def: (typeof defs)[number]) => boolean): string =>
+    (defs.find(matches) as (typeof defs)[number]).defId;
   const basic = pick((def) => def.kind === "pokemon" && def.evolutionStage === "basic");
   const stage2 = pick((def) => def.kind === "pokemon" && def.evolutionStage === "stage2");
   const energy = pick((def) => def.kind === "energy");
@@ -2290,13 +2286,10 @@ for (const viewport of [
     // 手札は枚数の見出しまで含めて、名前のために空けた幅の内側に収める。中身の見えない側も同じ。
     for (const side of ["#opponent", "#self"]) {
       const edges = await page.locator(`${side} [data-zone="hand"]`).evaluate((zone) => {
-        // この tsconfig は DOM の型を読まないので、ページの側から引く。
-        const style = Reflect.get(globalThis, "getComputedStyle") as (node: unknown) => {
-          paddingRight: string;
-        };
         return {
           label: zone.querySelector(".zone-label")!.getBoundingClientRect().right,
-          inner: zone.getBoundingClientRect().right - parseFloat(style(zone).paddingRight),
+          inner:
+            zone.getBoundingClientRect().right - parseFloat(getComputedStyle(zone).paddingRight),
         };
       });
       expect(edges.label, side).toBeLessThanOrEqual(edges.inner + 0.5);
@@ -2595,7 +2588,7 @@ test("山札全体を見て選ぶあいだは、見ている山札を並べ、�
   const pickable = deck.locator('.card[data-pickable="true"]');
   await expect(pickable).toHaveCount(2);
   expect(
-    await pickable.evaluateAll((faces) => faces.map((face) => face.dataset.defId).sort()),
+    await pickable.evaluateAll((faces) => faces.map((face) => face.dataset.defId ?? "").sort()),
   ).toEqual([a, b].sort());
   // 選ぶのはボタンのまま。
   await expect(page.locator("#moves button")).toHaveCount(2);

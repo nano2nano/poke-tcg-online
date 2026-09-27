@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import { WebSocket } from "ws";
 import { startWorker, type TestWorker } from "./worker.js";
 import { ensureCards, legalDecks } from "./helpers.js";
 
@@ -65,7 +65,9 @@ interface Opened {
 async function open(seatToken: string): Promise<Opened> {
   const socket = new WebSocket(`ws://${base}/ws?seatToken=${encodeURIComponent(seatToken)}`);
   const seen: Record<string, any>[] = [];
-  socket.on("message", (raw) => seen.push(JSON.parse(String(raw)) as Record<string, any>));
+  socket.on("message", (raw) =>
+    seen.push(JSON.parse((raw as Buffer).toString()) as Record<string, any>),
+  );
   let read = 0;
   const opened: Opened = {
     socket,
@@ -207,9 +209,9 @@ describe("対戦準備をまとめて出す 1 通", () => {
       seats = await Promise.all(tokens.map((token) => open(token)));
       for (const seat of seats) seat.socket.send(JSON.stringify({ t: "hello" }));
       syncs = await Promise.all(seats.map((seat) => seat.next()));
-      const kinds = syncs.map((sync) => sync.setup?.kind ?? null);
+      const kinds = new Set(syncs.map((sync) => sync.setup?.kind ?? null));
       const fresh = syncs.every((sync) => sync.mulligans.length === 0);
-      if (kinds.includes("choose") && kinds.includes(null) && fresh) break;
+      if (kinds.has("choose") && kinds.has(null) && fresh) break;
       for (const seat of seats) seat.socket.close();
     }
     const ahead = syncs.findIndex((sync) => sync.setup?.kind === "choose");

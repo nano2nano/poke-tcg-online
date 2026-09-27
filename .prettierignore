@@ -1,2 +1,4 @@
 engine/
 node_modules/
+# TanStack Router が作る。手で整えても次のビルドで書き戻される。
+web/routeTree.gen.ts

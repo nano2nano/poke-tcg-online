@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import WebSocket from "ws";
+import { WebSocket } from "ws";
 import { startWorker, type TestWorker } from "./worker.js";
 import { createApp, SILENCE_LIMIT_MS, type AppSocket } from "../src/app.js";
 import type { AccountStore } from "../src/accounts.js";
@@ -65,7 +65,7 @@ describe("1 通の大きさ", () => {
     // **落ちるのはこの接続だけである。** ほかの接続はそのまま繋がる。
     const next = new WebSocket(`ws://${base}/ws?seatToken=${await seatToken("まきぞえ")}`);
     const sync = new Promise<string>((resolve) =>
-      next.on("message", (raw) => resolve(String(raw))),
+      next.on("message", (raw) => resolve((raw as Buffer).toString())),
     );
     expect(await sync).toContain('"t":"sync"');
     next.close();
@@ -79,7 +79,7 @@ describe("1 通の大きさ", () => {
      */
     const answer = new Promise<string>((resolve) => {
       socket.on("message", (raw) => {
-        const message = JSON.parse(String(raw)) as { t: string; message?: string };
+        const message = JSON.parse((raw as Buffer).toString()) as { t: string; message?: string };
         if (message.t === "error") resolve(message.message ?? "");
       });
       socket.on("close", (code) => resolve(`closed:${code}`));

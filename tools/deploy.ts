@@ -22,6 +22,10 @@ if (engineHasLocalChanges()) {
 }
 
 process.stdout.write(`エンジン ${commit} で出す\n`);
+// `wrangler deploy` は `vite build` が書き出した設定（`dist/server/wrangler.json`）を読む。
+// ビルドせずに呼ぶと、前にビルドした古い Worker か、カードデータを埋め込んでいない Worker が出る。
+const built = spawnSync("npx", ["vite", "build"], { stdio: "inherit" });
+if (built.status !== 0) process.exit(built.status ?? 1);
 const result = spawnSync("npx", ["wrangler", "deploy", ...process.argv.slice(2)], {
   stdio: "inherit",
 });

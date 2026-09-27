@@ -18,7 +18,7 @@ import {
   playerView,
   projectEvents,
 } from "./engine.js";
-import type { DomainEvent, GameState, Move, Player, PlayerEvent, PlayerView } from "./engine.js";
+import type { DomainEvent, GameState, Move, PlayerEvent, PlayerView } from "./engine.js";
 import {
   engineFingerprint,
   OLDEST_REPLAYABLE_SCHEMA_VERSION,

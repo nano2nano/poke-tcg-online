@@ -2,15 +2,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "poke-tcg-online",
-  "main": "dist/worker.js",
+  // ビルドは `vite build` が行い、`wrangler deploy` はその出力（`dist/server/wrangler.json`）を読む。
+  // ビルドせずに `wrangler deploy` を直に呼ぶと、前にビルドした古い Worker が出る。出すのは `npm run deploy` から。
+  "main": "web/server.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  // エンジンのカードデータを埋め込むために、組み立ては自前で行う（`tools/build-worker.ts`）。
-  "build": {
-    "command": "npx tsx tools/build-worker.ts",
-    "watch_dir": ["src", "engine/src", "engine/data"],
-  },
-  // Worker を通るのは API と WebSocket だけにする。画面の配信は Worker の要求に数えられない。
+  // 画面は静的アセットで返し、Worker を先に通すのは API と WebSocket だけにする。画面の配信は Worker の要求に数えられない。
   "assets": {
     "directory": "public",
     "run_worker_first": ["/api/*", "/ws"],

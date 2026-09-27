@@ -20,10 +20,13 @@ export interface TestWorker {
   close(): Promise<void>;
 }
 
-/** `vars` は `wrangler.jsonc` の `vars` に重ねる。テストごとに上限の値を変えるのに使う。 */
+/**
+ * `vars` は `wrangler.jsonc` の `vars` に重ねる。テストごとに上限の値を変えるのに使う。
+ * 読むのはビルドの出力の設定で、ビルドは `tests/global-setup.ts` が先に済ませている。
+ */
 export async function startWorker(vars: Record<string, string> = {}): Promise<TestWorker> {
   const harness = createTestHarness({
-    workers: [{ configPath: new URL("../wrangler.jsonc", import.meta.url), vars }],
+    workers: [{ configPath: new URL("../dist/server/wrangler.json", import.meta.url), vars }],
   });
   const { url } = await harness.listen();
   const worker = harness.getWorker();
