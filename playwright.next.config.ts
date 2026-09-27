@@ -10,6 +10,8 @@ import base, { ORIGIN } from "./playwright.config.js";
 export default defineConfig({
   ...base,
   testMatch: "client.spec.ts",
+  // いまの画面の結果（落ちたときの trace）を上書きしない。
+  outputDir: "test-results-next",
   projects: [{ name: "next", use: { ...devices["Desktop Chrome"] } }],
   use: { ...base.use, baseURL: `${ORIGIN}${BASEPATH}/` },
 });

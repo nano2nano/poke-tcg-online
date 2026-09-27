@@ -4,12 +4,13 @@
  */
 
 import { expect, test } from "@playwright/test";
+import { BASEPATH } from "../web/basepath.js";
 
 test("新しい画面は /next/ で描け、いまの画面は / に残る", async ({ page }) => {
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
 
-  await page.goto("/next/");
+  await page.goto(`${BASEPATH}/`);
   await expect(page.locator("#next-home")).toBeVisible();
 
   await page.goto("/");
