@@ -85,7 +85,7 @@ npm run verify:all        # 型検査、書式、lint、テスト
 npm run lint              # oxlint（ルールと外した理由は .oxlintrc.json）
 npm test
 npm run test:e2e          # ブラウザで画面を動かす
-npm run test:e2e:next     # 同じテストを作り直している画面（/next/）へ向ける。入れ替えるまでは落ちてよい
+npm run test:e2e:next     # 同じテストを作り直している画面（/next/）へ向ける。CI では回さない
 npm run replay:verify matches    # R2 から落とした対局ログを再生して検証する（docs/deploy.md）
 ```
 
@@ -98,7 +98,6 @@ npm run replay:verify matches    # R2 から落とした対局ログを再生し
 `.github/workflows/verify.yml` が push と pull request で `npm run verify:all` を回す。
 job の名前は `verify` で、ブランチ保護の required check はこれを指す。
 main では、そのあと deploy の job が本番へ出す（`docs/deploy.md`）。
-`.github/workflows/e2e-next.yml` は `web/` や配信の設定を触る PR で `npm run test:e2e:next` を回す。required check には入れていない。
 
 エンジンは private なので、submodule の取得だけ deploy key（読み取り専用の SSH 秘密鍵）で行う。
 鍵は Actions secret の `ENGINE_DEPLOY_KEY` に置く。リポジトリ自身の checkout には既定の
