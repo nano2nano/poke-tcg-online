@@ -1,4 +1,4 @@
-# エンジン（private な submodule）を deploy key で取る。verify と deploy の両方の job が使う。
+# エンジン（private な submodule）を deploy key で取る。verify と deploy の job、e2e-next のワークフローが使う。
 #
 # リポジトリ自身の checkout は呼ぶ側で、既定のトークンで済ませておくこと。鍵が要るのは
 # submodule の 1 行だけで、範囲をそこへ閉じる。
