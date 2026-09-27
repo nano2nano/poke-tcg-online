@@ -75,14 +75,10 @@ export const createAccountSchema = z.object({
   displayName: z.string().optional(),
 });
 
-export const resolveDecklistSchema = z.object({
-  text: z.string(),
-});
-
 /**
  * 公式サイトのデッキコードから画面が読んだカード ID と枚数。合計がデッキの枚数を越えていても
  * 読み込み、どこが多いかは検査の結果で見せる。上限は巨大な配列を作らせないためのもので、
- * 種類の数と 1 種類の枚数に置く（5.3 節の行数の上限と同じ考え）。
+ * 種類の数と 1 種類の枚数に置く。
  */
 export const officialDeckSchema = z.object({
   cards: z

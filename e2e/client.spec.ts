@@ -1560,34 +1560,19 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
   await close();
 });
 
-test("テキストの同じ名前の行は、候補を選ぶとデッキに入る", async ({ page }) => {
+test("減らしきった行は、デッキから消える", async ({ page }) => {
   await page.goto("/");
-  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
-    string,
-    { name: string }
-  >;
-  const byName = new Map<string, string[]>();
-  for (const [defId, card] of Object.entries(cards)) {
-    byName.set(card.name, [...(byName.get(card.name) ?? []), defId]);
-  }
-  const [name, defIds] = [...byName].find(([, ids]) => ids.length > 1) as [string, string[]];
+  const [entry] = await sampleDeckEntries(page);
+  if (entry === undefined) throw new Error("サンプルデッキが空");
+  const { defId, name, set, number } = entry;
+  await page.fill("#card-search", `${name} ${[set, number].filter(Boolean).join(" ")}`);
+  const add = page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`);
+  for (let i = 0; i < 2; i++) await add.click();
+  const row = page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`);
+  await expect(row.locator(".card-count")).toHaveText("2");
 
-  await page.click(".deck-text summary");
-  // 枚数を先に書いた行でも、選んだ defId が名前の一部として読まれないこと。
-  await page.fill("#decklist", `4 ${name}`);
-  await page.click("#import-button");
-  const choices = page.locator("#deck-status .choices button");
-  await expect(choices).toHaveCount(defIds.length);
+  for (let i = 0; i < 2; i++) await row.locator("button.remove").click();
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(0);
-
-  await choices.nth(1).click();
-  const row = page.locator("#deck-cards .card-row");
-  await expect(row).toHaveCount(1);
-  await expect(row.locator(".card-count")).toHaveText("4");
-
-  // 減らしきった行は消える。
-  for (let i = 0; i < 4; i++) await row.locator("button.remove").click();
-  await expect(row).toHaveCount(0);
 });
 
 test("同じ名前のカードが並びきらなくても、ワザの名前を打ち足せば絞れる", async ({ page }) => {
@@ -1654,22 +1639,6 @@ test("カードの一覧を 1 度取れなくても、取り直して組める�
   await expect(page.locator("#card-results .card-row").first()).toBeVisible({ timeout: 15_000 });
 });
 
-test("テキスト欄に読み込んでいないリストがあれば、対戦に入らない", async ({ page }) => {
-  const joins: string[] = [];
-  page.on("request", (request) => {
-    if (request.url().endsWith("/api/join")) joins.push(request.url());
-  });
-  await page.goto("/");
-  await page.click(".deck-text summary");
-  await page.fill("#decklist", "貼ったまま 4");
-  await page.click("#join-button");
-
-  // 進めると、貼ったリストではなくサンプルデッキで対戦が始まる。
-  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
-  await expect(page.locator("#join-status")).not.toBeEmpty();
-  expect(joins).toEqual([]);
-});
-
 test("カードの一覧が空で届いても、検索で固まらない", async ({ page }) => {
   await page.route("**/api/cards", (route) => route.fulfill({ json: {} }));
   await page.goto("/");
@@ -1677,30 +1646,6 @@ test("カードの一覧が空で届いても、検索で固まらない", async
   await expect(page.locator("#card-results .note")).toBeVisible();
   // 描き直しが止まらないと、ページはこれに答えない。
   expect(await page.evaluate(() => 1)).toBe(1);
-});
-
-test("候補を出したあとにテキストを書き換えていたら、候補を押しても読み込まない", async ({
-  page,
-}) => {
-  await page.goto("/");
-  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
-    string,
-    { name: string }
-  >;
-  const counts = new Map<string, number>();
-  for (const card of Object.values(cards)) counts.set(card.name, (counts.get(card.name) ?? 0) + 1);
-  const names = [...counts].filter(([, count]) => count > 1).map(([name]) => name);
-
-  await page.click(".deck-text summary");
-  await page.fill("#decklist", `${names[0]} 4`);
-  await page.click("#import-button");
-  await expect(page.locator("#deck-status .choices button").first()).toBeVisible();
-  // 同じ行を、別の名前に書き換えてから押す。
-  await page.fill("#decklist", `${names[1]} 4`);
-  await page.locator("#deck-status .choices button").first().click();
-
-  await expect(page.locator("#deck-cards .card-row")).toHaveCount(0);
-  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
 });
 
 test("キーボードで「追加」を続けて押せて、押せなくなったら検索欄へ戻る", async ({ page }) => {

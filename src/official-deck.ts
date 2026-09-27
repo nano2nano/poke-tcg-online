@@ -3,12 +3,12 @@
  * （`docs/spec/battle-server.md` 5.4 節）。
  *
  * カード ID はエンジンの `prints` が持つ値と同じなので、名前と違って
- * ほぼ一意に `defId` が決まる。決まらない ID は、名前のときと同じく推測せず候補を返す。
+ * ほぼ一意に `defId` が決まる。決まらない ID は、推測せず候補を返す（5.3 節）。
  */
 
 import type { CardDef, CardDefId } from "./engine.js";
 import { loadGeneratedCards } from "./engine.js";
-import { choiceOf, type CardChoice } from "./decklist.js";
+import { choiceOf, type CardChoice } from "./card-index.js";
 
 export interface OfficialCard {
   cardId: string;

@@ -347,11 +347,6 @@ $("check-button").addEventListener("click", () => {
 
 $("card-search").addEventListener("input", renderSearch);
 
-$("import-button").addEventListener("click", () => {
-  if (deckEntries.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
-  importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
-});
-
 $("deck-code-button").addEventListener("click", () => {
   if (deckEntries.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
   const button = $("deck-code-button");
@@ -378,7 +373,7 @@ window.addEventListener("storage", (event) => {
   deckEntries = loadDeck();
   renderDeck();
   renderSearch();
-  // 「規則を通ります」は古くなるので消す。候補のボタンはテキスト欄のものなので残す。
+  // 「規則を通ります」は古くなるので消す。
   if ($("deck-status").classList.contains("ok")) showDeckStatus([], "");
 });
 
@@ -647,7 +642,6 @@ async function verifyShuffle(seated, ended) {
 }
 
 async function deckToSubmit() {
-  if (hasPendingText()) return null;
   if (deckEntries.length === 0) {
     showDeckStatus(["サンプルデッキで対戦します。"], "ok");
     return getJson("/api/sample-deck");
@@ -656,7 +650,6 @@ async function deckToSubmit() {
 }
 
 async function checkDeck() {
-  if (hasPendingText()) return null;
   if (deckEntries.length === 0) {
     showDeckStatus(["デッキにカードがありません。"], "ng");
     return null;
@@ -672,54 +665,8 @@ async function validateBuiltDeck() {
   return null;
 }
 
-/**
- * テキスト欄に、読み込んでいないリストが残っているか。
- *
- * 残したまま押されたら止める。組んだデッキだけを見て進めると、貼ったリストとは別のデッキ
- * （空ならサンプルデッキ）で対戦が始まる。黙って読み込むと、組んだデッキが黙って消える。
- */
-function hasPendingText() {
-  if ($("decklist").value.trim() === "") return false;
-  $("decklist").closest("details").open = true;
-  showDeckStatus(
-    [
-      "テキスト欄に読み込んでいないリストがあります。「読み込む」を押すか、テキストを消してください。",
-    ],
-    "ng",
-  );
-  return true;
-}
-
 function deckCards() {
   return deckEntries.flatMap((entry) => Array(entry.count).fill(entry.defId));
-}
-
-/**
- * 書いたテキストをサーバに解決させて、デッキと置き換える。名前から defId は一意に
- * 決まらないので、選べなかった行には候補をそのまま並べる。こちらでは推測しない。
- */
-async function importText() {
-  const text = $("decklist").value;
-  if (text.trim() === "") {
-    showDeckStatus(["テキストが空です。"], "ng");
-    return;
-  }
-  const outcome = await postJson("/api/deck/resolve", { text });
-  if (outcome.entries === undefined) {
-    showDeckStatus(outcome.errors ?? ["読み込めませんでした。"], "ng", outcome.failures ?? []);
-    return;
-  }
-  // 名前がすべて決まれば、枚数や構築の規則に通らなくても読み込む。足りない分は検索から足せばよい。
-  const merged = [];
-  for (const { defId, count } of outcome.entries) {
-    const same = merged.find((entry) => entry.defId === defId);
-    if (same === undefined) merged.push({ defId, count });
-    else same.count += count;
-  }
-  setDeck(merged);
-  $("decklist").value = "";
-  if (outcome.ok) showDeckStatus([`デッキは ${deckCards().length} 枚で、規則を通ります。`], "ok");
-  else showDeckStatus(outcome.errors, "ng");
 }
 
 /**
@@ -883,8 +830,7 @@ async function fetchOfficialDeck(code) {
   return { cards, names };
 }
 
-/** 違反の一覧。曖昧な行だけは、選べる候補を押せる形で出す。 */
-function showDeckStatus(messages, tone, failures = []) {
+function showDeckStatus(messages, tone) {
   const box = $("deck-status");
   box.innerHTML = "";
   box.className = `deck-status ${tone}`;
@@ -892,19 +838,6 @@ function showDeckStatus(messages, tone, failures = []) {
     const line = document.createElement("p");
     line.textContent = message;
     box.append(line);
-  }
-  for (const failure of failures) {
-    if (failure.kind !== "ambiguous") continue;
-    const list = document.createElement("div");
-    list.className = "choices";
-    for (const choice of failure.choices) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = `${failure.name}（${describeCard(choice) || choice.defId}）`;
-      button.addEventListener("click", () => pickChoice(failure.line, failure.name, choice.defId));
-      list.append(button);
-    }
-    box.append(list);
   }
 }
 
@@ -932,32 +865,6 @@ function describeCard(card) {
   if (card.aceSpec) parts.push("ACE SPEC");
   parts.push([card.set, card.number].filter(Boolean).join(" "));
   return parts.filter(Boolean).join(" / ");
-}
-
-/**
- * 選んだ候補の `defId` をその行に書き足す。`defId` を読めるのは「名前 枚数 defId」の形だけなので、
- * 「枚数 名前」で書かれた行も並べ替える。うしろに足すだけだと `defId` が名前の一部として読まれる。
- */
-function pickChoice(line, name, defId) {
-  const lines = $("decklist").value.split("\n");
-  const index = line - 1;
-  if (lines[index] === undefined) return;
-  // サーバは全角の数字と空白を半角に直してから読む。返ってくる名前と比べるので、こちらも揃える。
-  const tokens = lines[index]
-    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
-    .trim()
-    .split(/\s+/);
-  const countFirst = /^[0-9]+$/.test(tokens[0]);
-  const count = countFirst ? tokens[0] : tokens[tokens.length - 1];
-  const written = (countFirst ? tokens.slice(1) : tokens.slice(0, -1)).join(" ");
-  // 候補を出したあとにテキストを書き換えていたら、その行はもう別のカードかもしれない。
-  if (written !== name) {
-    showDeckStatus(["テキストが変わっています。もう一度「読み込む」を押してください。"], "ng");
-    return;
-  }
-  lines[index] = `${name} ${count} ${defId}`;
-  $("decklist").value = lines.join("\n");
-  importText().catch((error) => showDeckStatus([`読み込めませんでした: ${error.message}`], "ng"));
 }
 
 /** 残したデッキを読む。形の崩れた値は捨てる。手で書き換えられることもある場所なので。 */

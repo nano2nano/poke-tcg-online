@@ -9,7 +9,7 @@
  * 人が見分けに使う値も載せる。
  */
 
-import type { CardDef } from "./engine.js";
+import type { CardDef, CardDefId } from "./engine.js";
 import { isAceSpec, loadGeneratedCards, stadiumHalfOf } from "./engine.js";
 
 export interface CardBrief {
@@ -52,6 +52,13 @@ export function cardIndex(): Record<string, CardBrief> {
 export function cardIndexJson(): string {
   indexJson ??= JSON.stringify(cardIndex());
   return indexJson;
+}
+
+/** 1 つに決まらないカードの候補。見分けに使う値は、デッキを組む画面と同じものを添える。 */
+export type CardChoice = CardBrief & { defId: CardDefId };
+
+export function choiceOf(def: CardDef): CardChoice {
+  return { defId: def.defId, ...briefOf(def) };
 }
 
 export function briefOf(def: CardDef): CardBrief {

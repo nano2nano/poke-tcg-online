@@ -151,13 +151,6 @@ button.secondary {
   padding: 0.2rem 0.5rem;
 }
 
-#decklist {
-  width: 100%;
-  box-sizing: border-box;
-  font-family: inherit;
-  font-size: 0.95rem;
-}
-
 .history-list {
   display: flex;
   flex-direction: column;
@@ -224,10 +217,6 @@ button.secondary {
 
 .deck-count.full {
   color: #1d6b3a;
-}
-
-.deck-text {
-  margin: 8px 0;
 }
 
 .bot-form {
