@@ -10,3 +10,4 @@ data/accounts.*
 e2e-results/
 playwright-report/
 test-results/
+test-results-next/
