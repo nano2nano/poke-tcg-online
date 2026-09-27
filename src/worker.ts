@@ -1,8 +1,9 @@
 /**
  * Cloudflare Workers への載せ方（`docs/spec/battle-server.md` 3.1 節）。
  *
- * 画面（`public/`）は静的アセットとして配り、Worker はそこを通らない。Worker が受けるのは
- * `/api/` と `/ws` だけで、カードの画像のほかは Durable Object `Server` の 1 つへ回す。
+ * 画面（`public/`）は静的アセットとして配り、Worker はそこを通らない。ここが受けるのは
+ * `/api/` と `/ws` と静的アセットに無いパスで（新しい画面は `web/server.ts` が先に分ける）、
+ * カードの画像のほかは Durable Object `Server` の 1 つへ回す。
  * 生きている対戦はその 1 つのメモリにあり、終わった対戦は R2 と D1 へ残す。
  */
 

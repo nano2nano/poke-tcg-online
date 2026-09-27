@@ -37,13 +37,15 @@ export default defineConfig({
     /**
      * **`npx` を挟まない。** `npx` は node を孫として起こすので、後片付けで `npx` だけが
      * 死んでサーバが生き残る。次の実行が古いサーバに当たって、嘘の結果を返す。
+     * 同じ理由で、ビルドしたあとは `exec` でシェルを wrangler に置き換える。
      *
      * どのブラウザも同じ接続元から来るので、プレイヤーを作る速さの上限は外す。
      * カードの画像は切る。公式のサイトの応答でテストの結果を変えない。画像を出すテストは、
      * 設定と画像の応答を `page.route` で差し替えて確かめる。
      */
     command: [
-      "node_modules/.bin/wrangler dev",
+      "node_modules/.bin/vite build &&",
+      "exec node_modules/.bin/wrangler dev",
       `--ip 127.0.0.1 --port ${PORT}`,
       `--persist-to ${STATE_DIR}`,
       "--var ACCOUNT_BURST:0",

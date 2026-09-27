@@ -16,13 +16,14 @@
 
 ## 動かす
 
-Cloudflare Workers で動く。手元では `wrangler dev` が同じものを動かすので、Cloudflare のアカウントは要らない。
+Cloudflare Workers で動く。手元では `npm run dev`（Vite と Cloudflare のプラグイン）が同じものを workerd で動かすので、
+Cloudflare のアカウントは要らない。
 
 ```sh
 git clone --recurse-submodules https://github.com/nano2nano/poke-tcg-online
 cd poke-tcg-online
 npm ci
-npm run dev         # http://localhost:8787
+npm run dev         # http://localhost:5173
 ```
 
 `--recurse-submodules` を忘れた場合は `npm run engine:sync` でエンジンを取り込む。

@@ -4,7 +4,7 @@
 
 export const OFFICIAL_SITE = "https://www.pokemon-card.com";
 
-/** カードデータにある cardID（`tools/build-worker.ts` が埋め込む）。 */
+/** カードデータにある cardID（`vite.config.ts` が埋め込む）。 */
 declare const __CARD_IDS__: string[];
 
 let knownIds: Set<string> | null = null;
