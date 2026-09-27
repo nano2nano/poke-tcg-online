@@ -151,7 +151,8 @@ describe("対局ログの再生", () => {
     ensureCards();
     const played = playToEnd(newMatch("replay-11"), 31415);
     const record = toRecord(played.match);
-    const tampered = { ...record, firstPlayer: (record.firstPlayer === 0 ? 1 : 0) as Player };
+    const flipped: Player = record.firstPlayer === 0 ? 1 : 0;
+    const tampered = { ...record, firstPlayer: flipped };
 
     const result = replay(tampered, { fingerprint: engineFingerprint() });
     expect(result.failures.some((failure) => failure.kind === "first-player-mismatch")).toBe(true);

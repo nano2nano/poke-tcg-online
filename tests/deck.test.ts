@@ -32,7 +32,7 @@ describe("デッキの検証", () => {
   it("基本エネルギーは同名の制限の外に置く", () => {
     ensureCards();
     const energy = basicEnergyDefId();
-    const basic = (legalDecks()[0].cards as string[]).find((defId) => defId !== energy) as string;
+    const basic = legalDecks()[0].cards.find((defId) => defId !== energy) as string;
     const deck = { cards: [basic, ...Array.from({ length: 59 }, () => energy)] };
     expect(kinds(deck)).not.toContain("same-name");
   });

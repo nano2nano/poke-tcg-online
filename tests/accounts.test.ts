@@ -246,7 +246,7 @@ describe("レーティング", () => {
   it("一緒に書く文が通らなければ、メモリでも D1 でも動かさない", async () => {
     const { store, a, b } = await pair();
     const broken = db.prepare("INSERT INTO そんな表は無い (x) VALUES (1)");
-    await expect(store.applyResult([a, b], 1, 0, [broken])).rejects.toThrow();
+    await expect(store.applyResult([a, b], 1, 0, [broken])).rejects.toThrow("no such table");
 
     const row = await db
       .prepare("SELECT rating, games FROM players WHERE player_id = ?")
@@ -278,7 +278,7 @@ describe("レーティング", () => {
     const a = (await store.create("あ", 0)).account.playerId;
     const b = (await store.create("い", 0)).account.playerId;
 
-    await expect(store.applyResult([a, b], 1, 0)).rejects.toThrow();
+    await expect(store.applyResult([a, b], 1, 0)).rejects.toThrow("応答が届かなかった");
     const second = await store.applyResult([a, b], 1, 0);
 
     // 1 局目は D1 に入っている。2 局目はそこから積む。

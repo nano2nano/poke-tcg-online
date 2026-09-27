@@ -211,8 +211,8 @@ describe("対戦準備をまとめて出す", () => {
     expect(match.mulligans.map((reveal) => reveal.player)).toEqual([lacker]);
     const view = setupViewFor(match, lacker);
     if (view?.kind !== "choose") throw new Error("引き直したあとにまとめて出せない");
-    const hand = match.state.players[lacker].hand.map((card) => card.instanceId);
-    expect(view.active.every((id) => hand.includes(id))).toBe(true);
+    const hand = new Set(match.state.players[lacker].hand.map((card) => card.instanceId));
+    expect(view.active.every((id) => hand.has(id))).toBe(true);
   });
 
   it("対戦の開始でおたがいに引き直したときも、見せた手札が残る", () => {

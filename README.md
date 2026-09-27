@@ -81,7 +81,8 @@ Cloudflare へアップロードした重みを本番で読むには、本番の
 ## 検査
 
 ```sh
-npm run verify:all        # 型検査、書式、テスト
+npm run verify:all        # 型検査、書式、lint、テスト
+npm run lint              # oxlint（ルールと外した理由は .oxlintrc.json）
 npm test
 npm run test:e2e          # ブラウザで画面を動かす
 npm run replay:verify matches    # R2 から落とした対局ログを再生して検証する（docs/deploy.md）

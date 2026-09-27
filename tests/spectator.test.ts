@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import { WebSocket } from "ws";
 import { MAX_SPECTATORS, MAX_SPECTATORS_PER_MATCH, MatchHub, type SeatSocket } from "../src/hub.js";
 import { concede } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
@@ -65,7 +65,7 @@ interface Opened {
 async function connect(query: string): Promise<Opened> {
   const socket = new WebSocket(`ws://${base}/ws?${query}`);
   const seen: Json[] = [];
-  socket.on("message", (raw) => seen.push(JSON.parse(String(raw)) as Json));
+  socket.on("message", (raw) => seen.push(JSON.parse((raw as Buffer).toString()) as Json));
   const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
   let read = 0;
   await new Promise<void>((resolve, reject) => {
@@ -180,7 +180,7 @@ describe("観戦の配線", () => {
       "",
     ]) {
       const opened = await connect(query);
-      await opened.closed;
+      await expect(opened.closed).resolves.toBeUndefined();
     }
 
     for (const opened of seats) opened.socket.close();

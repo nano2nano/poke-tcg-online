@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import { WebSocket } from "ws";
 import { INITIAL_RATING } from "../src/accounts.js";
 import { BOT_PREFIX } from "../src/bots.js";
 import { encodePpoWeights, newPpoWeightsFile } from "../src/engine.js";
@@ -82,7 +82,7 @@ describe("AI と対戦する", () => {
     const socket = new WebSocket(`ws://${worker.host}/ws?seatToken=${joined.body.seat.seatToken}`);
     const ended = await new Promise<ServerMessage>((resolve) => {
       socket.on("message", (raw) => {
-        const message = JSON.parse(String(raw)) as ServerMessage;
+        const message = JSON.parse((raw as Buffer).toString()) as ServerMessage;
         if (message.t === "ended") resolve(message);
         if (message.t !== "sync" && message.t !== "delta") return;
         const legal = message.legalMoves;
@@ -151,7 +151,9 @@ describe("AI と対戦する", () => {
         `ws://${worker.host}/ws?seatToken=${joined.body.seat.seatToken}`,
       );
       const sync = await new Promise<ServerMessage>((resolve) => {
-        socket.on("message", (raw) => resolve(JSON.parse(String(raw)) as ServerMessage));
+        socket.on("message", (raw) =>
+          resolve(JSON.parse((raw as Buffer).toString()) as ServerMessage),
+        );
       });
       socket.close();
       if (sync.t !== "sync") throw new Error(`最初に sync が来なかった: ${sync.t}`);

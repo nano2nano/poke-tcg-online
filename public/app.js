@@ -281,10 +281,10 @@ function redraw() {
   if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
 }
 
-/** 名前の表を待たずに描き始める画面向け。届いたら `redraw` で描き直す。 */
-function loadCardsThen(redraw) {
+/** 名前の表を待たずに描き始める画面向け。届いたら `draw` で描き直す。 */
+function loadCardsThen(draw) {
   loadCards()
-    .then(redraw)
+    .then(draw)
     .catch(() => {});
 }
 
@@ -704,13 +704,16 @@ async function importDeckCode() {
     return;
   }
 
-  const nameOf = (cardId) => official.names[cardId] ?? `カード ID ${cardId}`;
+  const officialName = (cardId) => official.names[cardId] ?? `カード ID ${cardId}`;
   const missing = outcome.failures
     .filter((failure) => failure.kind !== "ambiguous")
-    .map((failure) => `このサーバに無いカードです: ${nameOf(failure.cardId)} ${failure.count} 枚`);
+    .map(
+      (failure) =>
+        `このサーバに無いカードです: ${officialName(failure.cardId)} ${failure.count} 枚`,
+    );
   const pending = outcome.failures
     .filter((failure) => failure.kind === "ambiguous")
-    .map((failure) => ({ ...failure, name: nameOf(failure.cardId), left: failure.count }));
+    .map((failure) => ({ ...failure, name: officialName(failure.cardId), left: failure.count }));
   // 1 枚も決まらず選ぶものも無ければ、組んでいるデッキを空にしてまで置き換えない。
   if (outcome.entries.length === 0 && pending.length === 0) {
     officialImport = null;
@@ -810,15 +813,15 @@ async function fetchOfficialDeck(code) {
     .querySelectorAll('input[id^="deck_"]');
   if (fields.length === 0) throw new Error("公式サイトのページの形が変わっています");
 
-  const cards = [];
+  const listed = [];
   for (const field of fields) {
     for (const item of field.value.split("-").filter(Boolean)) {
       const match = /^([0-9]+)_([0-9]+)(_|$)/.exec(item);
       if (match === null) throw new Error("公式サイトのページの形が変わっています");
-      cards.push({ cardId: match[1], count: Number(match[2]) });
+      listed.push({ cardId: match[1], count: Number(match[2]) });
     }
   }
-  if (cards.length === 0) return null;
+  if (listed.length === 0) return null;
 
   // 名前はページのスクリプトの中にある。DOMParser はスクリプトを動かさないので、文字列として読む。
   const names = {};
@@ -827,7 +830,7 @@ async function fetchOfficialDeck(code) {
   )) {
     names[cardId] = quoted.replace(/\\(.)/g, "$1");
   }
-  return { cards, names };
+  return { cards: listed, names };
 }
 
 function showDeckStatus(messages, tone) {
@@ -1204,6 +1207,7 @@ function connectSeat(link) {
       link.known = true;
       link.retry.connected();
       showConnection(null);
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- window ではなく BroadcastChannel なので宛先の origin を取らない。
       seatChannel?.postMessage({ seatToken: link.seated.seatToken });
     }
     if (message.t === "ended") link.ended = true;
@@ -1993,12 +1997,12 @@ function renderSetupForm(offer) {
     .filter((id) => offer.bench.includes(id) && id !== setupDraft.active)
     .slice(0, offer.benchSlots);
 
-  const redraw = () => renderSetupForm(offer);
+  const redrawForm = () => renderSetupForm(offer);
   $("setup-active").replaceChildren(
     ...offer.active.map((id) =>
       toggleButton(id, setupDraft.active === id, () => {
         setupDraft.active = setupDraft.active === id ? null : id;
-        redraw();
+        redrawForm();
       }),
     ),
   );
@@ -2012,7 +2016,7 @@ function renderSetupForm(offer) {
           setupDraft.bench = chosen
             ? setupDraft.bench.filter((each) => each !== id)
             : [...setupDraft.bench, id];
-          redraw();
+          redrawForm();
         });
         button.disabled = !chosen && full;
         return button;
@@ -2365,13 +2369,13 @@ function locateCard(instanceId, view) {
         ["attached", holder, pokemon.attached, "左から"],
       );
     }
-    for (const [zone, where, pile, from] of piles) {
+    for (const [zoneName, where, pile, from] of piles) {
       const card = pile.find((each) => each.instanceId === instanceId);
       if (card === undefined) continue;
       const twins = pile.filter((each) => each.defId === card.defId);
       const place =
         twins.length > 1 ? `${where()}の${from} ${twins.indexOf(card) + 1} 枚目` : where();
-      return { defId: card.defId, own, zone, place };
+      return { defId: card.defId, own, zone: zoneName, place };
     }
   }
   return null;
@@ -2712,26 +2716,26 @@ function openWatch(token) {
 
 function renderWatch(view) {
   lastWatchView = view;
-  for (const seat of [0, 1]) {
-    const info = watchSeats?.[seat];
-    $(`watch-name-${seat}`).textContent =
+  for (const index of [0, 1]) {
+    const info = watchSeats?.[index];
+    $(`watch-name-${index}`).textContent =
       info === undefined
-        ? `座席 ${seat}`
+        ? `座席 ${index}`
         : `${info.displayName}（${info.rating === null ? "AI" : info.rating}）`;
-    renderSide($(`watch-side-${seat}`), view.players[seat], seat === 1);
+    renderSide($(`watch-side-${index}`), view.players[index], index === 1);
   }
   renderStadium($("watch-stadium"), view.stadium);
 }
 
-function watchName(seat) {
-  return watchSeats?.[seat]?.displayName ?? `座席 ${seat}`;
+function watchName(index) {
+  return watchSeats?.[index]?.displayName ?? `座席 ${index}`;
 }
 
 function renderWatchClock(clock) {
   const turn = clock.toMove === null ? "" : `${watchName(clock.toMove)} が考えています`;
   const remaining = moveRemainingText(clock);
   const banks = [0, 1]
-    .map((seat) => `${watchName(seat)} ${Math.round(clock.bankMs[seat] / 1000)} 秒`)
+    .map((index) => `${watchName(index)} ${Math.round(clock.bankMs[index] / 1000)} 秒`)
     .join("・");
   $("watch-clock").textContent = `${turn}${remaining} ／ 持ち時間 ${banks}`;
 }
@@ -3009,19 +3013,19 @@ async function goToPly(ply) {
  * 相手の側も相手自身の射影の `self` から取る。終わった対戦なので、相手の手札も
  * そのまま見えてよい（6.6 節）。
  */
-function readerBoard(views, seat) {
+function readerBoard(views, index) {
   if (!views) return null;
   return {
-    viewer: seat,
-    self: views[seat].self,
-    opponent: views[seat === 0 ? 1 : 0].self,
-    choices: views[seat].choices,
+    viewer: index,
+    self: views[index].self,
+    opponent: views[index === 0 ? 1 : 0].self,
+    choices: views[index].choices,
   };
 }
 
-function renderReplayBoard({ views, seat }) {
-  const board = readerBoard(views, seat);
+function renderReplayBoard({ views, seat: index }) {
+  const board = readerBoard(views, index);
   renderSide($("replay-opponent"), board.opponent, true);
-  renderStadium($("replay-stadium"), views[seat].stadium);
+  renderStadium($("replay-stadium"), views[index].stadium);
   renderSide($("replay-self"), board.self, false);
 }

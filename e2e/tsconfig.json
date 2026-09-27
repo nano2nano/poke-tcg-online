@@ -1,0 +1,8 @@
+// ページの中で動かす関数があるので、DOM の型を足す。
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": ["."]
+}

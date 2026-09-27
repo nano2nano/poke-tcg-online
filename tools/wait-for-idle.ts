@@ -84,7 +84,7 @@ for (;;) {
   }
   if (reading.kind === "absent") {
     process.stdout.write(
-      `::warning::${statusUrl} を持たない版が動いている。対戦の数が分からないので、待たずに出す\n`,
+      `::warning::${statusUrl.href} を持たない版が動いている。対戦の数が分からないので、待たずに出す\n`,
     );
     process.exit(0);
   }
