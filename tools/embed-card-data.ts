@@ -9,7 +9,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
-import { CARD_DATA_PATH, type EngineIdentity } from "./engine-identity.js";
+import { CARD_DATA_PATH, engineIdentity, type EngineIdentity } from "./engine-identity.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** 実パスで比べる。engine/ が symlink でも、エンジンの中からの import は symlink 先のパスで届く。 */
@@ -61,11 +61,22 @@ export function embedCardData(identity: EngineIdentity): Plugin {
         );
       }
     },
-    /** 埋め込む値は設定を読んだときに決まるので、カードデータが変わったら開発サーバごと読み直す。 */
+    /**
+     * 埋め込む値は設定を読んだときに決まる。エンジンに手が入って値が変わったら、開発サーバごと読み直す。
+     * そうしないと、手を入れたエンジンで指した対戦が手を入れる前の commit を名乗る。
+     */
     configureServer(server) {
-      server.watcher.add(CARD_DATA_PATH);
-      server.watcher.on("change", (path) => {
-        if (path === CARD_DATA_PATH) void server.restart();
+      server.watcher.add([CARD_DATA_PATH, ENGINE_SRC]);
+      server.watcher.on("all", (_event, path) => {
+        const inEngine = path.startsWith(ENGINE_SRC) || realPath(path)?.startsWith(ENGINE_SRC);
+        if (path !== CARD_DATA_PATH && inEngine !== true) return;
+        const current = engineIdentity();
+        if (
+          current.commit !== identity.commit ||
+          current.cardDataSha256 !== identity.cardDataSha256
+        ) {
+          void server.restart();
+        }
       });
     },
   };

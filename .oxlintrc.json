@@ -11,7 +11,7 @@
   },
   "ignorePatterns": ["engine/**", "dist/**", "web/routeTree.gen.ts"],
   "rules": {
-    // JSX の変換は React を import しなくてよい形（tsconfig の `jsx: "react-jsx"`）。
+    // JSX の変換は React を import しなくてよい形（`web/tsconfig.json` の `jsx: "react-jsx"`）。
     "react/react-in-jsx-scope": "off",
     // `toSorted` と `toReversed` は ES2023 で、tsconfig の lib は ES2022 に留めている。
     "unicorn/no-array-sort": "off",
@@ -20,9 +20,9 @@
     "no-underscore-dangle": "off",
     // 使う場所の近くに置いた小さな関数まで外へ出させると、読む場所が離れる。
     "unicorn/consistent-function-scoping": "off",
-    // テストは Worker とのやり取りを 1 つずつ順に確かめる。並べると確かめたい順番が崩れる。
+    // 順に待つ箇所の多くは、前の結果で次を決める（R2 の一覧のページ送り、取り直し、テストの手順）。
     "no-await-in-loop": "off",
-    // 画面の状態は書き換えずに作り直す。広げて作り直す書き方をこのルールは直させる。
+    // 画面の状態は書き換えずに作り直す。このルールは広げて作り直す書き方を、書き換える書き方へ直させる。
     "oxc/no-map-spread": "off",
     // 分岐を網羅したかは tsc が戻り値の型で確かめる。このルールは網羅した switch も指摘する。
     "typescript/consistent-return": "off",
@@ -42,7 +42,7 @@
     // テストは型を絞る `if` の中で確かめる。種類そのものは `if` の前か、通った件数で確かめている。
     "vitest/no-conditional-expect": "off",
     // `noUncheckedIndexedAccess` で付いた `undefined` を、あると分かっている箇所で外す `as` まで拾う。
-    // 外から届く値は `src/protocol.ts` と `src/requests.ts` の Zod で検めてから使う。
+    // 外から届く値は `src/protocol.ts` と `src/requests.ts` の Zod で検証してから使う。
     "typescript/no-unsafe-type-assertion": "off",
     "typescript/require-array-sort-compare": ["error", { "ignoreStringArrays": true }]
   },

@@ -15,7 +15,8 @@ function build(): void {
   execFileSync(
     process.execPath,
     [join(ROOT, "node_modules", "vite", "bin", "vite.js"), "build", "--logLevel", "warn"],
-    { cwd: ROOT, stdio: "inherit" },
+    // Vitest は NODE_ENV を test にする。受け継ぐと React などが開発用のままビルドされ、本番と違うものを試す。
+    { cwd: ROOT, stdio: "inherit", env: { ...process.env, NODE_ENV: "production" } },
   );
 }
 
