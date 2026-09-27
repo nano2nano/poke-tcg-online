@@ -7,6 +7,16 @@
  * 権威はサーバの局面にあり、こちらは描くだけである（1 節の S-1）。
  */
 
+import {
+  initialReplayState,
+  initialSeatState,
+  initialWatchState,
+  replayReducer,
+  seatReducer,
+  setupOffer,
+  watchReducer,
+} from "./match-state.js";
+
 const $ = (id) => document.getElementById(id);
 
 /** defId から名前を引く表。対戦ごとに変わらないので一度だけ取る。 */
@@ -15,25 +25,13 @@ let loadingCards = null;
 /** `cards` から作った検索用の形。`cards` が差し替わったら作り直す。 */
 let searchIndex = null;
 let socket = null;
-let seat = null;
 /** 着いている座席。決着のあとにシャッフルを検算するため、シェアとコミットもここに持つ。 */
 let seatedNow = null;
-let stateVersion = 0;
-/** 直近の盤面。手の見出しでインスタンス ID からカードの名前を引くのに使う。 */
-let lastView = null;
-/** 直近の指せる手。カードの名前の表が遅れて届いたときに、手の見出しを描き直す。 */
-let lastMoves = {
-  moves: null,
-  playing: false,
-  setup: null,
-  placement: null,
-  destinations: null,
-  revealedDeck: null,
-};
-/** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、選んだところを残す。 */
-let setupDraft = { active: null, bench: [], sent: false };
-/** 対戦準備で引き直すときに見せた手札。名前の表が遅れて届いたら描き直す。 */
-let lastMulligans = [];
+/**
+ * 着いている対戦の状態。座席に着くたびに作り直す。
+ * カードの名前の表が遅れて届いたときは、これから描き直す。
+ */
+let seatState = null;
 /** 前に描いたときに準備の中だったか。欄を開け閉めするのは、準備が終わったときと増えたときだけにする。 */
 let mulligansInSetup = false;
 /** 実行中のプレイヤーの読み込み。`ensureAccount` がこれを待ち合わせる。 */
@@ -265,20 +263,13 @@ function redraw() {
   renderSearch();
   renderBotDecks();
   restore();
-  if (lastView !== null) {
-    renderView(lastView);
-    renderMoves(
-      lastMoves.moves,
-      lastMoves.playing,
-      lastMoves.setup,
-      lastMoves.placement,
-      lastMoves.destinations,
-      lastMoves.revealedDeck,
-    );
-    renderMulligans(lastMulligans);
+  if (seatState?.view) {
+    renderView(seatState.view);
+    renderMoves();
+    renderMulligans();
   }
-  if (lastWatchView !== null) renderWatch(lastWatchView);
-  if (lastReplayFrame !== null) renderReplayBoard(lastReplayFrame);
+  if (spectating.view !== null) renderWatch();
+  if (replaying?.state.frame) renderReplayBoard(replaying.state);
 }
 
 /** 名前の表を待たずに描き始める画面向け。届いたら `draw` で描き直す。 */
@@ -378,11 +369,12 @@ window.addEventListener("storage", (event) => {
 });
 
 $("setup-submit").addEventListener("click", () => {
-  if (setupDraft.active === null || setupDraft.sent) return;
-  // 返事が来るまで押せなくする。2 度目はサーバが断り、通った答えまで失敗に見える。
-  setupDraft.sent = true;
+  if (seatState === null) return;
+  const sent = seatReducer(seatState, { t: "setup-sent" });
+  if (sent === seatState) return;
+  seatState = sent;
   $("setup-submit").disabled = true;
-  send({ t: "setup", active: setupDraft.active, bench: setupDraft.bench });
+  send({ t: "setup", active: seatState.setupDraft.active, bench: seatState.setupDraft.bench });
 });
 
 $("concede-button").addEventListener("click", () => {
@@ -1163,7 +1155,7 @@ function openMatch(seated) {
     seatLink.retry.stop();
     socket?.close();
   }
-  seat = seated.seat;
+  seatState = initialSeatState(seated.seat);
   seatedNow = seated;
   rememberSeat(seated);
   setStatus("");
@@ -1318,7 +1310,7 @@ function backToJoin(text) {
   seatLink?.retry.stop();
   seatLink = null;
   socket = null;
-  seat = null;
+  seatState = null;
   $("table").hidden = true;
   $("join").hidden = false;
   // 対戦の結果をマッチングの画面に重ねたままにしない。
@@ -1354,29 +1346,22 @@ function storedSeat() {
 }
 
 function receive(message) {
+  const before = seatState;
+  seatState = seatReducer(seatState, message);
   switch (message.t) {
     case "sync":
     case "delta": {
-      if (message.t === "sync") $("watch-link").value = watchUrl(message.spectatorToken);
-      stateVersion = message.stateVersion;
+      if (message.t === "sync") $("watch-link").value = watchUrl(seatState.spectatorToken);
       const events = message.events ?? [];
-      const results = describeResults(events, [message.view, lastView], seatName);
+      const results = describeResults(events, [seatState.view, before.view], seatName);
       logEvents(events, results);
-      renderView(message.view);
-      if (message.t === "sync") showFirstPlayer(message.matchId, message.firstPlayer, message.view);
+      renderView(seatState.view);
+      if (message.t === "sync")
+        showFirstPlayer(seatState.matchId, seatState.firstPlayer, seatState.view);
       showResults(results, $("table"));
-      renderClock(message.clock);
-      setupDraft.sent = false;
-      renderMoves(
-        message.legalMoves,
-        true,
-        message.setup,
-        message.deckPlacement ?? null,
-        message.answerDestinations ?? null,
-        message.revealedDeck ?? null,
-      );
-      // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
-      renderMulligans(message.mulligans ?? lastMulligans);
+      renderClock(seatState.clock);
+      renderMoves();
+      renderMulligans(seatState.mulligans.length > before.mulligans.length);
       return;
     }
     case "ended": {
@@ -1385,10 +1370,8 @@ function receive(message) {
       forgetSeat();
       // 観戦トークンも終わった対戦では通らない。残すと、渡された人が開いても入れない。
       $("watch-link").value = "";
-      renderView(message.view);
-      renderMoves(null, false);
-      // 次の対戦で見せた手札を、この対戦のものと比べて「増えた」と読まない。
-      lastMulligans = [];
+      renderView(seatState.view);
+      renderMoves();
       const text = describeEnd(message);
       addEvent(text);
       showResult({ text, tone: endTone(message.matchResult) });
@@ -1416,7 +1399,7 @@ function receive(message) {
 
 function describeEnd(message) {
   const result = message.matchResult;
-  const mine = result.winner === seat ? "勝ち" : "負け";
+  const mine = result.winner === seatState.seat ? "勝ち" : "負け";
   if (result.kind === "concede") return `投了により ${mine}`;
   if (result.kind === "timeout") return `時間切れにより ${mine}`;
   if (result.winner === null) return "引き分け";
@@ -1426,11 +1409,10 @@ function describeEnd(message) {
 
 function endTone(result) {
   if (result.winner === null) return "neutral";
-  return result.winner === seat ? "positive" : "negative";
+  return result.winner === seatState.seat ? "positive" : "negative";
 }
 
 function renderView(view) {
-  lastView = view;
   renderSide($("opponent"), view.opponent, true);
   renderStadium($("stadium"), view.stadium);
   renderSide($("self"), view.self, false);
@@ -1807,6 +1789,7 @@ function renderStadium(container, stadium) {
 }
 
 function renderClock(clock) {
+  const { seat } = seatState;
   const mine = Math.round(clock.bankMs[seat] / 1000);
   const theirs = Math.round(clock.bankMs[1 - seat] / 1000);
   const turn = clock.toMove === seat ? "あなたの番です" : "相手が考えています";
@@ -1815,45 +1798,45 @@ function renderClock(clock) {
 }
 
 /**
- * `playing` が偽なら対戦は終わっていて、待ちも選ぶものも無い。
- * `setup` はサーバが送る準備の状態で、あるあいだは同じ選択を 1 手ずつ指すボタンを並べない。
- * `placement` は、選んだカードを山札の端へ順に置く選択のあいだだけサーバが送る（`deckPlacement`）。
- * `destinations` は、効果の選択のあいだサーバが送る、`moves` と同じ並びの行き先（`answerDestinations`）。
- * `revealedDeck` は、山札全体を見て選ぶあいだだけサーバが送る、見ている山札の中身。
+ * 対戦が終わっていれば、待ちも選ぶものも無い。
+ * 準備の状態（`setup`）があるあいだは、同じ選択を 1 手ずつ指すボタンを並べない。
  */
-function renderMoves(
-  moves,
-  playing = true,
-  setup = null,
-  placement = null,
-  destinations = null,
-  revealedDeck = null,
-) {
-  lastMoves = { moves, playing, setup, placement, destinations, revealedDeck };
+function renderMoves() {
+  const {
+    view,
+    legalMoves: moves,
+    setup,
+    deckPlacement: placement,
+    answerDestinations: destinations,
+    revealedDeck,
+  } = seatState;
+  const playing = seatState.ended === null;
   renderRevealedDeck(playing && moves !== null ? revealedDeck : null, moves);
   const prompt = $("move-prompt");
   prompt.textContent = !playing
     ? ""
     : moves !== null && placement !== null
       ? placementPrompt(placement)
-      : promptText(lastView, moves !== null, setup);
+      : promptText(view, moves !== null, setup);
   prompt.hidden = prompt.textContent === "";
-  renderSetupForm(playing && setup?.kind === "choose" ? setup : null);
+  renderSetupForm();
   const container = $("moves");
   container.innerHTML = "";
   if (playing && setup !== null) return;
   if (moves === null) {
     // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
-    if (playing && lastView?.phase !== "setup") container.append(waitingNote(lastView));
+    if (playing && view?.phase !== "setup") container.append(waitingNote(view));
     return;
   }
-  const shown = foldMoves(moves, lastView);
+  const shown = foldMoves(moves, view);
   // 畳んだときだけ、見せた手の位置を添える。記録で、見せなかった手と選ばなかった手を分けるため（6.2 節）。
   const offered = shown.length === moves.length ? {} : { offered: shown.map(({ index }) => index) };
   for (const { move, index } of shown) {
     const button = document.createElement("button");
-    button.textContent = describeMove(move, lastView, placement, destinations?.[index] ?? null);
-    button.addEventListener("click", () => send({ t: "move", stateVersion, move, ...offered }));
+    button.textContent = describeMove(move, view, placement, destinations?.[index] ?? null);
+    button.addEventListener("click", () =>
+      send({ t: "move", stateVersion: seatState.stateVersion, move, ...offered }),
+    );
     button.dataset.aim = JSON.stringify(moveTargets(move));
     for (const type of ["pointerenter", "pointerleave", "focus", "blur"]) {
       button.addEventListener(type, refreshAim);
@@ -1893,7 +1876,7 @@ function renderRevealedDeck(revealedDeck, moves) {
     (a, b) => rank(a) - rank(b) || nameOf(a).localeCompare(nameOf(b), "ja"),
   );
   box.replaceChildren(
-    el("h3", "", revealedDeckHeading(revealedDeck.length, lastView?.self?.deckCount)),
+    el("h3", "", revealedDeckHeading(revealedDeck.length, seatState.view?.self?.deckCount)),
     el(
       "div",
       "revealed-cards",
@@ -1986,43 +1969,34 @@ function waitingNote(view) {
  * エンジンは準備を 1 人ずつの選択に並べて進めるが、サーバは番の来ていない座席の答えも
  * 預かる（仕様 2.4 節）。1 つずつ送る形にすると、相手の番を待つたびに止まる。
  */
-function renderSetupForm(offer) {
+function renderSetupForm() {
+  const offer = setupOffer(seatState);
   $("setup").hidden = offer === null;
-  if (offer === null) {
-    setupDraft = { active: null, bench: [], sent: false };
-    return;
-  }
-  if (!offer.active.includes(setupDraft.active)) setupDraft.active = null;
-  setupDraft.bench = setupDraft.bench
-    .filter((id) => offer.bench.includes(id) && id !== setupDraft.active)
-    .slice(0, offer.benchSlots);
-
-  const redrawForm = () => renderSetupForm(offer);
+  if (offer === null) return;
+  const draft = seatState.setupDraft;
+  const choose = (action) => {
+    seatState = seatReducer(seatState, action);
+    renderSetupForm();
+  };
   $("setup-active").replaceChildren(
     ...offer.active.map((id) =>
-      toggleButton(id, setupDraft.active === id, () => {
-        setupDraft.active = setupDraft.active === id ? null : id;
-        redrawForm();
-      }),
+      toggleButton(id, draft.active === id, () => choose({ t: "choose-active", instanceId: id })),
     ),
   );
-  const full = setupDraft.bench.length >= offer.benchSlots;
+  const full = draft.bench.length >= offer.benchSlots;
   $("setup-bench").replaceChildren(
     ...offer.bench
-      .filter((id) => id !== setupDraft.active)
+      .filter((id) => id !== draft.active)
       .map((id) => {
-        const chosen = setupDraft.bench.includes(id);
-        const button = toggleButton(id, chosen, () => {
-          setupDraft.bench = chosen
-            ? setupDraft.bench.filter((each) => each !== id)
-            : [...setupDraft.bench, id];
-          redrawForm();
-        });
+        const chosen = draft.bench.includes(id);
+        const button = toggleButton(id, chosen, () =>
+          choose({ t: "toggle-bench", instanceId: id }),
+        );
         button.disabled = !chosen && full;
         return button;
       }),
   );
-  $("setup-submit").disabled = setupDraft.active === null || setupDraft.sent;
+  $("setup-submit").disabled = draft.active === null || draft.sent;
 }
 
 /**
@@ -2030,10 +2004,9 @@ function renderSetupForm(offer) {
  * 相手が引き直したことは、相手に番が回る前に起きるので、できごとの欄だけでは見落とす。
  * それ以外の局面では開け閉めしない。プレイヤーが開いた欄を、次の局面で閉じてしまう。
  */
-function renderMulligans(mulligans) {
-  const grew = mulligans.length > lastMulligans.length;
-  lastMulligans = mulligans;
-  const inSetup = lastView?.phase === "setup";
+function renderMulligans(grew = false) {
+  const { mulligans, view } = seatState;
+  const inSetup = view?.phase === "setup";
   const details = $("mulligans");
   details.hidden = mulligans.length === 0;
   if (grew && inSetup) details.open = true;
@@ -2043,7 +2016,7 @@ function renderMulligans(mulligans) {
   $("mulligan-list").replaceChildren(
     ...mulligans.map(({ player, cards: shown }) => {
       counts[player] += 1;
-      const own = player === lastView?.viewer;
+      const own = player === view?.viewer;
       const row = el("div", "mulligan", `${own ? "自分" : "相手"}（${counts[player]} 回目）`);
       row.dataset.side = own ? "self" : "opponent";
       const hand = el("div", "zone hand");
@@ -2055,7 +2028,7 @@ function renderMulligans(mulligans) {
 }
 
 function toggleButton(instanceId, pressed, onClick) {
-  const button = el("button", "secondary", handCardName(instanceId, lastView));
+  const button = el("button", "secondary", handCardName(instanceId, seatState.view));
   button.type = "button";
   button.dataset.instanceId = instanceId;
   button.setAttribute("aria-pressed", String(pressed));
@@ -2138,7 +2111,7 @@ const SETUP_ANSWERS = {
  * 名前を引くのは その手を指す直前の盤面 からである。指したあとの盤面では、
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
-function describeMove(move, view = lastView, placement = null, destination = null) {
+function describeMove(move, view, placement = null, destination = null) {
   const card = (instanceId) => cardName(instanceId, view);
   const target = (inPlayId) => pokemonLabel(inPlayId, view, false);
   switch (move.type) {
@@ -2425,7 +2398,7 @@ function addEvent(text, list = "events") {
 
 /** 観戦の画面は代わりに `watchName` で座席の名前を使う。 */
 function seatName(player) {
-  return player === seat ? "あなた" : "相手";
+  return player === seatState?.seat ? "あなた" : "相手";
 }
 
 /** 先攻のコイントスを見せた対戦。`sync` は繋ぎ直すたびに届くので、この画面で 2 度は出さない。 */
@@ -2438,10 +2411,10 @@ function showFirstPlayer(key, firstPlayer, view) {
   const watching = view.viewer === "spectator";
   const text = watching
     ? `コイントスの結果、${watchName(firstPlayer)}が先攻です`
-    : firstPlayer === seat
+    : firstPlayer === seatState?.seat
       ? "コイントスの結果、あなたが先攻です"
       : "コイントスの結果、相手が先攻です（あなたは後攻）";
-  const results = [watching || firstPlayer === seat];
+  const results = [watching || firstPlayer === seatState?.seat];
   showResult({ text, coins: { results, faces: ["先攻", "後攻"] } });
 }
 
@@ -2626,9 +2599,8 @@ function watchUrl(spectatorToken) {
   return `${location.origin}/?watch=${encodeURIComponent(spectatorToken)}`;
 }
 
-let watchSeats = null;
-/** 直近の観戦の盤面。カードの名前の表が遅れて届いたときに描き直す。 */
-let lastWatchView = null;
+/** 観戦している対戦の状態。カードの名前の表が遅れて届いたときは、これから描き直す。 */
+let spectating = initialWatchState();
 
 /**
  * 観戦者が送るのは生きていることの `ping` だけである。
@@ -2641,7 +2613,6 @@ function openWatch(token) {
   loadCardsThen(redraw);
 
   let synced = false;
-  let ended = false;
   const retry = reconnector(connect);
   connect();
 
@@ -2655,28 +2626,32 @@ function openWatch(token) {
     watching.addEventListener("message", (event) => {
       if (lost) return;
       const message = JSON.parse(event.data);
+      const before = spectating;
+      spectating = watchReducer(spectating, message);
       switch (message.t) {
         case "spectator-sync":
           synced = true;
           if (!joined) retry.connected();
           joined = true;
           $("watch-status").textContent = "";
-          watchSeats = message.seats;
-          renderWatch(message.view);
-          showFirstPlayer(token, message.firstPlayer, message.view);
-          renderWatchClock(message.clock);
+          renderWatch();
+          showFirstPlayer(token, spectating.firstPlayer, spectating.view);
+          renderWatchClock(spectating.clock);
           return;
         case "spectator-delta": {
-          const results = describeResults(message.events, [message.view, lastWatchView], watchName);
+          const results = describeResults(
+            message.events,
+            [spectating.view, before.view],
+            watchName,
+          );
           logEvents(message.events, results, "watch-events");
-          renderWatch(message.view);
+          renderWatch();
           showResults(results, $("watch"));
-          renderWatchClock(message.clock);
+          renderWatchClock(spectating.clock);
           return;
         }
         case "spectator-ended":
-          ended = true;
-          renderWatch(message.view);
+          renderWatch();
           $("watch-clock").textContent = describeWatchEnd(message.matchResult);
           showResult({ text: describeWatchEnd(message.matchResult) });
           return;
@@ -2696,7 +2671,7 @@ function openWatch(token) {
     function onLost() {
       if (lost) return;
       lost = true;
-      if (ended) {
+      if (spectating.ended !== null) {
         retry.stop();
         return;
       }
@@ -2714,10 +2689,10 @@ function openWatch(token) {
   }
 }
 
-function renderWatch(view) {
-  lastWatchView = view;
+function renderWatch() {
+  const { view, seats } = spectating;
   for (const index of [0, 1]) {
-    const info = watchSeats?.[index];
+    const info = seats?.[index];
     $(`watch-name-${index}`).textContent =
       info === undefined
         ? `座席 ${index}`
@@ -2728,7 +2703,7 @@ function renderWatch(view) {
 }
 
 function watchName(index) {
-  return watchSeats?.[index]?.displayName ?? `座席 ${index}`;
+  return spectating.seats?.[index]?.displayName ?? `座席 ${index}`;
 }
 
 function renderWatchClock(clock) {
@@ -2859,10 +2834,11 @@ async function postJson(path, body) {
   throw new Error(answer?.error ?? `${path} が ${response.status} を返した`);
 }
 
-/** リプレイ中の対戦。開いていなければ null。 */
+/**
+ * リプレイ中の対戦。開いていなければ null。
+ * 開くたびに別の入れ物を作り、遅れて届いた応答が、いま開いているものへの答えかを見分ける。
+ */
 let replaying = null;
-/** 直近に描いたリプレイの局面。名前の表や画像の設定が遅れて届いたときに描き直す。 */
-let lastReplayFrame = null;
 
 $("history-button").addEventListener("click", () => {
   showHistory().catch((error) => setStatus(`一覧を出せませんでした: ${error.message}`));
@@ -2870,7 +2846,6 @@ $("history-button").addEventListener("click", () => {
 
 $("replay-close").addEventListener("click", () => {
   replaying = null;
-  lastReplayFrame = null;
   $("replay").hidden = true;
 });
 
@@ -2878,13 +2853,13 @@ for (const [id, step] of [
   ["replay-first", () => 0],
   ["replay-prev", (ply) => ply - 1],
   ["replay-next", (ply) => ply + 1],
-  ["replay-last", () => replaying.moveCount],
+  ["replay-last", () => replaying.state.moveCount],
 ]) {
   $(id).addEventListener("click", () => {
     if (replaying === null) return;
     // 数えるのは頼んだ手数からである。描けた手数から数えると、続けて押したぶんが
     // すべて同じ 1 手への問い合わせになり、6 回押しても 1 手しか進まない。
-    goToPly(step(replaying.wanted)).catch((error) => {
+    goToPly(step(replaying.state.wanted)).catch((error) => {
       $("replay-status").textContent = `辿れませんでした: ${error.message}`;
     });
   });
@@ -2923,17 +2898,7 @@ function describeSummary(summary) {
 }
 
 async function openReplay(summary) {
-  const opened = {
-    matchId: summary.matchId,
-    seat: summary.seat,
-    /** 描けている手数。 */
-    ply: 0,
-    /** 頼んだ手数。まだ返ってきていないぶんを含む。 */
-    wanted: 0,
-    moveCount: summary.moveCount,
-    // 出した順に番号を振る。返ってくる順は、これと同じとは限らない。
-    asked: 0,
-  };
+  const opened = { state: initialReplayState(summary) };
   replaying = opened;
   $("replay").hidden = false;
   try {
@@ -2945,7 +2910,6 @@ async function openReplay(summary) {
     if (replaying === opened) {
       $("replay").hidden = true;
       replaying = null;
-      lastReplayFrame = null;
     }
     throw error;
   }
@@ -2953,46 +2917,27 @@ async function openReplay(summary) {
 
 /**
  * その手数の局面を取りに行って描く。局面を持たないので、毎回サーバが作り直す。
- *
- * **古い応答では描かない。** 「1 手 ▶」を続けて押したり別の対戦へ移ったりすると、
- * 出した順と返る順が入れ替わる。あとから来た古い盤面で上書きすると、
- * 手数の表示と盤面がずれたまま残る。
+ * 別の対戦へ移ったあとや、あとから出した問い合わせに追い越された応答では描かない（`replayReducer`）。
  */
 async function goToPly(ply) {
   if (replaying === null) return;
   const opened = replaying;
-  const mine = ++opened.asked;
-  const wanted = Math.max(0, Math.min(ply, opened.moveCount));
-  opened.wanted = wanted;
+  opened.state = replayReducer(opened.state, { t: "ask", ply });
+  const { asked, wanted, matchId } = opened.state;
   let frame;
   try {
-    ({ frame } = await postJson("/api/replay", {
-      secret: storedSecret(),
-      matchId: opened.matchId,
-      ply: wanted,
-    }));
+    ({ frame } = await postJson("/api/replay", { secret: storedSecret(), matchId, ply: wanted }));
   } catch (error) {
-    // 行き先を戻す。 戻さないと、1 度失敗しただけで次に押したぶんが 1 手飛ぶ。
-    // あとから出したぶんが走っていれば、その行き先のほうが新しいので触らない。
-    if (replaying === opened && mine === opened.asked) opened.wanted = opened.ply;
+    if (replaying === opened) opened.state = replayReducer(opened.state, { t: "failed", asked });
     throw error;
   }
-  // 別の対戦へ移ったか、あとから出した問い合わせが先に返っていれば、これは捨てる。
-  if (replaying !== opened || mine !== opened.asked) return;
-  replaying.ply = frame.ply;
-  /**
-   * **辿れる上限を、再現できる地点まで下げる。** 下げないと「さいごまで」がその先を
-   * 頼み続け、毎回同じ手数が返ってきて進まないように見える。
-   */
-  if (frame.divergedAt !== null) {
-    opened.moveCount = frame.divergedAt;
-    opened.wanted = frame.ply;
-  }
+  if (replaying !== opened) return;
+  const drawn = replayReducer(opened.state, { t: "frame", asked, frame });
+  if (drawn === opened.state) return;
+  opened.state = drawn;
+  renderReplayBoard(drawn);
 
-  lastReplayFrame = { views: frame.views, seat: replaying.seat };
-  renderReplayBoard(lastReplayFrame);
-
-  const before = readerBoard(frame.beforeViews, replaying.seat);
+  const before = readerBoard(frame.beforeViews, drawn.seat);
   const move = frame.playedMove === null ? "対戦の開始時" : describeMove(frame.playedMove, before);
   // エンジンの版が違っても止めない。止めるのはカードの定義が変わったときだけである（§6.3）。
   const warning = frame.engineCommitDiffers
@@ -3023,7 +2968,7 @@ function readerBoard(views, index) {
   };
 }
 
-function renderReplayBoard({ views, seat: index }) {
+function renderReplayBoard({ frame: { views }, seat: index }) {
   const board = readerBoard(views, index);
   renderSide($("replay-opponent"), board.opponent, true);
   renderStadium($("replay-stadium"), views[index].stadium);

@@ -13,10 +13,12 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowJs": true
   },
   "include": [
     "src",
+    "public/match-state.js",
     "tests",
     "tools",
     "playwright.config.ts",
