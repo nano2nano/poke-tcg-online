@@ -1563,11 +1563,9 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
 test("減らしきった行は、デッキから消える", async ({ page }) => {
   await page.goto("/");
   const [entry] = await sampleDeckEntries(page);
-  const { defId, name } = entry as { defId: string; name: string };
-  await page.fill(
-    "#card-search",
-    `${name} ${[entry?.set, entry?.number].filter(Boolean).join(" ")}`,
-  );
+  if (entry === undefined) throw new Error("サンプルデッキが空");
+  const { defId, name, set, number } = entry;
+  await page.fill("#card-search", `${name} ${[set, number].filter(Boolean).join(" ")}`);
   const add = page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`);
   for (let i = 0; i < 2; i++) await add.click();
   const row = page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`);

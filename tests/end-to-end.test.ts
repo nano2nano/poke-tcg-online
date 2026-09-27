@@ -16,7 +16,7 @@ import type { ClientMessage, ServerMessage } from "../src/protocol.js";
 import { initialCardIds, inspectState } from "../src/engine-invariants.js";
 import { replay } from "../src/replay.js";
 import { ensureCards, legalDecks } from "./helpers.js";
-import { getCardDef, loadGeneratedCards } from "../src/engine.js";
+import { loadGeneratedCards } from "../src/engine.js";
 import { sampleDeck } from "../src/sample-deck.js";
 import { startWorker, type TestWorker } from "./worker.js";
 
