@@ -916,7 +916,8 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await expect(a.locator("#table")).toBeVisible();
+  // 卓が出た時点ではまだ繋いでいる途中で、押した投了が届かないことがある。局面が届くまで待つ。
+  await expect(a.locator("#self .mat").first()).toBeVisible();
 
   // 決着を受け取った印はレーティングの引き直しである。画面の文言では判定しない。
   const settled = a.waitForResponse((response) => response.url().endsWith("/api/account/me"));
@@ -937,11 +938,8 @@ test("横に広い画面では、対戦のあいだリプレイの欄を出さ�
   const [a, b, close] = await openPair(browser, pageErrors);
   await a.setViewportSize({ width: 1920, height: 900 });
 
-  await Promise.all([a.goto("./"), b.goto("./")]);
-  await join(a, room);
-  await expect(a.locator("#join-status")).not.toBeEmpty();
-  await join(b, room);
-  await expect(a.locator("#table")).toBeVisible();
+  // 卓が出た時点ではまだ繋いでいる途中で、押した投了が届かないことがある。局面が届くまで待つ。
+  await seatPair(a, b, room);
   await expect(a.locator("#history")).toBeHidden();
   // ページがスクロールできると、盤面の上でホイールを回したときに盤面ごとずれる。
   expect(
