@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PORT = 8081;
+export const ORIGIN = `http://127.0.0.1:${PORT}`;
 /** D1 と R2 の中身の保存先。手元で遊んだ `.wrangler/` を汚さないよう、実行ごとに捨てられる場所を渡す。 */
 const STATE_DIR = mkdtempSync(join(tmpdir(), "poke-online-e2e-"));
 
@@ -29,7 +30,7 @@ export default defineConfig({
   retries: 0,
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: `http://127.0.0.1:${PORT}`,
+    baseURL: ORIGIN,
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
@@ -51,7 +52,7 @@ export default defineConfig({
       "--var ACCOUNT_BURST:0",
       "--var CARD_IMAGES:off",
     ].join(" "),
-    url: `http://127.0.0.1:${PORT}`,
+    url: ORIGIN,
     reuseExistingServer: false,
     timeout: 120_000,
     env: { WRANGLER_SEND_METRICS: "false" },

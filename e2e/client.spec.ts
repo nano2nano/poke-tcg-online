@@ -124,7 +124,7 @@ test("読み込みと「対戦をさがす」が重なっても、アカウン�
     await route.continue();
   });
 
-  await page.goto("/");
+  await page.goto("./");
   await page.click("#join-button");
   release();
 
@@ -145,7 +145,7 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
     await route.continue();
   });
 
-  await page.goto("/");
+  await page.goto("./");
   // 返事が来る前に打つ。ここで書き戻されると、打った名前が消えたまま送られる。
   await page.fill("#name", "ぼくのなまえ");
   release();
@@ -160,7 +160,7 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
   const seenA = lastSeen(a);
   const seenB = lastSeen(b);
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   // 先に入ったほうはチケットを持って待つ。2 人目が入った時点で席が決まる。
   await expect(a.locator("#join-status")).not.toBeEmpty();
@@ -662,7 +662,7 @@ async function replayOfFinishedMatch(
 ): Promise<[Page, () => Promise<void>]> {
   const [a, b, close] = await openPair(browser, errors);
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -806,7 +806,7 @@ test("読み込み直しても、指していた座席へ戻る", async ({ brows
   const room = `もどる-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -840,7 +840,7 @@ test("読み込み直しても、指していた座席へ戻る", async ({ brows
  * 二度と出ない**ので、その人はこのブラウザで指せなくなる。
  */
 test("サーバが知らない座席を覚えていたら、マッチングの画面へ戻す", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "もう無い座席" })),
   );
@@ -860,7 +860,7 @@ test("サーバが知らない座席を覚えていたら、マッチングの�
  * これを「サーバが座席を知らない」と読んで捨てると、続いている対戦へ戻れず時間切れで負ける。
  */
 test("繋がらずに閉じただけなら、座席を覚えたままマッチングの画面を出す", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
   );
@@ -884,7 +884,7 @@ test("終わった座席を捨てても、別のタブが置いた座席は残�
   const stale = watch(await context.newPage(), pageErrors);
   const fresh = watch(await context.newPage(), pageErrors);
   const next = JSON.stringify({ seat: 1, seatToken: "あたらしい座席" });
-  await Promise.all([stale.goto("/"), fresh.goto("/")]);
+  await Promise.all([stale.goto("./"), fresh.goto("./")]);
   await stale.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "おわった座席" })),
   );
@@ -912,11 +912,12 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   const room = `おわる-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
-  await expect(a.locator("#table")).toBeVisible();
+  // 卓が出た時点ではまだ繋いでいる途中で、押した投了が届かないことがある。局面が届くまで待つ。
+  await expect(a.locator("#self .mat").first()).toBeVisible();
 
   // 決着を受け取った印はレーティングの引き直しである。画面の文言では判定しない。
   const settled = a.waitForResponse((response) => response.url().endsWith("/api/account/me"));
@@ -937,11 +938,8 @@ test("横に広い画面では、対戦のあいだリプレイの欄を出さ�
   const [a, b, close] = await openPair(browser, pageErrors);
   await a.setViewportSize({ width: 1920, height: 900 });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
-  await join(a, room);
-  await expect(a.locator("#join-status")).not.toBeEmpty();
-  await join(b, room);
-  await expect(a.locator("#table")).toBeVisible();
+  // 卓が出た時点ではまだ繋いでいる途中で、押した投了が届かないことがある。局面が届くまで待つ。
+  await seatPair(a, b, room);
   await expect(a.locator("#history")).toBeHidden();
   // ページがスクロールできると、盤面の上でホイールを回したときに盤面ごとずれる。
   expect(
@@ -956,7 +954,7 @@ test("横に広い画面では、対戦のあいだリプレイの欄を出さ�
 });
 
 async function seatPair(a: Page, b: Page, room: string): Promise<void> {
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1015,7 +1013,7 @@ test("対戦中に切れたら、読み込み直さずに同じ座席へ繋ぎ�
     });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1055,7 +1053,7 @@ test("繋ぎ直すあいだに対戦が終わっていたら、マッチング�
     });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1091,7 +1089,7 @@ test("同じ座席を別のタブで開いたら、前のタブは繋ぎ直さ�
 
   // 同じブラウザの別のタブは localStorage を共有するので、開くと同じ座席へ繋ぐ。
   const other = watch(await a.context().newPage(), pageErrors);
-  await other.goto("/");
+  await other.goto("./");
   await expect(other.locator("#self .mat").first()).toBeVisible();
 
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "replaced");
@@ -1126,7 +1124,7 @@ test("繋ぎ直しを待っているタブは、同じ座席を別のタブが�
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
 
   const other = watch(await a.context().newPage(), pageErrors);
-  await other.goto("/");
+  await other.goto("./");
   await expect(other.locator("#self .mat").first()).toBeVisible();
 
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "replaced");
@@ -1137,7 +1135,7 @@ test("繋ぎ直しを待っているタブは、同じ座席を別のタブが�
 
 /** 繋がらない状態が続くあいだ、間を空けずに繋ぎに行くと、サーバが戻った瞬間に全員が押し寄せる。 */
 test("繋がらないあいだは、間隔を空けて繋ぎ直す", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
   );
@@ -1172,7 +1170,7 @@ test("観戦のリンクを開くと、プレイヤーを作らずに両者の�
   const room = `かんせん-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1207,7 +1205,7 @@ test("観戦のリンクを開くと、プレイヤーを作らずに両者の�
 });
 
 test("観戦のリンクが通らなければ、そう出して終わる", async ({ page }) => {
-  await page.goto("/?watch=もう無い対戦");
+  await page.goto("./?watch=もう無い対戦");
   await expect(page.locator("#watch")).toBeVisible();
   await expect(page.locator("#watch-status")).not.toBeEmpty();
 });
@@ -1218,7 +1216,7 @@ test("観戦のリンクが通らなければ、そう出して終わる", async
  */
 test("`ping` に答えなくなった接続は、閉じるのを待たずに繋ぎ直す", async ({ page }) => {
   await page.clock.install();
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
   );
@@ -1248,7 +1246,7 @@ test("`ping` に答えなくなった接続は、閉じるのを待たずに繋�
  */
 test("タイマーが大きく遅れても、`ping` に答えている接続は切らない", async ({ page }) => {
   await page.clock.install();
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つづいている座席" })),
   );
@@ -1322,7 +1320,7 @@ test("決着のあと、両座席がシャッフルを検算して合う", async
   const room = `けんざん-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1353,7 +1351,7 @@ test("決着で開かれたシェアが差し替えられていたら、合わ�
     });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1393,7 +1391,7 @@ test("相手のシェアを待っているあいだに切れても、席を覚�
     });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1439,7 +1437,7 @@ test("自分のシェアのコミットがすり替えられていたら、合�
     });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1477,7 +1475,7 @@ test("相手のシェアが使われていなければ、そう出す", async ({
     });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1526,7 +1524,7 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
 }) => {
   const room = `くみたて-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
 
   const entries = await sampleDeckEntries(a);
   for (const entry of entries) {
@@ -1559,7 +1557,7 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
 });
 
 test("減らしきった行は、デッキから消える", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   const [entry] = await sampleDeckEntries(page);
   if (entry === undefined) throw new Error("サンプルデッキが空");
   const { defId, name, set, number } = entry;
@@ -1574,7 +1572,7 @@ test("減らしきった行は、デッキから消える", async ({ page }) => 
 });
 
 test("同じ名前のカードが並びきらなくても、ワザの名前を打ち足せば絞れる", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   const cards = (await (await page.request.get("/api/cards")).json()) as Record<
     string,
     { name: string; attacks?: string[] }
@@ -1599,7 +1597,7 @@ test("同じ名前のカードが並びきらなくても、ワザの名前を�
 });
 
 test("ACE SPEC は 2 枚目を足せない", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   const cards = (await (await page.request.get("/api/cards")).json()) as Record<
     string,
     { name: string; aceSpec?: true }
@@ -1630,7 +1628,7 @@ test("カードの一覧を 1 度取れなくても、取り直して組める�
     return route.fulfill({ status: 503, body: "" });
   });
 
-  await page.goto("/");
+  await page.goto("./");
   await expect.poll(() => failed).toBe(true);
   await page.fill("#card-search", name);
   // 取り直すまで間を空けるので、既定の待ち時間より長く待つ。
@@ -1639,7 +1637,7 @@ test("カードの一覧を 1 度取れなくても、取り直して組める�
 
 test("カードの一覧が空で届いても、検索で固まらない", async ({ page }) => {
   await page.route("**/api/cards", (route) => route.fulfill({ json: {} }));
-  await page.goto("/");
+  await page.goto("./");
   await page.fill("#card-search", "あ");
   await expect(page.locator("#card-results .note")).toBeVisible();
   // 描き直しが止まらないと、ページはこれに答えない。
@@ -1647,7 +1645,7 @@ test("カードの一覧が空で届いても、検索で固まらない", async
 });
 
 test("キーボードで「追加」を続けて押せて、押せなくなったら検索欄へ戻る", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   const [entry] = await sampleDeckEntries(page);
   const { defId, name } = entry as { defId: string; name: string };
   await page.fill(
@@ -1691,7 +1689,7 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
     await route.fulfill({ status: 200, contentType: "image/png", body: PIXEL });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1725,7 +1723,7 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
     return route.fulfill({ status: 502, body: "" });
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1759,7 +1757,7 @@ test("画像を切ってある設定では、画像を頼まない", async ({ br
     if (request.url().includes("/api/card-image/")) asked.push(request.url());
   });
 
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -1774,7 +1772,7 @@ test("画像を出す設定なら、デッキを組む画面の候補にも画�
   await withCardImages(page, (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
   );
-  await page.goto("/");
+  await page.goto("./");
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card-row .card.thumb img").first()).toBeVisible();
@@ -1814,7 +1812,7 @@ function cardIds(): Map<string, string[]> {
 test("公式のデッキコードで読み込むと、無いカードだけを名前で出し、残りはデッキに入る", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("./");
   const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
   const counts = new Map<string, number>();
   for (const defId of deck.cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
@@ -1861,7 +1859,7 @@ test("公式のデッキコードで読み込むと、無いカードだけを�
 });
 
 test("公式のデッキコードが見つからなければ、組んでいるデッキを残す", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   const [entry] = await sampleDeckEntries(page);
   const { defId, name } = entry as { defId: string; name: string };
   await page.fill(
@@ -1889,7 +1887,7 @@ test("公式のデッキコードが見つからなければ、組んでいる�
 test("公式のカード ID で定義が決まらないカードは、枚数に届くまで候補を 1 枚ずつ選べる", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("./");
   const [cardId, defIds] = [...cardIds()].find(([, ids]) => ids.length > 1) as [string, string[]];
   await page.route(OFFICIAL_PAGE, (route) =>
     route.fulfill({
@@ -1927,7 +1925,7 @@ function overlaps(a: Box, b: Box): boolean {
 test("カードにマウスを載せると横に大きく出て、外すと消える", async ({ browser, pageErrors }) => {
   const room = `のせる-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  await Promise.all([a.goto("/"), b.goto("/")]);
+  await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
@@ -2002,7 +2000,7 @@ test("一覧を送ると、プレビューもカードに付いていく", async
   await withCardImages(page, (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
   );
-  await page.goto("/");
+  await page.goto("./");
   await page.fill("#card-search", "エネルギー");
   const thumb = page.locator("#card-results .card-row .card").nth(3);
   await expect(thumb).toBeVisible();
@@ -2046,7 +2044,7 @@ test.describe("タッチ端末", () => {
     await withCardImages(page, (route) =>
       route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
     );
-    await page.goto("/");
+    await page.goto("./");
     await page.fill("#card-search", "エネルギー");
     const thumb = page.locator("#card-results .card-row .card").first();
     await expect(thumb).toBeVisible();
@@ -2104,7 +2102,7 @@ test.describe("タッチ端末", () => {
 });
 
 test("公式サイトの返事を待つあいだにデッキを組み替えたら、置き換えない", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("./");
   const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
   const byDefId = new Map<string, string>();
   for (const [cardId, defIds] of cardIds()) {
@@ -2341,7 +2339,7 @@ test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる",
       }),
     ),
   );
-  await page.goto("/?watch=観戦");
+  await page.goto("./?watch=観戦");
   await expect(page.locator("#watch-side-0 .zone.bench .card").first()).toBeVisible();
 
   const board = await visibleBoard(page, "#watch");
@@ -2379,7 +2377,7 @@ interface CrowdedSync {
 /** 局面を 1 通の `sync` で直に送る画面を開く。返す配列に、画面が送った手が溜まる。 */
 async function openWith(page: Page, sync: object): Promise<{ move: object; offered?: number[] }[]> {
   const sent: { move: object; offered?: number[] }[] = [];
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(() =>
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "混んだ局面" })),
   );
