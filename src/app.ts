@@ -9,7 +9,6 @@
 import type { ZodType } from "zod";
 import { cardIndexJson } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
-import { describeDecklistFailure, resolveDecklist } from "./decklist.js";
 import { resolveOfficialDeck } from "./official-deck.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub, type SeatSocket } from "./hub.js";
@@ -26,7 +25,6 @@ import {
   joinRequestSchema,
   officialDeckSchema,
   replayRequestSchema,
-  resolveDecklistSchema,
   secretRequestSchema,
 } from "./requests.js";
 import { MatchRegistry } from "./registry.js";
@@ -359,26 +357,6 @@ async function route(request: Request, origin: string, context: RouteContext): P
   }
   if (request.method === "GET" && url.pathname === "/api/sample-deck") {
     return json(200, sampleDeck());
-  }
-  // 人が書いた文字列を `defId` の列へ直す（5.3 節）。同じ名前が複数あるときは候補を返す。
-  if (request.method === "POST" && url.pathname === "/api/deck/resolve") {
-    const { text } = parseBody(resolveDecklistSchema, await readBody(request));
-    const resolved = resolveDecklist(text);
-    if (!resolved.ok) {
-      return json(200, {
-        ok: false,
-        errors: resolved.failures.map(describeDecklistFailure),
-        failures: resolved.failures,
-      });
-    }
-    // 形として読めても、デッキとして成立しているとは限らない。続けて構築の検査も掛ける。
-    const errors = validateDeck(resolved.deck).map(describeViolation);
-    return json(200, {
-      ok: errors.length === 0,
-      errors,
-      deck: resolved.deck,
-      entries: resolved.entries,
-    });
   }
   /**
    * 公式のデッキコードから画面が読んだカード ID を `defId` へ直す（5.4 節）。決まったぶんだけでも返す。

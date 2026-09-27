@@ -8,7 +8,10 @@
 
 import type { CardDef, CardDefId } from "./engine.js";
 import { loadGeneratedCards } from "./engine.js";
-import { choiceOf, type CardChoice } from "./decklist.js";
+import { briefOf, type CardBrief } from "./card-index.js";
+
+/** 1 つに決まらないカードの候補。見分けに使う値は、デッキを組む画面と同じものを添える。 */
+export type CardChoice = CardBrief & { defId: CardDefId };
 
 export interface OfficialCard {
   cardId: string;
@@ -42,7 +45,7 @@ export function resolveOfficialDeck(cards: OfficialCard[]): OfficialDeckResult {
         kind: "ambiguous",
         cardId,
         count,
-        choices: defs.map(choiceOf),
+        choices: defs.map((def) => ({ defId: def.defId, ...briefOf(def) })),
       });
     } else {
       const same = entries.find((entry) => entry.defId === only.defId);

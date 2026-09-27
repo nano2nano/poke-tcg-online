@@ -133,66 +133,6 @@ function seatClient(seatToken: string, ended: (message: ServerMessage) => void):
   return socket;
 }
 
-/**
- * サンプルデッキを、人が書くのと同じ文字列へ起こす。**カードの名前をテストへ書き写さない**ため、
- * 名前は登録済みの定義から引く。同じ名前が複数あるときは `defId` を書き添える形にする。
- */
-function sampleDecklistText(): string {
-  const counts = new Map<string, number>();
-  for (const defId of sampleDeck().cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
-
-  const shared = new Set<string>();
-  const seen = new Set<string>();
-  for (const def of loadGeneratedCards()) {
-    if (seen.has(def.name)) shared.add(def.name);
-    seen.add(def.name);
-  }
-
-  const lines: string[] = [];
-  for (const [defId, count] of counts) {
-    const { name } = getCardDef(defId);
-    lines.push(shared.has(name) ? `${name} ${count} ${defId}` : `${name} ${count}`);
-  }
-  return lines.join("\n");
-}
-
-describe("人が書いたデッキ", () => {
-  it("文字列で出したデッキが、そのまま対戦に使える形で返る", async () => {
-    const outcome = await postJson("/api/deck/resolve", { text: sampleDecklistText() });
-
-    expect(outcome.errors).toEqual([]);
-    expect(outcome.ok).toBe(true);
-    // 順序まで含めて情報源なので、枚数だけでなく列そのものを見る。
-    expect(outcome.deck.cards).toEqual(sampleDeck().cards);
-  });
-
-  it("同じ名前が複数あるカードは、候補を返して拒否する", async () => {
-    const shared = new Map<string, number>();
-    for (const def of loadGeneratedCards()) {
-      shared.set(def.name, (shared.get(def.name) ?? 0) + 1);
-    }
-    const ambiguous = [...shared.entries()]
-      .filter(([, count]) => count > 1)
-      .sort(([a], [b]) => (a < b ? -1 : 1))[0];
-    if (ambiguous === undefined) throw new Error("重複する名前が無い");
-
-    const outcome = await postJson("/api/deck/resolve", { text: `${ambiguous[0]} 4` });
-
-    expect(outcome.ok).toBe(false);
-    expect(outcome.failures[0].kind).toBe("ambiguous");
-    expect(outcome.failures[0].choices.length).toBe(ambiguous[1]);
-  });
-
-  it("デッキの文字列が無い要求を 400 で返す", async () => {
-    const response = await fetch(`http://${base}/api/deck/resolve`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(response.status).toBe(400);
-  });
-});
-
 describe("公式のデッキコード", () => {
   /** 収録の欄は正規データの側にある。登録済みの定義（`getCardDef`）は持っていないことがある。 */
   function cardIdOf(defId: string): string | undefined {
@@ -293,7 +233,6 @@ describe("入れなかった理由", () => {
     "/api/join",
     "/api/join-bot",
     "/api/deck/validate",
-    "/api/deck/resolve",
     "/api/deck/official",
     "/api/matches",
     "/api/replay",
@@ -365,7 +304,6 @@ describe("入れなかった理由", () => {
       ["/api/account/me", { secret: 7 }],
       ["/api/matches", { secret: 7 }],
       ["/api/join", { secret: "あ", deck: { cards: [1] } }],
-      ["/api/deck/resolve", { text: 7 }],
       ["/api/deck/official", { cards: [{ cardId: "1", count: 0 }] }],
       ["/api/deck/official", { cards: [{ cardId: "../1", count: 1 }] }],
       ["/api/account", { displayName: 7 }],
