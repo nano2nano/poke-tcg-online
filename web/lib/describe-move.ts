@@ -5,16 +5,16 @@
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
 
-import type { ChoiceAnswer, Move, PlayerView } from "../../src/engine.js";
+import type { ChoiceAnswer, Move } from "../../src/engine.js";
 import type { AnswerDestination, DeckPlacementView, SetupView } from "../../src/match.js";
 import type { CardTable } from "./cards.js";
-import { conditionName, nameOf, sidesOf, type Side } from "./describe.js";
+import { conditionName, nameOf, sidesOf, type ReaderView, type Side } from "./describe.js";
 
 type Pokemon = NonNullable<Side["active"]>;
 
 /** ラベルを作るのに要るもの。盤面は座席から見たもの。 */
 export interface MoveContext {
-  view: PlayerView | null;
+  view: ReaderView | null;
   cards: CardTable;
 }
 
@@ -22,7 +22,7 @@ export interface MoveContext {
  * 座席から見た両側と、それが自分の側か。
  * 対戦中は相手の手札が `hand` を持たないので、自分の手札しか当たらない。
  */
-function seatSides(view: PlayerView | null): [boolean, Side][] {
+function seatSides(view: ReaderView | null): [boolean, Side][] {
   return sidesOf(view).map(([player, side]) => [player === view?.viewer, side]);
 }
 
@@ -32,7 +32,7 @@ function benched(side: Side): Pokemon[] {
   return slots.filter((pokemon) => pokemon !== null);
 }
 
-function pokemonAt(inPlayId: string, view: PlayerView | null) {
+function pokemonAt(inPlayId: string, view: ReaderView | null) {
   for (const [own, side] of seatSides(view)) {
     const active = side.active;
     if (active !== null && "inPlayId" in active && active.inPlayId === inPlayId) {

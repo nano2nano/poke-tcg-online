@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { z } from "zod";
+import { History } from "../components/history.js";
 import { Lobby } from "../components/lobby.js";
 import { refreshAccount } from "../lib/account.js";
 import { SeatTable } from "../components/seat-table.js";
@@ -56,16 +57,25 @@ function Seat() {
     setSeated(back);
     setStatus("");
   }, []);
-  if (seated !== null) return <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />;
+  if (seated !== null) {
+    return (
+      <>
+        <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />
+        <History />
+      </>
+    );
+  }
   return (
     <>
       <header id="next-home">
         <h1>ポケカ オンライン対戦</h1>
         <p className="note">
-          新しい画面を作っているところです。リプレイと戦績は <a href="/">いまの画面</a> にあります。
+          新しい画面を作っているところです。カードを大きく出す操作は、まだ{" "}
+          <a href="/">いまの画面</a> にしかありません。
         </p>
       </header>
       <Lobby status={status} remembered={remembered} onSeated={sit} onResume={resume} />
+      <History />
     </>
   );
 }

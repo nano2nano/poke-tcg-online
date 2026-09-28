@@ -217,6 +217,17 @@ export interface Notice {
 export type View = PlayerView | SpectatorView;
 
 /**
+ * 済んだ対戦を読み返す盤面。相手の側も相手自身の射影から取るので、相手の手札まで見える（仕様 6.6 節）。
+ * 座席の射影より見えるものが多いだけなので、座席の射影もこの形として読める。
+ */
+export type ReaderView = Omit<PlayerView, "opponent"> & { opponent: Side };
+
+/** 座席ごとの射影 2 つを、`seat` に座っていた人から見た 1 枚の盤面にする。 */
+export function readerView(views: readonly [PlayerView, PlayerView], seat: Player): ReaderView {
+  return { ...views[seat], opponent: views[seat === 0 ? 1 : 0].self };
+}
+
+/**
  * 届いたイベントを、人に見せる結果へ直す。見せないイベントの位置は null にする。
  * 名前は適用後と適用前の盤面から引く。きぜつしたポケモンは適用後の盤面にもういない。
  */
@@ -340,7 +351,7 @@ function pokemonName(
 }
 
 /** 座席の番号と、その座席の場の組。座席と観戦で盤面の形が違う。 */
-export function sidesOf(view: View | null): [Player, Side][] {
+export function sidesOf(view: View | ReaderView | null): [Player, Side][] {
   if (view === null) return [];
   if (view.viewer === "spectator")
     return [
