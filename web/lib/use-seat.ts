@@ -173,7 +173,9 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     function connect() {
       const query = [`seatToken=${encodeURIComponent(seated.seatToken)}`];
       // 繋ぎ直しでも付ける。シェアを開く前に切れていれば、ここで開くことになる。
-      if (typeof seated.seedShare === "string") query.push(`seedShare=${seated.seedShare}`);
+      if (typeof seated.seedShare === "string") {
+        query.push(`seedShare=${encodeURIComponent(seated.seedShare)}`);
+      }
       const ws = new WebSocket(socketUrl(query.join("&")));
       live.current.socket = ws;
       let code: string | null = null;
@@ -239,15 +241,21 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     };
   }, [seated]);
 
-  const send = useCallback((message: ClientMessage) => {
-    const { socket, log } = live.current;
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
-      return;
-    }
-    // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。
-    log("接続が切れているので送れませんでした。繋がってから、もう一度押してください。");
-  }, []);
+  const send = useCallback(
+    (message: ClientMessage) => {
+      const { socket, log } = live.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(message));
+        return;
+      }
+      // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。
+      // できごとの欄は畳んであるので、そこに書くだけでは目に入らない。
+      const text = "接続が切れているので送れませんでした。繋がってから、もう一度押してください。";
+      log(text);
+      notify({ text, tone: "attention" });
+    },
+    [notify],
+  );
 
   const choose = useCallback((action: SetupAction) => {
     const next = seatReducer(live.current.state, action);

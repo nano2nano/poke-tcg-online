@@ -14,7 +14,7 @@ import {
 import { setupOffer, type SeatState } from "../lib/match-state.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
-import { CardFace, SideBoard, Stadium } from "./board.js";
+import { CardFace, NOTHING_AIMED, SideBoard, Stadium } from "./board.js";
 import { EventLog } from "./event-log.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
@@ -53,15 +53,14 @@ export function SeatTable({
     const kept = (key: string | null) => (key !== null && keys.has(key) ? key : null);
     setAim((current) => ({ hovered: kept(current.hovered), focused: kept(current.focused) }));
   }
-  const aimed = useMemo(
-    () =>
-      new Set(
-        listed.buttons
-          .filter(({ key }) => key === aim.hovered || key === aim.focused)
-          .flatMap(({ targets }) => targets),
-      ),
-    [listed, aim],
-  );
+  const disabled = connection !== null;
+  const aimed = useMemo(() => {
+    const targets = listed.buttons
+      .filter(({ key }) => key === aim.hovered || key === aim.focused)
+      .flatMap((button) => button.targets);
+    // 空の集合を毎回作ると、盤面の memo が効かず、狙いの無いボタンに載せるたびに盤面を描き直す。
+    return targets.length === 0 ? NOTHING_AIMED : new Set(targets);
+  }, [listed, aim]);
   const onAim = (kind: keyof Aim, key: string | null) =>
     setAim((current) => (current[kind] === key ? current : { ...current, [kind]: key }));
 
@@ -127,14 +126,14 @@ export function SeatTable({
             seating={seating}
             context={context}
             listed={listed}
-            disabled={connection !== null}
+            disabled={disabled}
             onAim={onAim}
           />
           <button
             id="concede-button"
             className="danger"
             // 切れているあいだと決着のあとは、投了が届かない。押せたように見せない。
-            disabled={connection !== null || ended !== null}
+            disabled={disabled || ended !== null}
             onClick={() => {
               if (confirm("投了しますか。")) send({ t: "concede" });
             }}
@@ -253,9 +252,9 @@ function Moves({
         </p>
       )}
       {playing && moves !== null && revealedDeck !== null && (
-        <RevealedDeck state={state} moves={moves} revealedDeck={revealedDeck} />
+        <RevealedDeck state={state} table={table} moves={moves} revealedDeck={revealedDeck} />
       )}
-      <SetupForm state={state} send={send} choose={choose} context={context} />
+      <SetupForm state={state} send={send} choose={choose} context={context} disabled={disabled} />
       <div id="moves" className="moves">
         {moves === null
           ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
@@ -302,11 +301,13 @@ function SetupForm({
   send,
   choose,
   context,
+  disabled,
 }: {
   state: SeatState;
   send: Seating["send"];
   choose: Seating["choose"];
   context: MoveContext;
+  disabled: boolean;
 }) {
   const offer = setupOffer(state);
   if (offer === null) return null;
@@ -349,9 +350,10 @@ function SetupForm({
       </div>
       <button
         id="setup-submit"
-        disabled={draft.active === null || draft.sent}
+        // 切れているあいだに押すと、送れないまま送った扱いになり、次の局面が届くまで押せなくなる。
+        disabled={disabled || draft.active === null || draft.sent}
         onClick={() => {
-          if (draft.active === null || draft.sent) return;
+          if (disabled || draft.active === null || draft.sent) return;
           choose({ t: "setup-sent" });
           send({ t: "setup", active: draft.active, bench: draft.bench });
         }}
@@ -369,14 +371,15 @@ function SetupForm({
  */
 function RevealedDeck({
   state,
+  table,
   moves,
   revealedDeck,
 }: {
   state: SeatState;
+  table: MoveContext["cards"];
   moves: Move[];
   revealedDeck: string[];
 }) {
-  const { table } = useCardData();
   const pickable = new Set(
     moves.flatMap((move) =>
       move.type === "AnswerChoice" && move.answer.kind === "cardDef" ? [move.answer.defId] : [],

@@ -19,7 +19,7 @@ type Pokemon = NonNullable<Side["active"]>;
 const failedImages = new Set<string>();
 
 export type AimedSet = ReadonlySet<string>;
-const NOTHING_AIMED: AimedSet = new Set();
+export const NOTHING_AIMED: AimedSet = new Set();
 
 /** ねむり・マヒ・こんらんは、卓で向きを変えて示すのに合わせてカードを傾ける。 */
 const POSTURES = new Set(["asleep", "paralyzed", "confused"]);
