@@ -1,4 +1,11 @@
-import { useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData, type CardTable } from "../lib/cards.js";
 import {
@@ -57,12 +64,25 @@ export interface DeckMessage {
   deck: string | null;
 }
 
-export const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "", deck: null };
+const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "", deck: null };
+
+/**
+ * 組んだデッキの欄。組み替わったあとに届いた、前のデッキについての文は置かない。置くと、
+ * いまのデッキについての新しい文を上書きする。
+ */
+export function useDeckStatus(): [DeckMessage, (message: DeckMessage) => void] {
+  const [status, setStatus] = useState(NO_DECK_STATUS);
+  const show = useCallback((message: DeckMessage) => {
+    if (message.deck === storedDeckJson()) setStatus(message);
+  }, []);
+  return [status, show];
+}
 
 /**
  * デッキを組む。組んだデッキはこのブラウザに残り、対戦に入るときはそれを出す。
  *
  * `status` は組む画面と対戦に入る画面が一緒に使う欄で、デッキが規則に通らない理由もここに出る。
+ * `useDeckStatus` で作る。
  * `actions` は、組む画面のボタンの並びに添えるもの。
  */
 export function DeckBuilder({
@@ -105,7 +125,7 @@ export function DeckBuilder({
     saveDeck(next);
     // 前に出した検査の結果は、組み替えた時点で古くなる。
     setOfficial(null);
-    onStatus(NO_DECK_STATUS);
+    say([], "");
   };
 
   /** いまのデッキについての文を出す。 */
@@ -120,17 +140,12 @@ export function DeckBuilder({
     await validate(entries);
   };
 
-  /**
-   * 検査の結果を出す。待つあいだに組み替わっていたら、その結果は捨てる。欄に置くと、いまのデッキの
-   * 新しい結果を上書きする。
-   */
   const validate = async (deckEntries: readonly DeckEntry[]) => {
     const deck = storedDeckJson();
     const outcome = await postJson<{ errors?: string[] }>(
       "/api/deck/validate",
       deckCards(deckEntries),
     );
-    if (deck !== storedDeckJson()) return;
     showVerdict(outcome.errors ?? [], deck);
   };
 
@@ -202,7 +217,7 @@ export function DeckBuilder({
     const deck = storedDeckJson();
     setOfficial({ deck, missing, pending });
     // 選び終えるまでの検査の結果は、足りない枚数を言うだけである。選び終えたら確かめ直す。
-    if (pending.length > 0) onStatus(NO_DECK_STATUS);
+    if (pending.length > 0) say([], "");
     else showVerdict(outcome.errors ?? [], deck);
   };
 
@@ -224,7 +239,7 @@ export function DeckBuilder({
     const deck = storedDeckJson();
     setOfficial({ ...current, deck, pending });
     if (pending.some((each) => each.left > 0)) return;
-    onStatus({ messages: ["デッキを確かめています。"], tone: "", deck });
+    say(["デッキを確かめています。"], "");
     await validate(next);
   };
 
@@ -353,7 +368,7 @@ export function DeckBuilder({
             if (entries.length === 0 || !confirm("デッキを空にしますか。")) return;
             saveDeck([]);
             setOfficial(null);
-            onStatus(NO_DECK_STATUS);
+            say([], "");
           }}
         >
           デッキを空にする
@@ -452,7 +467,7 @@ function shownStatus(
   picking: OfficialImport | null,
   status: DeckMessage,
   deck: string | null,
-): DeckMessage {
+): Pick<DeckMessage, "messages" | "tone"> {
   const current = status.deck === deck;
   const messages = [
     ...(picking?.missing ?? []),
@@ -465,5 +480,5 @@ function shownStatus(
     ...(current ? status.messages : []),
   ];
   const tone = (picking?.missing.length ?? 0) > 0 ? "ng" : current ? status.tone : "";
-  return { messages, tone, deck };
+  return { messages, tone };
 }

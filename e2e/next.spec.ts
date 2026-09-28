@@ -276,6 +276,33 @@ test("確かめる返事を待つあいだに組み替えたら、その返事�
   await expect(page.locator("#deck-status")).not.toContainText("規則を通ります");
 });
 
+test("組み替える前に確かめた返事があとから届いても、組み替えてから確かめた結果を消さない", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  const defId = await addFirstSampleCard(page);
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  // どちらの検査も通ったことにする。1 度目の返事だけ、2 度目の結果が出たあとに届ける。
+  await page.route("**/api/deck/validate", async (route) => {
+    calls += 1;
+    if (calls === 1) await held;
+    await route.fulfill({ json: { ok: true, errors: [] } });
+  });
+
+  await page.click("#check-button");
+  await page.locator(`#deck-cards .card-row[data-def-id="${defId}"] button.add`).click();
+  await page.click("#check-button");
+  await expect(page.locator("#deck-status")).toContainText("デッキは 2 枚で、規則を通ります");
+  const late = page.waitForResponse((response) => response.url().endsWith("/api/deck/validate"));
+  release();
+  await late;
+  await expect(page.locator("#deck-status")).toContainText("デッキは 2 枚で、規則を通ります");
+});
+
 /** 公式のカード ID のうち、このサーバで複数のカードに当たるもの。読み込むと、どれかを選ぶ欄が出る。 */
 function sharedCardId(): string {
   const byCardId = new Map<string, string[]>();
@@ -437,24 +464,20 @@ test("デッキを確かめた結果は、対戦をさがしても残す", async
   await expect(page.locator("#deck-status")).toContainText("規則を通ります");
 });
 
-test("サンプルデッキで対戦すると出たあとに別のタブでデッキを組んだら、その文を消す", async ({
-  page,
-}) => {
-  await page.route("**/api/join", (route) =>
-    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
-  );
+test("空のデッキで対戦をさがすと、サンプルデッキを送ると出す", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } });
+  });
   await page.goto(`${BASEPATH}/`);
-  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
-  await joined;
-  await expect(page.locator("#deck-status")).toContainText("サンプルデッキで対戦します");
-
-  const other = await page.context().newPage();
-  await other.goto(page.url());
-  const defId = await addFirstSampleCard(other);
-  await other.close();
-  await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
-  await expect(page.locator("#deck-status")).not.toContainText("サンプルデッキで対戦します");
+  await expect(page.locator("#join-status")).toContainText("サンプルデッキを送っています");
+  release();
+  await expect(page.locator("#join-status")).toContainText("断った");
 });
 
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {
