@@ -66,15 +66,15 @@ export function nameOf(cards: CardTable, defId: string): string {
   return cards[defId]?.name ?? defId;
 }
 
-/** カードの面の下の段。ポケモンは HP、ほかは種類。 */
+/** カードの面の下の段。ポケモンは HP、ほかは種類。2 枚 1 組のスタジアムは左右も添える。 */
 export function cardSubtitle(card: CardBrief | undefined): string {
   if (card === undefined) return "";
   if (card.hp !== undefined) return `HP ${card.hp}`;
-  return (
+  const kind =
     (card.trainerKind === undefined ? undefined : TRAINER_KINDS[card.trainerKind]) ??
     KINDS[card.kind] ??
-    ""
-  );
+    "";
+  return card.stadiumHalf === undefined ? kind : `${kind} ${HALVES[card.stadiumHalf]}半分`;
 }
 
 /** 同じ名前の別のカードを見分けるための 1 行。 */

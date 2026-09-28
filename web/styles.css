@@ -390,6 +390,17 @@ button.secondary {
   height: 100%;
   object-fit: cover;
 }
+/*
+ * 2 枚 1 組のスタジアムは、公式の画像が 2 枚を横に並べた見開きの 1 枚しかなく、左右の半分が同じ画像を指す。
+ * 中央を切り出すと左右が同じ絵になるので、それぞれの半分を切り出す。見開きはカード 2 枚ぶんの縦横比なので、
+ * 高さを合わせて端に寄せると半分がちょうど収まる。
+ */
+.card[data-half="left"] img {
+  object-position: left;
+}
+.card[data-half="right"] img {
+  object-position: right;
+}
 /* 画像の無いときだけ、タイプの色を上の縁に出す。 */
 .card[data-kind="pokemon"]:not(:has(img)) {
   border-top: calc(var(--w, 64px) * 0.08) solid var(--type, #b8b8ae);

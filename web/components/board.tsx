@@ -48,6 +48,7 @@ export function CardFace({
       data-def-id={defId}
       data-kind={card?.kind ?? ""}
       data-type={card?.type}
+      data-half={card?.stadiumHalf}
       data-posture={posture}
       data-pickable={pickable === undefined ? undefined : String(pickable)}
     >
