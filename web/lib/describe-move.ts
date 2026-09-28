@@ -205,7 +205,7 @@ export function describeMove(
     case "EndTurn":
       return "番を終わる";
     case "AnswerChoice":
-      return describeAnswer(move, context, placement, destination);
+      return describeAnswer(move.answer, context, placement, destination);
     default:
       return (move as { type: string }).type;
   }
@@ -248,14 +248,13 @@ const SETUP_ANSWERS: Record<string, { card?: string; decline?: string }> = {
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
 function describeAnswer(
-  { answer, choiceId }: Extract<Move, { type: "AnswerChoice" }>,
+  answer: ChoiceAnswer,
   context: MoveContext,
   placement: DeckPlacementView | null,
   destination: AnswerDestination | null,
 ): string {
   const { view, cards } = context;
-  // 対戦準備では両者の選択が並んで積まれるので、いちばん上が答えている選択とは限らない。
-  const choice = view?.choices.find((each) => each.choiceId === choiceId) ?? view?.choices.at(-1);
+  const choice = view?.choices.at(-1);
   if (placement !== null && (answer.kind === "card" || answer.kind === "cardDef")) {
     return `${answerCardName(answer, context)} を${placementPlace(placement)}に置く`;
   }

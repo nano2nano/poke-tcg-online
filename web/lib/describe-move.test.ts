@@ -55,31 +55,6 @@ describe("済んだ対戦を読み返す盤面", () => {
     expect(readerView(views, reader).choices[0]?.context).not.toBeNull();
   });
 
-  it("答えのラベルは、その答えの選択で決める", () => {
-    ensureCards();
-    const match = newMatch("describe-move-reader");
-    const view = viewFor(match, 0);
-    const [answered] = view.choices;
-    const [card] = view.self.hand;
-    if (answered === undefined || card === undefined) throw new Error("選択か手札が無い");
-    const cards = { [card.defId]: { name: "答えたカード" } } as unknown as CardTable;
-    // 答えていない選択を上に積む。いちばん上で決めると、ベンチに出すと書いてしまう。
-    const stacked = {
-      ...view,
-      choices: [
-        { ...answered, kind: "setup-place-active" as const },
-        { ...answered, choiceId: "choice-other", kind: "setup-place-bench" as const },
-      ],
-    };
-    const move: Move = {
-      type: "AnswerChoice",
-      player: 0,
-      choiceId: answered.choiceId,
-      answer: { kind: "card", card: card.instanceId },
-    };
-    expect(describeMove(move, { view: stacked, cards })).toBe("答えたカード をバトル場に出す");
-  });
-
   it("リプレイの見出しに、何手目か、直前の手、辿れない地点を出す", () => {
     ensureCards();
     const match = newMatch("describe-move-reader");

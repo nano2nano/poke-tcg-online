@@ -75,7 +75,8 @@ export function History() {
           一覧を出す
         </button>
         <p id="history-status" className="note">
-          {matches.isError ? `一覧を出せませんでした: ${messageOf(matches.error)}` : failure}
+          {failure ||
+            (matches.isError ? `一覧を出せませんでした: ${messageOf(matches.error)}` : "")}
         </p>
         <div id="history-list" className="history-list">
           {matches.data?.length === 0 && "まだ読み返せる対戦がありません。"}
@@ -155,7 +156,9 @@ function Replay({
     // 数えるのは頼んだ手数からである。描けた手数から数えると、続けて押したぶんが
     // すべて同じ 1 手への問い合わせになり、押しただけ進まない。
     goTo(to(latest.current)).catch((error: unknown) => {
-      setFailure(`辿れませんでした: ${messageOf(error)}`);
+      // 最初の局面より先に押したものが失敗したら、開けなかったのと同じで描くものが無い。
+      if (latest.current.frame === null) onOpenFailed(error);
+      else setFailure(`辿れませんでした: ${messageOf(error)}`);
     });
   };
 

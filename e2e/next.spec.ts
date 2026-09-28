@@ -569,6 +569,16 @@ async function mockHistory(
   });
 }
 
+/** 見出しの手数。「10 / 10 手」を 0 手目と取り違えない。 */
+const atPly = (ply: number) => new RegExp(`(^|[^0-9])${ply} / 10 手`);
+
+/** 答えを受けてから描き直すまでを待つ。 */
+async function painted(page: Page): Promise<void> {
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+}
+
 function gate(): [Promise<void>, () => void] {
   let release = (): void => {};
   const promise = new Promise<void>((resolve) => {
@@ -592,13 +602,14 @@ test("閉じて別の対戦を開いたあとに、閉じた対戦を開けな�
   await rows.nth(0).click();
   await page.click("#replay-close");
   await rows.nth(1).click();
-  await expect(page.locator("#replay-status")).toContainText("0 / 10 手");
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
 
   const failed = page.waitForResponse((response) => response.url().endsWith("/api/replay"));
   release();
   await failed;
+  await painted(page);
   await expect(page.locator("#history-status")).toBeEmpty();
-  await expect(page.locator("#replay-status")).toContainText("0 / 10 手");
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
 });
 
 test("追い越された問い合わせの失敗は、描けた局面の見出しを隠さない", async ({ page }) => {
@@ -611,17 +622,46 @@ test("追い越された問い合わせの失敗は、描けた局面の見出�
   await page.goto(`${BASEPATH}/`);
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
-  await expect(page.locator("#replay-status")).toContainText("0 / 10 手");
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
   await page.click("#replay-next");
   await page.click("#replay-next");
-  await expect(page.locator("#replay-status")).toContainText("2 / 10 手");
+  await expect(page.locator("#replay-status")).toContainText(atPly(2));
 
   const failed = page.waitForResponse((response) => response.url().endsWith("/api/replay"));
   release();
   await failed;
-  // 失敗を受けてから描き直すまでを待つ。
-  await page.evaluate(
-    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  await painted(page);
+  await expect(page.locator("#replay-status")).toContainText(atPly(2));
+});
+
+test("最初の局面が届く前に押した手数を取りに行けなかったら、開けなかったとして閉じる", async ({
+  page,
+}) => {
+  const [slow, release] = gate();
+  await mockHistory(page, async (_matchId, ply) => {
+    if (ply === 1) return "fail";
+    await slow;
+    return "ok";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await page.click("#replay-next");
+  await expect(page.locator("#history-status")).toContainText("開けませんでした");
+  await expect(page.locator("#replay")).toHaveCount(0);
+  release();
+});
+
+test("一覧を取り直せなかったあとに開けなかったら、開けなかった理由を出す", async ({ page }) => {
+  await mockHistory(page, async () => "fail");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-list button")).toHaveCount(2);
+  await page.route("**/api/matches", (route) =>
+    route.fulfill({ status: 503, json: { error: "落とした" } }),
   );
-  await expect(page.locator("#replay-status")).toContainText("2 / 10 手");
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("一覧を出せませんでした");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#history-status")).toContainText("開けませんでした");
 });
