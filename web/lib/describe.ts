@@ -23,12 +23,12 @@ export type SpecialCondition = Extract<
 >["conditions"][number];
 
 const STAGES: Record<string, string> = { basic: "たね", stage1: "1 進化", stage2: "2 進化" };
-const KINDS: Record<string, string> = {
+export const KINDS: Record<string, string> = {
   pokemon: "ポケモン",
   trainer: "トレーナーズ",
   energy: "エネルギー",
 };
-const KIND_ORDER = Object.keys(KINDS);
+export const KIND_ORDER = Object.keys(KINDS);
 const TYPES: Record<string, string> = {
   grass: "草",
   fire: "炎",

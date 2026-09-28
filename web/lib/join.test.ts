@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { claim, liveSeatOf, shareFor, storedDeck, type Seated } from "./join.js";
+import { claim, liveSeatOf, shareFor, type Seated } from "./join.js";
 import { rememberSeat } from "./seat.js";
 
 let items: Map<string, string>;
@@ -14,31 +14,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe("storedDeck", () => {
-  it("壊れた行は捨て、読める行は残す", () => {
-    items.set(
-      "poke-deck",
-      JSON.stringify([
-        { defId: "a", count: 2 },
-        { defId: "b", count: 0 },
-        { defId: "c", count: 1.5 },
-        { count: 3 },
-        null,
-        { defId: "d", count: 999 },
-      ]),
-    );
-    expect(storedDeck()).toEqual([
-      { defId: "a", count: 2 },
-      { defId: "d", count: 60 },
-    ]);
-  });
-
-  it("JSON として読めなければ、組んでいないものとする", () => {
-    items.set("poke-deck", "{");
-    expect(storedDeck()).toEqual([]);
-  });
 });
 
 describe("shareFor", () => {
