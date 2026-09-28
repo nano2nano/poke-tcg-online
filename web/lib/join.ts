@@ -3,11 +3,12 @@
  */
 
 import type { BotEntry, DeckPreset } from "../../src/bots.js";
+import type { DeckList } from "../../src/engine.js";
 import type { ClaimOutcome, JoinOutcome, Seated } from "../../src/lobby.js";
 import { getJson, postJson } from "./api.js";
 import { sha256Hex, storedSeat, toHex, type StoredSeat } from "./seat.js";
 
-export type { BotEntry, DeckPreset };
+export type { BotEntry, DeckList, DeckPreset };
 
 export interface DeckEntry {
   defId: string;
@@ -16,6 +17,7 @@ export interface DeckEntry {
 
 /** 組んだデッキを置く localStorage のキー。いまの画面と同じキーにして、組んだデッキをそのまま使う。 */
 const DECK_KEY = "poke-deck";
+/** `src/deck.ts` の値を import すると、エンジンのカード定義まで画面に入る。 */
 const DECK_SIZE = 60;
 
 /** 組んだデッキ。読めない値や壊れた行は捨てる。 */
@@ -33,10 +35,6 @@ export function storedDeck(): DeckEntry[] {
         typeof entry?.defId === "string" && Number.isInteger(entry.count) && (entry.count ?? 0) > 0,
     )
     .map((entry) => ({ defId: entry.defId, count: Math.min(entry.count, DECK_SIZE) }));
-}
-
-export interface DeckList {
-  cards: string[];
 }
 
 /** 出すデッキ。組んでいなければサンプルデッキ。規則に通らなければ、その理由を返す。 */

@@ -31,6 +31,8 @@ export function accountQuery(displayName: () => string) {
     staleTime: Infinity,
     // 取り直しはプレイヤーを作る要求にもなる。押し直したときに取りに行けば足りる。
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 

@@ -62,6 +62,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
   const cardTable = useEffectEvent(() => table);
   const show = useEffectEvent(notify);
   const queryClient = useQueryClient();
+  const refreshRating = useEffectEvent(() => refreshAccount(queryClient).catch(() => {}));
 
   /** いまの状態と接続。ボタンから読むので、描いた時点の値ではなく最新を持つ。 */
   const live = useRef<{ state: SeatState; socket: WebSocket | null; log: (text: string) => void }>({
@@ -152,7 +153,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
           const text = seatEndText(message, seated.seat);
           log([text]);
           show({ text, tone: seatEndTone(message.matchResult.winner, seated.seat) });
-          refreshAccount(queryClient).catch(() => {});
+          void refreshRating();
           void checkShuffle(seated, message).then(([result, shown]) => {
             if (!disposed) setShuffle({ result, text: shown });
           });
@@ -244,7 +245,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
       channel?.close();
       live.current.socket?.close();
     };
-  }, [seated, queryClient]);
+  }, [seated]);
 
   // サーバは、処理の途中で投げた手には何も返さず、接続は保つ。返事だけを待つと、ボタンが戻らない。
   useEffect(() => {

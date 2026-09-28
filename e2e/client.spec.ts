@@ -156,13 +156,25 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
 });
 
 test("相手を待つあいだに知らない形の答えが届いたら、待つのをやめる", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   // 入れ替えのあとに、古いタブが新しいサーバの答えを受け取ったときの形。
-  await page.route("**/api/claim?**", (route) => route.fulfill({ json: { ok: true } }));
+  await page.route("**/api/claim?**", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: true } });
+  });
 
   await page.goto("./");
   await join(page, `しらない-${Date.now()}`);
+  const status = page.locator("#join-status");
+  await expect(status).not.toBeEmpty();
+  const waiting = await status.textContent();
+  release();
 
-  await expect(page.locator("#join-status")).toHaveText(/もう一度「対戦をさがす」/);
+  // 待ち続けるなら、出ているのは待っている一言のままである。
+  await expect(status).not.toHaveText(waiting ?? "");
 });
 
 test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {

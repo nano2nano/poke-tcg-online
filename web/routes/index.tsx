@@ -48,7 +48,7 @@ function Seat() {
           <a href="/">いまの画面</a> にあります。
         </p>
       </header>
-      <Lobby status={status} onSeated={sit} />
+      <Lobby status={status} remembered={storedSeat()} onSeated={sit} />
     </>
   );
 }

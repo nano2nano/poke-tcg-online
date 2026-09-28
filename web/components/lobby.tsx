@@ -26,12 +26,15 @@ import {
 import type { StoredSeat } from "../lib/seat.js";
 
 /**
- * 走っている入り方。`queue` は相手さがし（待っているあいだも含む）、`bot` は AI との対戦の用意である。
+ * 走っている入り方。`queue` は相手さがしを頼んでいるあいだ、`waiting` は相手を待っているあいだ、
+ * `bot` は AI との対戦の用意である。
  *
  * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
  * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
+ * 相手さがしを頼んでいるあいだの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
+ * 待っているあいだの押し直しは、サーバが前のチケットを降ろすので重ならない。
  */
-type Joining = "queue" | "bot";
+type Joining = "queue" | "waiting" | "bot";
 
 interface DeckStatus {
   messages: string[];
@@ -47,9 +50,12 @@ const NO_DECK_STATUS: DeckStatus = { messages: [], tone: "" };
  */
 export function Lobby({
   status: initialStatus,
+  remembered,
   onSeated,
 }: {
   status: string;
+  /** 覚えている座席。繋がらずにこの画面へ戻ったときに残っている。 */
+  remembered: StoredSeat | null;
   onSeated: (seated: StoredSeat) => void;
 }) {
   const queryClient = useQueryClient();
@@ -118,7 +124,9 @@ export function Lobby({
     setJoining(kind);
     task(mine)
       .catch((error: unknown) => {
-        if (mounted.current) setStatus(`つながらなかった: ${messageOf(error)}`);
+        if (mounted.current && running.current === mine) {
+          setStatus(`つながらなかった: ${messageOf(error)}`);
+        }
       })
       .finally(() => {
         if (running.current !== mine) return;
@@ -172,6 +180,7 @@ export function Lobby({
     if (!outcome.ok) return refused(outcome);
     if ("seat" in outcome) return onSeated(withShare(outcome.seat, share?.share));
     setStatus("相手を待っています");
+    if (running.current === mine) setJoining("waiting");
     await waitForOpponent(mine, outcome.ticket, share?.share);
   };
 
@@ -198,7 +207,9 @@ export function Lobby({
             return onSeated(withShare(claimed.seat, share));
           case "finished":
             // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
-            setStatus("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
+            setStatus(
+              "この対戦は、席に着く前に終わりました。いまの画面の「一覧を出す」から読み返せます。",
+            );
             refreshAccount(queryClient).catch(() => {});
             return;
           case "dropped":
@@ -244,7 +255,11 @@ export function Lobby({
     if (!outcome.ok && outcome.code === "bot-match-live" && outcome.seat !== undefined) {
       return onSeated(withShare(outcome.seat, shareFor(outcome.seat, earlier)));
     }
-    if (!outcome.ok) return refused(outcome);
+    if (!outcome.ok) {
+      // 断られた頼みは対戦を作っていない。用意している途中の対戦のシェアは、前のものである。
+      botShare.current = earlier;
+      return refused(outcome);
+    }
     if ("seat" in outcome) onSeated(withShare(outcome.seat, share?.share));
   };
 
@@ -257,6 +272,14 @@ export function Lobby({
   return (
     <section id="join">
       <h2>対戦に入る</h2>
+      {remembered !== null && (
+        <p>
+          {/* 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。 */}
+          <button id="resume-button" onClick={() => onSeated(remembered)}>
+            指していた対戦へ戻る
+          </button>
+        </p>
+      )}
       <label>
         名前 <input id="name" value={name} onChange={(event) => setTypedName(event.target.value)} />
       </label>
@@ -285,7 +308,7 @@ export function Lobby({
       <div className="deck-actions">
         <button
           id="join-button"
-          disabled={joining === "bot"}
+          disabled={joining === "bot" || joining === "queue"}
           onClick={() => run("queue", (mine) => join(mine))}
         >
           対戦をさがす
