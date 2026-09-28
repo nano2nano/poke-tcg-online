@@ -86,10 +86,12 @@ test("繋がらずにロビーへ戻っても、覚えている座席へ戻れ�
   expect(JSON.parse(stored ?? "null")).toMatchObject({ seatToken: "別のタブの座席" });
 });
 
-test("離れるあいだに別のタブが座席を置いていたら、その座席へは戻らせない", async ({ page }) => {
+test("離れるあいだに別のタブが座席を置いていても、戻る先は離れた座席である", async ({ page }) => {
+  const tokens: (string | null)[] = [];
   await page.routeWebSocket(
     (url) => url.searchParams.has("seatToken"),
     async (socket) => {
+      tokens.push(new URL(socket.url()).searchParams.get("seatToken"));
       await page.evaluate(() => {
         localStorage.setItem("poke-seat", JSON.stringify({ seat: 1, seatToken: "別のタブの座席" }));
       });
@@ -103,9 +105,11 @@ test("離れるあいだに別のタブが座席を置いていたら、その�
   });
 
   await page.goto(`${BASEPATH}/`);
-  await expect(page.locator("#join")).toBeVisible();
-  // ここで繋ぐと、別のタブの接続を追い出す。
-  await expect(page.locator("#resume-button")).toHaveCount(0);
+  await page.click("#resume-button");
+  // 別のタブの座席へ繋ぐと、そのタブの接続を追い出す。
+  await expect.poll(() => tokens).toEqual(["つながらない座席", "つながらない座席"]);
+  // 戻った座席へもう一度繋がらなくても、戻る道は残る。
+  await expect(page.locator("#resume-button")).toBeVisible();
 });
 
 test("相手を待つあいだに押し直して断られても、前のチケットを待ち続ける", async ({ page }) => {

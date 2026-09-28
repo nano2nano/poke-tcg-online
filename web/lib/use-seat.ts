@@ -31,8 +31,11 @@ export interface Seating {
   /** 新しいものが先頭。 */
   events: LoggedEvent[];
   shuffle: { result: ShuffleCheck; text: string } | null;
-  /** 座席を離れた理由。座席を失ったときと、座席へ繋がらなかったときに入る。 */
-  left: string | null;
+  /**
+   * 座席を離れた理由。座席を失ったときと、座席へ繋がらなかったときに入る。
+   * 繋がらなかっただけなら対戦は続いているので、`resumable` が立つ。
+   */
+  left: { text: string; resumable: boolean } | null;
   /**
    * 手か準備の答えを送って、返事を待っているあいだ。続けて押すと、2 つ目は古い局面への手として
    * 断られ、通った 1 つ目まで通らなかったように見える。
@@ -55,7 +58,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
   const [connection, setConnection] = useState<Connection>(null);
   const [events, setEvents] = useState<LoggedEvent[]>([]);
   const [shuffle, setShuffle] = useState<Seating["shuffle"]>(null);
-  const [left, setLeft] = useState<string | null>(null);
+  const [left, setLeft] = useState<Seating["left"]>(null);
   const [awaiting, setAwaiting] = useState(false);
 
   const { table } = useCardData();
@@ -114,10 +117,10 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     }
 
     /** 座席を離れる。これより先は繋ぎ直さない。 */
-    function leave(text: string) {
+    function leave(text: string, resumable: boolean) {
       retry.stop();
       live.current.socket = null;
-      setLeft(text);
+      setLeft({ text, resumable });
     }
 
     function receive(message: ServerMessage) {
@@ -219,7 +222,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
          */
         if (code === "seat-not-found") {
           forgetSeat(seated.seatToken);
-          leave("指していた対戦は、もう終わっています。");
+          leave("指していた対戦は、もう終わっています。", false);
           return;
         }
         if (code === "seat-replaced") {
@@ -228,7 +231,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         }
         if (!known) {
           // 盤面の画面に留めると、繋がらない状態が続いたときに対戦を始める画面へ出られない。
-          leave("サーバへ繋がりませんでした。読み込み直すと、指していた対戦へ繋ぎ直します。");
+          leave("サーバへ繋がりませんでした。読み込み直すと、指していた対戦へ繋ぎ直します。", true);
           return;
         }
         const attempt = retry.schedule();

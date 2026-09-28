@@ -29,7 +29,7 @@ export function SeatTable({
   onLeave,
 }: {
   seated: StoredSeat;
-  onLeave: (reason: string) => void;
+  onLeave: (reason: string, resumable: boolean) => void;
 }) {
   const board = useRef<HTMLElement>(null);
   const feed = useNotices();
@@ -65,7 +65,7 @@ export function SeatTable({
     setAim((current) => (current[kind] === key ? current : { ...current, [kind]: key }));
 
   useEffect(() => {
-    if (left !== null) onLeave(left);
+    if (left !== null) onLeave(left.text, left.resumable);
   }, [left, onLeave]);
   if (left !== null) return null;
 

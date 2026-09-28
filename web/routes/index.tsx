@@ -35,10 +35,10 @@ function Seat() {
   /** 離れたあとも覚えている座席。繋がらなかっただけなら、まだ指していた対戦が続いている。 */
   const [remembered, setRemembered] = useState<StoredSeat | null>(null);
   const leave = useCallback(
-    (reason: string) => {
-      // 別のタブが置いた座席へは戻らせない。こちらで繋ぐと、そのタブの接続を追い出す。
-      const stored = storedSeat();
-      setRemembered(stored?.seatToken === seated?.seatToken ? stored : null);
+    (reason: string, resumable: boolean) => {
+      // 戻す先は離れた座席である。覚えている座席は別のタブが置き換えていることがあり、そこへ繋ぐと
+      // そのタブの接続を追い出す。
+      setRemembered(resumable ? seated : null);
       // 離れているあいだに決着していれば、レーティングが動いている。
       refreshAccount(queryClient).catch(() => {});
       setSeated(null);

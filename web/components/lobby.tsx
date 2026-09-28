@@ -79,7 +79,6 @@ export function Lobby({
     queryKey: ["bots"],
     queryFn: () => getJson<BotList>("/api/bots"),
     staleTime: Infinity,
-    retry: false,
   });
   const botNames = bots.data?.bots ?? [];
   const decks = bots.data?.decks ?? [];
@@ -200,6 +199,8 @@ export function Lobby({
     const earlier = waitingTicket.current;
     if (earlier !== null) {
       const last = await claim(earlier.ticket);
+      // 待ちが先に同じ席を取っていれば、画面はもう座席へ移っている。
+      if (!mounted.current) return;
       if (last?.kind === "seated") {
         waitingFor.current = null;
         waitingTicket.current = null;
