@@ -22,6 +22,7 @@ const KINDS: Record<string, string> = {
   trainer: "トレーナーズ",
   energy: "エネルギー",
 };
+const KIND_ORDER = Object.keys(KINDS);
 const TYPES: Record<string, string> = {
   grass: "草",
   fire: "炎",
@@ -51,9 +52,8 @@ const CONDITIONS: Record<string, string> = {
 
 /** 山札を種類で並べるときの順。 */
 export function kindRank(card: CardBrief | undefined): number {
-  const kinds = Object.keys(KINDS);
-  const index = card === undefined ? -1 : kinds.indexOf(card.kind);
-  return index === -1 ? kinds.length : index;
+  const index = card === undefined ? -1 : KIND_ORDER.indexOf(card.kind);
+  return index === -1 ? KIND_ORDER.length : index;
 }
 
 export function nameOf(cards: CardTable, defId: string): string {
@@ -259,6 +259,20 @@ function describeEvent(
     default:
       return null;
   }
+}
+
+/**
+ * できごとの記録に足す行。人に見せる文が無いイベントは、不具合を調べるときのために名前で残す。
+ * 畳んだ結果は足さない。
+ */
+export function eventLines(
+  events: readonly PlayerEvent[],
+  notices: readonly (Notice | null)[],
+): string[] {
+  return events.flatMap((event, index) => {
+    const notice = notices[index];
+    return notice?.repeated ? [] : [notice?.text ?? event.kind];
+  });
 }
 
 /** 場のポケモンを「持ち主の名前」で呼ぶ。見つからなければ null。 */

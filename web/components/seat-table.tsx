@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Move, Player } from "../../src/engine.js";
-import { useCardData } from "../lib/cards.js";
+import { useCardData, type CardTable } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
 import {
   describeMove,
@@ -35,12 +35,20 @@ export function SeatTable({
   const feed = useNotices();
   const seating = useSeat(seated, feed.show);
   const { state, connection, events, shuffle, left, send } = seating;
-  const [aim, setAim] = useState<{ hovered: string[]; focused: string[] }>({
-    hovered: [],
-    focused: [],
-  });
-  // 同じポケモンを狙うボタンが 2 つあっても消し合わないよう、載っているボタンと選んだボタンを分けて持つ。
-  const aimed = useMemo(() => new Set([...aim.hovered, ...aim.focused]), [aim]);
+  const { table } = useCardData();
+  const listed = useMemo(() => listMoves(state, table), [state, table]);
+  // 載っているボタンと選んだボタンを分けて持つ。同じポケモンを狙うボタンが 2 つあっても消し合わない。
+  // 覚えるのは手そのもので、狙う先はいまの手の一覧から引き直す。ボタンが消えたら囲みも消える。
+  const [aim, setAim] = useState<Aim>({ hovered: null, focused: null });
+  const aimed = useMemo(
+    () =>
+      new Set(
+        listed
+          .filter(({ key }) => key === aim.hovered || key === aim.focused)
+          .flatMap(({ targets }) => targets),
+      ),
+    [listed, aim],
+  );
 
   useEffect(() => {
     if (left !== null) onLeave(left);
@@ -102,13 +110,17 @@ export function SeatTable({
           <h2>指せる手</h2>
           <Moves
             seating={seating}
+            listed={listed}
             disabled={connection !== null}
-            onAim={(kind, targets) => setAim((current) => ({ ...current, [kind]: targets }))}
+            onAim={(kind, key) =>
+              setAim((current) => (current[kind] === key ? current : { ...current, [kind]: key }))
+            }
           />
           <button
             id="concede-button"
             className="danger"
-            disabled={connection !== null}
+            // 切れているあいだと決着のあとは、投了が届かない。押せたように見せない。
+            disabled={connection !== null || ended !== null}
             onClick={() => {
               if (confirm("投了しますか。")) send({ t: "concede" });
             }}
@@ -137,28 +149,52 @@ export function SeatTable({
   );
 }
 
+interface Aim {
+  hovered: string | null;
+  focused: string | null;
+}
+
+interface ListedMove {
+  move: Move;
+  /** `legalMoves` での位置。 */
+  index: number;
+  /** 手そのものから作る。局面が変わって別の手になったボタンは、別の要素として描き直す。 */
+  key: string;
+  label: string;
+  targets: string[];
+}
+
+/** 並べる手。手札の同じカードを選ぶ手は 1 つに畳む。 */
+function listMoves(state: SeatState, table: CardTable): ListedMove[] {
+  const { view, legalMoves: moves, deckPlacement, answerDestinations } = state;
+  if (moves === null) return [];
+  const context: MoveContext = { view, cards: table };
+  return foldMoves(moves, context).map(({ move, index }) => ({
+    move,
+    key: JSON.stringify(move),
+    label: describeMove(move, context, deckPlacement, answerDestinations?.[index] ?? null),
+    targets: moveTargets(move),
+    index,
+  }));
+}
+
 /**
  * 準備の状態（`setup`）があるあいだは、同じ選択を 1 手ずつ指すボタンを並べない。
  * 対戦が終わっていれば、待ちも選ぶものも無い。
  */
 function Moves({
   seating: { state, send, choose },
+  listed,
   disabled,
   onAim,
 }: {
   seating: Seating;
+  listed: ListedMove[];
   disabled: boolean;
-  onAim: (kind: "hovered" | "focused", targets: string[]) => void;
+  onAim: (kind: keyof Aim, key: string | null) => void;
 }) {
   const { table } = useCardData();
-  const {
-    view,
-    legalMoves: moves,
-    setup,
-    deckPlacement: placement,
-    answerDestinations: destinations,
-    revealedDeck,
-  } = state;
+  const { view, legalMoves: moves, setup, deckPlacement: placement, revealedDeck } = state;
   const context: MoveContext = { view, cards: table };
   const playing = state.ended === null;
   const prompt = !playing
@@ -167,14 +203,13 @@ function Moves({
       ? placementPrompt(placement, table)
       : setupPrompt(context, moves !== null, setup);
 
-  const shown = moves === null ? [] : foldMoves(moves, context);
   // 畳んだときだけ、見せた手の位置を添える。記録で、見せなかった手と選ばなかった手を分けるため（6.2 節）。
   const offered =
-    moves === null || shown.length === moves.length
+    moves === null || listed.length === moves.length
       ? {}
-      : { offered: shown.map(({ index }) => index) };
+      : { offered: listed.map(({ index }) => index) };
   const play = (move: Move) =>
-    send({ t: "move", stateVersion: state.stateVersion, move: { ...move }, ...offered });
+    send({ t: "move", stateVersion: state.stateVersion, move, ...offered });
 
   return (
     <>
@@ -192,22 +227,19 @@ function Moves({
           (moves === null
             ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
               playing && view !== null && view.phase !== "setup" && <WaitingNote state={state} />
-            : shown.map(({ move, index }) => {
-                const targets = moveTargets(move);
-                return (
-                  <button
-                    key={index}
-                    disabled={disabled}
-                    onClick={() => play(move)}
-                    onPointerEnter={() => onAim("hovered", targets)}
-                    onPointerLeave={() => onAim("hovered", [])}
-                    onFocus={() => onAim("focused", targets)}
-                    onBlur={() => onAim("focused", [])}
-                  >
-                    {describeMove(move, context, placement, destinations?.[index] ?? null)}
-                  </button>
-                );
-              }))}
+            : listed.map(({ move, key, label }) => (
+                <button
+                  key={key}
+                  disabled={disabled}
+                  onClick={() => play(move)}
+                  onPointerEnter={() => onAim("hovered", key)}
+                  onPointerLeave={() => onAim("hovered", null)}
+                  onFocus={() => onAim("focused", key)}
+                  onBlur={() => onAim("focused", null)}
+                >
+                  {label}
+                </button>
+              )))}
       </div>
     </>
   );

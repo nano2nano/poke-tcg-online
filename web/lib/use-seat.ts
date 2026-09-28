@@ -7,8 +7,8 @@ import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import type { Player } from "../../src/engine.js";
 import type { ClientMessage, ServerMessage } from "../../src/protocol.js";
 import { useCardData } from "./cards.js";
-import { keepAlive, reconnector, type Reconnector } from "./connection.js";
-import { describeEvents, type Notice, type Tone } from "./describe.js";
+import { keepAlive, reconnector, socketUrl, type Reconnector } from "./connection.js";
+import { describeEvents, eventLines, type Notice, type Tone } from "./describe.js";
 import { initialSeatState, seatReducer, type SeatState, type SetupAction } from "./match-state.js";
 import {
   checkShuffle,
@@ -17,7 +17,6 @@ import {
   type ShuffleCheck,
   type StoredSeat,
 } from "./seat.js";
-import { socketUrl } from "./connection.js";
 import type { LoggedEvent } from "./use-watch.js";
 
 /** 繋がっていないあいだの様子。繋がっていれば null。 */
@@ -135,12 +134,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         case "delta": {
           const happened = message.t === "delta" ? message.events : [];
           const notices = describeEvents(happened, [current.view, before.view], who, cardTable());
-          log(
-            happened.flatMap((event, index) => {
-              const notice = notices[index];
-              return notice?.repeated ? [] : [notice?.text ?? event.kind];
-            }),
-          );
+          log(eventLines(happened, notices));
           // 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。
           if (message.t === "sync" && !firstPlayerShown && message.view.phase === "setup") {
             firstPlayerShown = true;
@@ -157,7 +151,8 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         }
         case "ended": {
           // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
-          forgetSeat();
+          // 別のタブが新しい対戦の座席を置いていれば、それは消さない。
+          if (storedSeat()?.seatToken === seated.seatToken) forgetSeat();
           const text = describeEnd(message, seated.seat);
           log([text]);
           show({ text, tone: endTone(message.matchResult.winner, seated.seat) });

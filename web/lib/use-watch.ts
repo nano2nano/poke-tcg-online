@@ -9,7 +9,13 @@ import type { Player } from "../../src/engine.js";
 import type { ServerMessage } from "../../src/protocol.js";
 import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl } from "./connection.js";
-import { describeEvents, seatDisplayName, watchEndText, type Notice } from "./describe.js";
+import {
+  describeEvents,
+  eventLines,
+  seatDisplayName,
+  watchEndText,
+  type Notice,
+} from "./describe.js";
 import { initialWatchState, watchReducer, type WatchState } from "./match-state.js";
 
 export interface LoggedEvent {
@@ -90,12 +96,7 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
               who,
               cardTable(),
             );
-            log(
-              message.events.flatMap((happened, index) => {
-                const notice = notices[index];
-                return notice?.repeated ? [] : [notice?.text ?? happened.kind];
-              }),
-            );
+            log(eventLines(message.events, notices));
             for (const notice of notices) {
               if (notice !== null && !notice.repeated) show(notice);
             }
