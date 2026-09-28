@@ -20,7 +20,7 @@ import {
 
 type Pokemon = NonNullable<Side["active"]>;
 
-/** ラベルを作るのに要るもの。盤面は座席から見たもの。 */
+/** ラベルを作るのに要るもの。盤面は座席から見たもの。リプレイでは相手の手札と選択の中身も見える。 */
 export interface MoveContext {
   view: ReaderView | null;
   cards: CardTable;
@@ -477,6 +477,6 @@ export function replayStatusText(frame: ReplayFrame, seat: Player, cards: CardTa
   const diverged =
     frame.divergedAt === null
       ? ""
-      : `　※ ${frame.divergedAt} 手目から先は、いまのエンジンでは再現できません`;
+      : `　※ ${frame.divergedAt + 1} 手目から先は、いまのエンジンでは再現できません`;
   return `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}${diverged}`;
 }

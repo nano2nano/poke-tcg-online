@@ -3,7 +3,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MatchSummary } from "../../src/archive.js";
 import type { ReplayFrame } from "../../src/history.js";
 import { accountKey, accountQuery, storedSecret } from "../lib/account.js";
-import { messageOf, post } from "../lib/api.js";
+import { ApiError, messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import { describeSummary, readerView } from "../lib/describe.js";
 import { replayStatusText } from "../lib/describe-move.js";
@@ -48,17 +48,14 @@ async function postAsPlayer<T>(
   path: string,
   body: Record<string, unknown>,
 ): Promise<T> {
-  const response = await post(path, { ...body, secret: storedSecret() });
-  const answer = (await response.json().catch(() => null)) as
-    | (T & { code?: unknown; error?: unknown })
-    | null;
-  if (response.ok && answer !== null) return answer;
-  if (answer?.code === "account-not-found") {
-    void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
+  try {
+    return await postJson<T>(path, { ...body, secret: storedSecret() });
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "account-not-found") {
+      void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
+    }
+    throw error;
   }
-  throw new Error(
-    typeof answer?.error === "string" ? answer.error : `${path} が ${response.status} を返した`,
-  );
 }
 
 function PlayerHistory({
@@ -75,8 +72,10 @@ function PlayerHistory({
     queryKey: ["matches", playerId],
     queryFn: async () => {
       // 初めて来た人はシークレットをまだ持たない。待たずに送ると、アカウントが見つからないと断られる。
+      const account = await queryClient.fetchQuery(accountQuery());
       // 待つあいだにプレイヤーが替わったら、この部品ごと作り直され、作り直した側が取り直す。
-      await queryClient.fetchQuery(accountQuery());
+      // ここで頼むと同じ一覧を 2 度頼み、前のプレイヤーの控えに新しいプレイヤーの一覧を置く。
+      if (account.playerId !== playerId) return [];
       const { matches: list } = await postAsPlayer<{ matches: MatchSummary[] }>(
         queryClient,
         "/api/matches",
@@ -108,7 +107,8 @@ function PlayerHistory({
           onClick={() => {
             setFailure("");
             onRequest();
-            // 取りに行っている途中なら、それを止めて取り直す。遅れて届いた古い一覧で新しい一覧を消さない。
+            // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
+            // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
             void matches.refetch();
           }}
         >
@@ -217,8 +217,10 @@ function Replay({
 
   const step = (to: (state: ReplayState) => number) => () => {
     const target = to(latest.current);
-    // 端でさらに押しても、行き先は変わらない。同じ局面をサーバに作り直させない。
-    if (clampPly(latest.current, target) === latest.current.wanted) return;
+    // 描けている局面をまた頼んでも、サーバに同じ局面を作り直させるだけになる。答えを待っている
+    // あいだは頼む。返ってこない問い合わせを、押し直して頼み直せるようにする。
+    const { ply, wanted } = latest.current;
+    if (clampPly(latest.current, target) === ply && wanted === ply) return;
     // 数えるのは頼んだ手数からである。描けた手数から数えると、続けて押したぶんが
     // すべて同じ 1 手への問い合わせになり、押しただけ進まない。
     goTo(target).catch((error: unknown) => {

@@ -13,12 +13,23 @@ export async function getJson<T>(path: string): Promise<T> {
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await post(path, body);
   const answer = (await response.json().catch(() => null)) as
-    | (T & { ok?: unknown; error?: unknown })
+    | (T & { ok?: unknown; error?: unknown; code?: unknown })
     | null;
   if (answer !== null && (response.ok || answer.ok === false)) return answer;
-  throw new Error(
+  throw new ApiError(
     typeof answer?.error === "string" ? answer.error : `${path} が ${response.status} を返した`,
+    answer?.code,
   );
+}
+
+/** サーバが断った理由。`code` があれば、呼び手はそれで分ける。 */
+export class ApiError extends Error {
+  readonly code: unknown;
+
+  constructor(message: string, code: unknown) {
+    super(message);
+    this.code = code;
+  }
 }
 
 /** 応答をそのまま返す。状態の番号だけでなく本文も見て決めたいときに使う。 */

@@ -770,10 +770,16 @@ test("プレイヤーを作っているあいだに押しても、作り終え�
     await slow;
     await route.continue();
   });
+  let listed = 0;
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/matches")) listed += 1;
+  });
   await page.goto(`${BASEPATH}/`);
   await page.click("#history-button");
   release();
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await painted(page);
+  expect(listed).toBe(1);
 });
 
 test("リプレイでサーバがプレイヤーを忘れていたと分かったら、次に一覧を出すときに作り直す", async ({
@@ -817,4 +823,20 @@ test("席に着いたまま開き直しても、一覧の欄はプレイヤー�
   await expect(page.locator("#history")).toBeAttached();
   await painted(page);
   expect(asked).toEqual([]);
+});
+
+test("返ってこない問い合わせは、同じ手数を押し直せば頼み直す", async ({ page }) => {
+  const [never] = gate();
+  let lastAsked = 0;
+  await mockHistory(page, async (_matchId, ply) => {
+    if (ply === 10 && lastAsked++ === 0) await never;
+    return "ok";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-last");
+  await page.click("#replay-last");
+  await expect(page.locator("#replay-status")).toContainText(atPly(10));
 });
