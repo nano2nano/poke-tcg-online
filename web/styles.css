@@ -42,6 +42,7 @@ button.danger {
   padding: 6px 0;
 }
 .connection {
+  display: block;
   margin: 0 0 6px;
   padding: 6px 10px;
   border: 1px solid #b7791f;
@@ -96,6 +97,9 @@ button[aria-pressed="true"] {
 }
 .moves button {
   text-align: left;
+}
+.moves button[aria-disabled="true"] {
+  cursor: progress;
 }
 .event-log {
   margin: 16px 0 0;

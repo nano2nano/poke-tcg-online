@@ -143,6 +143,8 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
       if (bench.length >= offer.benchSlots) return state;
       return withDraft(state, { ...state.setupDraft, bench: [...bench, action.instanceId] });
     }
+    // 新しい画面は返事待ちを `useSeat` で手と一緒に持つので、これを使わない。いまの画面の
+    // `public/match-state.js` と同じテストで確かめるあいだは、同じ形に揃えておく。
     case "setup-sent":
       if (state.setupDraft.active === null || state.setupDraft.sent) return state;
       return { ...state, setupDraft: { ...state.setupDraft, sent: true } };

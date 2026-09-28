@@ -5,8 +5,14 @@
  * どうぐや効果で最大 HP が変わると、画面だけが嘘をつく。
  */
 
-import type { Player, PlayerEvent, PlayerView, SpectatorView } from "../../src/engine.js";
-import type { ClockView, SpectatorSeat } from "../../src/protocol.js";
+import type {
+  GameOutcome,
+  Player,
+  PlayerEvent,
+  PlayerView,
+  SpectatorView,
+} from "../../src/engine.js";
+import type { ClockView, EndedMessage, RejectReason, SpectatorSeat } from "../../src/protocol.js";
 import type { CardBrief, CardTable } from "./cards.js";
 
 /** 1 人ぶんの場。手札の中身が見えるのは自分の座席だけで、ほかは枚数だけが届く。 */
@@ -22,6 +28,7 @@ const KINDS: Record<string, string> = {
   trainer: "トレーナーズ",
   energy: "エネルギー",
 };
+const KIND_ORDER = Object.keys(KINDS);
 const TYPES: Record<string, string> = {
   grass: "草",
   fire: "炎",
@@ -48,6 +55,12 @@ const CONDITIONS: Record<string, string> = {
   paralyzed: "マヒ",
   confused: "こんらん",
 };
+
+/** 山札を種類で並べるときの順。 */
+export function kindRank(card: CardBrief | undefined): number {
+  const index = card === undefined ? -1 : KIND_ORDER.indexOf(card.kind);
+  return index === -1 ? KIND_ORDER.length : index;
+}
 
 export function nameOf(cards: CardTable, defId: string): string {
   return cards[defId]?.name ?? defId;
@@ -98,7 +111,7 @@ export function describeCard(card: CardBrief | undefined): string {
   return parts.filter(Boolean).join(" / ");
 }
 
-export function conditionName(condition: SpecialCondition): string {
+export function conditionName(condition: Pick<SpecialCondition, "kind">): string {
   return CONDITIONS[condition.kind] ?? condition.kind;
 }
 
@@ -111,6 +124,15 @@ function moveRemainingText(clock: ClockView): string {
   return clock.moveRemainingMs === null
     ? ""
     : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
+}
+
+export function seatClockText(clock: ClockView, seat: Player): string {
+  const mine = Math.round(clock.bankMs[seat] / 1000);
+  const theirs = Math.round(clock.bankMs[seat === 0 ? 1 : 0] / 1000);
+  // 決着した局面では、どちらの番でもない。
+  const turn =
+    clock.toMove === null ? "" : clock.toMove === seat ? "あなたの番です" : "相手が考えています";
+  return `${turn}${moveRemainingText(clock)} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
 }
 
 export function watchClockText(clock: ClockView, who: (player: Player) => string): string {
@@ -128,6 +150,44 @@ export function watchEndText(
   if (result.winner === null) return "引き分けで終わりました";
   const how: Record<string, string> = { concede: "（投了）", timeout: "（時間切れ）" };
   return `${who(result.winner)} の勝ちで終わりました${how[result.kind] ?? ""}`;
+}
+
+const WIN_REASONS: Record<GameOutcome["reason"], string> = {
+  "prizes-taken": "サイドを取りきった",
+  "no-pokemon": "場のポケモンがいなくなった",
+  "deck-out": "山札を引けなかった",
+  "effect-declared": "カードの効果",
+  "turn-limit": "手数の上限",
+};
+
+export function seatEndText(
+  ended: Pick<EndedMessage, "matchResult" | "outcome">,
+  seat: Player,
+): string {
+  const result = ended.matchResult;
+  const mine = result.winner === seat ? "勝ち" : "負け";
+  if (result.kind === "concede") return `投了により ${mine}`;
+  if (result.kind === "timeout") return `時間切れにより ${mine}`;
+  if (result.winner === null) return "引き分け";
+  const reason = ended.outcome?.reason;
+  return reason === undefined ? mine : `${mine}（${WIN_REASONS[reason]}）`;
+}
+
+export function seatEndTone(winner: Player | null, seat: Player): Tone {
+  if (winner === null) return "neutral";
+  return winner === seat ? "positive" : "negative";
+}
+
+/** 手を断った理由（仕様 2.2 節）。 */
+const REJECT_REASONS: Record<RejectReason, string> = {
+  "not-your-turn": "あなたの番ではありません",
+  "stale-version": "盤面が先に進んでいました",
+  "illegal-move": "いまは指せない手です",
+  "match-over": "対戦は終わっています",
+};
+
+export function rejectText(reason: RejectReason): string {
+  return `手が通りませんでした（${REJECT_REASONS[reason]}）`;
 }
 
 export type Tone = "neutral" | "turn" | "attention" | "positive" | "negative";
@@ -154,7 +214,7 @@ export interface Notice {
   repeated?: boolean;
 }
 
-type View = PlayerView | SpectatorView;
+export type View = PlayerView | SpectatorView;
 
 /**
  * 届いたイベントを、人に見せる結果へ直す。見せないイベントの位置は null にする。
@@ -247,6 +307,20 @@ function describeEvent(
   }
 }
 
+/**
+ * できごとの記録に足す行。人に見せる文が無いイベントは、不具合を調べるときのために名前で残す。
+ * 畳んだ結果は足さない。
+ */
+export function eventLines(
+  events: readonly PlayerEvent[],
+  notices: readonly (Notice | null)[],
+): string[] {
+  return events.flatMap((event, index) => {
+    const notice = notices[index];
+    return notice?.repeated ? [] : [notice?.text ?? event.kind];
+  });
+}
+
 /** 場のポケモンを「持ち主の名前」で呼ぶ。見つからなければ null。 */
 function pokemonName(
   inPlayId: string,
@@ -266,7 +340,7 @@ function pokemonName(
 }
 
 /** 座席の番号と、その座席の場の組。座席と観戦で盤面の形が違う。 */
-function sidesOf(view: View | null): [Player, Side][] {
+export function sidesOf(view: View | null): [Player, Side][] {
   if (view === null) return [];
   if (view.viewer === "spectator")
     return [

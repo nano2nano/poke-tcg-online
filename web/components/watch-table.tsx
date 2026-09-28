@@ -1,9 +1,10 @@
-import { memo, useRef } from "react";
+import { useRef } from "react";
 import type { Player } from "../../src/engine.js";
 import { seatDisplayName, watchClockText, watchEndText } from "../lib/describe.js";
 import type { WatchState } from "../lib/match-state.js";
-import { useWatch, type LoggedEvent } from "../lib/use-watch.js";
+import { useWatch } from "../lib/use-watch.js";
 import { SideBoard, Stadium } from "./board.js";
+import { EventLog } from "./event-log.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
 /**
@@ -48,7 +49,7 @@ export function WatchTable({ token }: { token: string }) {
           <SeatSide state={state} player={0} />
         </div>
         <div className="table-panel">
-          <EventLog events={events} />
+          <EventLog id="watch-event-log" listId="watch-events" events={events} />
         </div>
       </section>
       <NoticeLayer feed={feed} board={board} />
@@ -73,17 +74,3 @@ function SeatSide({ state: { view, seats }, player }: { state: WatchState; playe
     </div>
   );
 }
-
-/** 対戦が長いと行が増え続ける。結果の通知が出入りするたびには描き直さない。 */
-const EventLog = memo(function EventLog({ events }: { events: LoggedEvent[] }) {
-  return (
-    <details id="watch-event-log" className="event-log">
-      <summary>できごとの記録</summary>
-      <ol id="watch-events" className="events">
-        {events.map((event) => (
-          <li key={event.id}>{event.text}</li>
-        ))}
-      </ol>
-    </details>
-  );
-});
