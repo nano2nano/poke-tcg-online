@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   accountKey,
   accountQuery,
   accountText,
   refreshAccount,
+  type Account,
   storedSecret,
 } from "../lib/account.js";
 import { getJson, postJson } from "../lib/api.js";
@@ -13,8 +14,9 @@ import {
   claim,
   deckToSubmit,
   newSeedShare,
+  parseDeck,
   shareFor,
-  storedDeck,
+  storedDeckJson,
   withShare,
   type BotList,
   type ClaimOutcome,
@@ -26,15 +28,14 @@ import {
 import type { StoredSeat } from "../lib/seat.js";
 
 /**
- * 走っている入り方。`queue` は相手さがしを頼んでいるあいだ、`waiting` は相手を待っているあいだ、
- * `bot` は AI との対戦の用意である。
+ * サーバへ送っている頼み。`queue` は相手さがし、`bot` は AI との対戦である。
  *
  * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
  * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
- * 相手さがしを頼んでいるあいだの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
- * 待っているあいだの押し直しは、サーバが前のチケットを降ろすので重ならない。
+ * 相手さがしの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
+ * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすので構わない。
  */
-type Joining = "queue" | "waiting" | "bot";
+type Request = "queue" | "bot";
 
 interface DeckStatus {
   messages: string[];
@@ -96,14 +97,23 @@ export function Lobby({
    */
   const [ownDeck, setOwnDeck] = useState<string | null>(null);
   // デッキはいまの画面の別のタブで組むこともあるので、組んだかどうかは読み直す。
-  const hasDeck = useSyncExternalStore(subscribeStorage, () => storedDeck().length > 0);
+  const deckJson = useSyncExternalStore(subscribeStorage, storedDeckJson);
+  const hasDeck = useMemo(() => parseDeck(deckJson).length > 0, [deckJson]);
   const chosenBot = bot ?? botNames[0]?.name ?? "";
   const chosenBotDeck = botDeck ?? decks[0]?.label ?? "";
   const chosenOwnDeck = ownDeck ?? (hasDeck ? "" : (decks[0]?.label ?? ""));
 
-  const [joining, setJoining] = useState<Joining | null>(null);
-  /** いま走っている入り方。終わったときに外すのは、自分が置いたものだけにする。 */
+  const [requesting, setRequesting] = useState<Request | null>(null);
+  /** いま走っている頼み。終わったときに外すのは、自分が置いたものだけにする。 */
   const running = useRef<object | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  /**
+   * 相手を待っているチケットの持ち主。押し直した頼みをサーバが受け付けたら替わる。
+   *
+   * **受け付けられるまでは前の待ちを続ける。** サーバが前のチケットを降ろすのは新しい頼みを受け付けたとき
+   * なので、デッキで断られたときなどに先に待ちをやめると、前のチケットがキューに残ったまま誰も席を取りに行かない。
+   */
+  const waitingFor = useRef<object | null>(null);
   /** 画面を離れたら、相手を待つのをやめる。席はもう別の画面が持っている。 */
   const mounted = useRef(true);
   useEffect(() => {
@@ -118,10 +128,10 @@ export function Lobby({
    */
   const botShare = useRef<SeedShare | null>(null);
 
-  const run = (kind: Joining, task: (mine: object) => Promise<void>) => {
+  const run = (kind: Request, task: (mine: object) => Promise<void>) => {
     const mine = {};
     running.current = mine;
-    setJoining(kind);
+    setRequesting(kind);
     task(mine)
       .catch((error: unknown) => {
         if (mounted.current && running.current === mine) {
@@ -131,7 +141,7 @@ export function Lobby({
       .finally(() => {
         if (running.current !== mine) return;
         running.current = null;
-        if (mounted.current) setJoining(null);
+        if (mounted.current) setRequesting(null);
       });
   };
 
@@ -144,6 +154,13 @@ export function Lobby({
       void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
     }
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
+  };
+
+  /** 受け付けられた頼みは表示名を変えている。戻ってきたときに、前の名前を欄に出さない。 */
+  const accepted = (request: { displayName?: string }) => {
+    const { displayName } = request;
+    if (displayName === undefined) return;
+    queryClient.setQueryData<Account>(accountKey, (known) => known && { ...known, displayName });
   };
 
   /** 送るデッキ。規則に通らなければ、理由を出して null。 */
@@ -172,61 +189,77 @@ export function Lobby({
     if (deck === null) return;
     const share = await newSeedShare();
     const roomCode = room.trim();
+    const request = await common(share);
     const outcome = await postJson<JoinOutcome>("/api/join", {
-      ...(await common(share)),
+      ...request,
       deck: { cards: deck.cards },
       ...(roomCode === "" ? {} : { roomCode }),
     });
     if (!outcome.ok) return refused(outcome);
+    accepted(request);
+    // 前のチケットはサーバが降ろした。前の待ちの答えで、この頼みの表示を上書きさせない。
+    waitingFor.current = mine;
     if ("seat" in outcome) return onSeated(withShare(outcome.seat, share?.share));
     setStatus("相手を待っています");
-    if (running.current === mine) setJoining("waiting");
-    await waitForOpponent(mine, outcome.ticket, share?.share);
+    void waitForOpponent(mine, outcome.ticket, share?.share);
   };
 
+  /** 待つあいだの表示は、頼みが走っていないときだけ書く。走っていれば、その頼みの表示が先である。 */
   const waitForOpponent = async (mine: object, ticket: string, share: string | undefined) => {
-    // 押し直したら前の待ちは降りる。降りた待ちの答えで、次の待ちの表示を上書きしない。
-    const current = () => mounted.current && running.current === mine;
-    while (current()) {
-      let claimed: ClaimOutcome | null = null;
-      try {
-        claimed = await claim(ticket);
-        if (current()) setStatus("相手を待っています");
-      } catch {
-        /**
-         * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
-         * やめるとその対戦に座らないまま時間切れで負ける。チケットは何度でも使える。
-         */
-        if (current()) setStatus("相手を待っています（つながりが悪いので取り直しています）");
-      }
-      if (!current()) return;
-      // 取りに行けなかったときは、答えが無いまま待ち直す。
-      if (claimed !== null) {
-        switch (claimed.kind) {
-          case "seated":
-            return onSeated(withShare(claimed.seat, share));
-          case "finished":
-            // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
-            setStatus(
-              "この対戦は、席に着く前に終わりました。いまの画面の「一覧を出す」から読み返せます。",
-            );
-            refreshAccount(queryClient).catch(() => {});
-            return;
-          case "dropped":
-            setStatus("別のタブから入り直したので、このタブは待つのをやめました。");
-            return;
-          case "waiting":
-            break;
-          default:
-            /**
-             * **知らない答えで待ち続けない。** 入れ替えのあとに古いタブが新しい答えを受け取ることがあり、
-             * 待ち続けると永久にポーリングし続ける。
-             */
-            setStatus("受付の記録が無くなりました。もう一度「対戦をさがす」を押してください。");
-            return;
+    const current = () => mounted.current && waitingFor.current === mine;
+    const show = (text: string) => {
+      if (current() && running.current === null) setStatus(text);
+    };
+    setWaiting(true);
+    try {
+      while (current()) {
+        let claimed: ClaimOutcome | null = null;
+        let reached = false;
+        try {
+          claimed = await claim(ticket);
+          reached = true;
+          show("相手を待っています");
+        } catch {
+          /**
+           * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
+           * やめるとその対戦に座らないまま時間切れで負ける。チケットは何度でも使える。
+           */
+          show("相手を待っています（つながりが悪いので取り直しています）");
         }
+        if (!current()) return;
+        // 取りに行けなかったときは、答えが無いまま待ち直す。
+        if (reached) {
+          switch (claimed?.kind) {
+            case "seated":
+              return onSeated(withShare(claimed.seat, share));
+            case "finished":
+              // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
+              show(
+                "この対戦は、席に着く前に終わりました。いまの画面の「一覧を出す」から読み返せます。",
+              );
+              refreshAccount(queryClient).catch(() => {});
+              return;
+            case "dropped":
+              show("別のタブから入り直したので、このタブは待つのをやめました。");
+              return;
+            case "waiting":
+              break;
+            default:
+              /**
+               * **知らない答えで待ち続けない。** 入れ替えのあとに古いタブが新しい答えを受け取ることがあり、
+               * 待ち続けると永久にポーリングし続ける。
+               */
+              show("受付の記録が無くなりました。もう一度「対戦をさがす」を押してください。");
+              return;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    } finally {
+      if (waitingFor.current === mine) {
+        waitingFor.current = null;
+        if (mounted.current) setWaiting(false);
+      }
     }
   };
 
@@ -260,6 +293,7 @@ export function Lobby({
       botShare.current = earlier;
       return refused(outcome);
     }
+    accepted(request);
     if ("seat" in outcome) onSeated(withShare(outcome.seat, share?.share));
   };
 
@@ -274,8 +308,13 @@ export function Lobby({
       <h2>対戦に入る</h2>
       {remembered !== null && (
         <p>
-          {/* 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。 */}
-          <button id="resume-button" onClick={() => onSeated(remembered)}>
+          {/* 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。
+              頼みや待ちの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。 */}
+          <button
+            id="resume-button"
+            disabled={requesting !== null || waiting}
+            onClick={() => onSeated(remembered)}
+          >
             指していた対戦へ戻る
           </button>
         </p>
@@ -308,7 +347,7 @@ export function Lobby({
       <div className="deck-actions">
         <button
           id="join-button"
-          disabled={joining === "bot" || joining === "queue"}
+          disabled={requesting !== null}
           onClick={() => run("queue", (mine) => join(mine))}
         >
           対戦をさがす
@@ -369,7 +408,7 @@ export function Lobby({
         </label>
         <button
           id="bot-button"
-          disabled={joining !== null || botNames.length === 0}
+          disabled={requesting !== null || waiting || botNames.length === 0}
           onClick={() => run("bot", joinBot)}
         >
           AI と対戦する

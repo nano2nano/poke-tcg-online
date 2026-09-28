@@ -160,17 +160,29 @@ test("相手を待つあいだに知らない形の答えが届いたら、待�
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  // 入れ替えのあとに、古いタブが新しいサーバの答えを受け取ったときの形。
+  let asked = (): void => {};
+  const claiming = new Promise<void>((resolve) => {
+    asked = resolve;
+  });
+  /**
+   * 1 度目は待っていると答え、2 度目は入れ替えのあとの古いタブが新しいサーバの答えを受け取ったときの形で答える。
+   * 2 度目を頼むのは 1 度目の答えを出したあとなので、そのとき出ているのが待っている一言である。
+   */
+  let claims = 0;
   await page.route("**/api/claim?**", async (route) => {
+    claims += 1;
+    if (claims === 1) return route.fulfill({ json: { kind: "waiting" } });
+    asked();
     await held;
     await route.fulfill({ json: { ok: true } });
   });
 
   await page.goto("./");
   await join(page, `しらない-${Date.now()}`);
+  await claiming;
   const status = page.locator("#join-status");
-  await expect(status).not.toBeEmpty();
   const waiting = await status.textContent();
+  expect(waiting).not.toBe("");
   release();
 
   // 待ち続けるなら、出ているのは待っている一言のままである。

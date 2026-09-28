@@ -20,11 +20,19 @@ const DECK_KEY = "poke-deck";
 /** `src/deck.ts` の値を import すると、エンジンのカード定義まで画面に入る。 */
 const DECK_SIZE = 60;
 
+export function storedDeckJson(): string | null {
+  return localStorage.getItem(DECK_KEY);
+}
+
 /** 組んだデッキ。読めない値や壊れた行は捨てる。 */
 export function storedDeck(): DeckEntry[] {
+  return parseDeck(storedDeckJson());
+}
+
+export function parseDeck(json: string | null): DeckEntry[] {
   let saved: unknown = null;
   try {
-    saved = JSON.parse(localStorage.getItem(DECK_KEY) ?? "[]");
+    saved = JSON.parse(json ?? "[]");
   } catch {
     return [];
   }

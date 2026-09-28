@@ -5,7 +5,7 @@
 
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { Account } from "../../src/accounts.js";
-import { postJson } from "./api.js";
+import { post, postJson } from "./api.js";
 
 export type { Account };
 
@@ -29,8 +29,9 @@ export function accountQuery(displayName: () => string) {
     queryKey: accountKey,
     queryFn: () => loadAccount(displayName()),
     staleTime: Infinity,
-    // 取り直しはプレイヤーを作る要求にもなる。押し直したときに取りに行けば足りる。
+    // 取り直しはプレイヤーを作る要求にもなる。取りに行くのは、画面を開いたときと押したときだけにする。
     retry: false,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
@@ -40,7 +41,7 @@ export function accountQuery(displayName: () => string) {
 export async function loadAccount(displayName: string): Promise<Account> {
   const secret = storedSecret();
   if (secret !== null) {
-    const response = await readAccount(secret);
+    const response = await post("/api/account/me", { secret });
     if (response.ok) return (await response.json()) as Account;
     /**
      * **消すのは、サーバが「そのアカウントはいない」と言ったときだけである。**
@@ -71,16 +72,8 @@ export async function loadAccount(displayName: string): Promise<Account> {
 export async function refreshAccount(queryClient: QueryClient): Promise<void> {
   const secret = storedSecret();
   if (secret === null) return;
-  const response = await readAccount(secret);
+  const response = await post("/api/account/me", { secret });
   if (response.ok) queryClient.setQueryData(accountKey, (await response.json()) as Account);
-}
-
-function readAccount(secret: string): Promise<Response> {
-  return fetch("/api/account/me", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ secret }),
-  });
 }
 
 /** レーティングと戦績の 1 行。 */

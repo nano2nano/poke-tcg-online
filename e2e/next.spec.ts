@@ -62,6 +62,40 @@ test("繋がらずにロビーへ戻っても、覚えている座席へ戻れ�
   await expect(page.locator("#resume-button")).toBeVisible();
   expect(opened).toBe(1);
 
+  // 相手さがしの答えを待つあいだに戻ると、その答えが戻った座席を置き換える。
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, errors: ["断った"] } });
+  });
+  await page.click("#join-button");
+  await expect(page.locator("#resume-button")).toBeDisabled();
+  release();
+  await expect(page.locator("#resume-button")).toBeEnabled();
+
   await page.click("#resume-button");
   await expect.poll(() => opened).toBe(2);
+});
+
+test("相手を待つあいだに押し直して断られても、前のチケットを待ち続ける", async ({ page }) => {
+  const claimed = () => page.waitForRequest((request) => request.url().includes("/api/claim?"));
+
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#room", `まちつづける-${Date.now()}`);
+  const first = claimed();
+  await page.click("#join-button");
+  await first;
+
+  // サーバが前のチケットを降ろすのは、新しい頼みを受け付けたときだけである。
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, errors: ["断った"] } }),
+  );
+  const refused = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await refused;
+
+  await claimed();
 });

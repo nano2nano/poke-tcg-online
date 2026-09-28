@@ -29,9 +29,12 @@ function Home() {
 function Seat() {
   const [seated, setSeated] = useState<StoredSeat | null>(storedSeat);
   const [status, setStatus] = useState("");
+  /** 離れたあとも覚えている座席。繋がらなかっただけなら、まだ指していた対戦が続いている。 */
+  const [remembered, setRemembered] = useState<StoredSeat | null>(null);
   const leave = useCallback((reason: string) => {
     setSeated(null);
     setStatus(reason);
+    setRemembered(storedSeat());
   }, []);
   const sit = useCallback((next: StoredSeat) => {
     rememberSeat(next);
@@ -48,7 +51,7 @@ function Seat() {
           <a href="/">いまの画面</a> にあります。
         </p>
       </header>
-      <Lobby status={status} remembered={storedSeat()} onSeated={sit} />
+      <Lobby status={status} remembered={remembered} onSeated={sit} />
     </>
   );
 }

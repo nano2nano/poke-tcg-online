@@ -11,11 +11,7 @@ export async function getJson<T>(path: string): Promise<T> {
  * 投げると理由が落ちて、「400 が返った」しか出せなくなる。
  */
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const response = await post(path, body);
   const answer = (await response.json().catch(() => null)) as
     | (T & { ok?: unknown; error?: unknown })
     | null;
@@ -23,4 +19,13 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   throw new Error(
     typeof answer?.error === "string" ? answer.error : `${path} が ${response.status} を返した`,
   );
+}
+
+/** 応答をそのまま返す。状態の番号だけでなく本文も見て決めたいときに使う。 */
+export function post(path: string, body: unknown): Promise<Response> {
+  return fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
