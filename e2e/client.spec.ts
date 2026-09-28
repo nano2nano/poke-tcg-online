@@ -155,6 +155,16 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
   await expect(page.locator("#name")).toHaveValue("ぼくのなまえ");
 });
 
+test("相手を待つあいだに知らない形の答えが届いたら、待つのをやめる", async ({ page }) => {
+  // 入れ替えのあとに、古いタブが新しいサーバの答えを受け取ったときの形。
+  await page.route("**/api/claim?**", (route) => route.fulfill({ json: { ok: true } }));
+
+  await page.goto("./");
+  await join(page, `しらない-${Date.now()}`);
+
+  await expect(page.locator("#join-status")).toHaveText(/もう一度「対戦をさがす」/);
+});
+
 test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {
   const room = `あいことば-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
