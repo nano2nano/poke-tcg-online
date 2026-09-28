@@ -125,7 +125,9 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     }
 
     function receive(message: ServerMessage) {
-      if (message.t !== "pong") setAwaiting(false);
+      // pong でも待ちを解く。サーバは処理できなかった手に何も返さないので、局面か断りだけを待つと、
+      // ボタンが戻らないまま時間が切れる。
+      setAwaiting(false);
       // 準備の選びかけは画面の操作でも変わるので、状態は `live` の 1 か所に置く。
       const before = live.current.state;
       const current = seatReducer(before, message);

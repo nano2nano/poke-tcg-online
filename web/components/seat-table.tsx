@@ -126,7 +126,7 @@ export function SeatTable({
             seating={seating}
             context={context}
             listed={listed}
-            disabled={disabled || seating.awaiting}
+            disabled={disabled}
             onAim={onAim}
           />
           <button
@@ -215,7 +215,7 @@ function listMoves(
 
 /** 対戦が終わっていれば、待ちも選ぶものも無い。 */
 function Moves({
-  seating: { state, send, choose },
+  seating: { state, awaiting, send, choose },
   context,
   listed,
   disabled,
@@ -263,7 +263,11 @@ function Moves({
               <button
                 key={key}
                 disabled={disabled}
-                onClick={() => play(move)}
+                // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
+                aria-disabled={awaiting}
+                onClick={() => {
+                  if (!awaiting) play(move);
+                }}
                 onPointerEnter={() => onAim("hovered", key)}
                 onPointerLeave={() => onAim("hovered", null)}
                 onFocus={() => onAim("focused", key)}
