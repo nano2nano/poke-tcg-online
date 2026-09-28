@@ -11,6 +11,7 @@ import {
   test as base,
   type Browser,
   type BrowserContext,
+  type Locator,
   type Page,
   type WebSocketRoute,
 } from "@playwright/test";
@@ -2656,4 +2657,70 @@ test("山札の上へ順に置く選択では、何枚目に置くかを案内�
   for (let index = 0; index < defIds.length; index++) {
     expect(new Set([plain[index], first[index], second[index]]).size).toBe(3);
   }
+});
+
+test("2 枚 1 組のスタジアムは、左右それぞれの半分の画像を出す", async ({ page }) => {
+  const defs = loadGeneratedCards();
+  const left = defs.find((def) => def.kind === "trainer" && def.stadiumHalf === "left")!;
+  const right = defs.find(
+    (def) => def.kind === "trainer" && def.stadiumHalf === "right" && def.name === left.name,
+  )!;
+  const sync = crowdedSync(5) as CrowdedSync & { view: { stadium: object } };
+  sync.legalMoves = [{ type: "EndTurn", player: 0 }];
+  sync.view.self.hand = [
+    { instanceId: "手札の左", defId: left.defId },
+    { instanceId: "手札の右", defId: right.defId },
+  ];
+  sync.view.stadium = {
+    right: { instanceId: "場の右", defId: right.defId },
+    left: { instanceId: "場の左", defId: left.defId },
+  };
+  // 公式の画像は 2 枚を横に並べた見開きの 1 枚で、左右の半分が同じ cardID を指す。
+  // どちらの半分を切り出したかを色で見分けられるよう、左右を別の色で塗った見開きを返す。
+  const spread =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="868" height="606">' +
+    '<rect width="434" height="606" fill="#c00"/><rect x="434" width="434" height="606" fill="#00c"/></svg>';
+  await withCardImages(page, (route) =>
+    route.fulfill({ status: 200, contentType: "image/svg+xml", body: spread }),
+  );
+  await openWith(page, sync);
+
+  // 撮ったカードの横の 1/4 と 3/4 の点が、見開きの左右どちらの色かを読む。
+  const colors = async (face: Locator): Promise<string[]> => {
+    // 画像が読めないと、名前の面を撮ることになる。
+    await expect(face.locator("img")).toHaveJSProperty("complete", true);
+    expect(
+      await face.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth),
+    ).toBeGreaterThan(0);
+    const shot = (await face.screenshot()).toString("base64");
+    return page.evaluate(async (base64) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${base64}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return [0.25, 0.75].map((ratio) => {
+        const [red, , blue] = context.getImageData(
+          Math.floor(image.width * ratio),
+          Math.floor(image.height / 2),
+          1,
+          1,
+        ).data;
+        if (red! > 150 && blue! < 60) return "左";
+        if (blue! > 150 && red! < 60) return "右";
+        return `どちらでもない（赤 ${red}、青 ${blue}）`;
+      });
+    }, shot);
+  };
+  const hand = page.locator('#self [data-zone="hand"]');
+  const field = page.locator('#stadium [data-zone="stadium"] .card');
+  await expect(field).toHaveCount(2);
+  // 中央を切り出すと、どのカードも 1/4 の点が左の半分、3/4 の点が右の半分の色になる。
+  expect(await colors(hand.locator(`.card[data-def-id="${left.defId}"]`))).toEqual(["左", "左"]);
+  expect(await colors(hand.locator(`.card[data-def-id="${right.defId}"]`))).toEqual(["右", "右"]);
+  expect(await colors(field.nth(0))).toEqual(["左", "左"]);
+  expect(await colors(field.nth(1))).toEqual(["右", "右"]);
 });

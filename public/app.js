@@ -1443,12 +1443,9 @@ function cardFace(defId) {
   face.dataset.defId = defId;
   face.dataset.kind = card?.kind ?? "";
   if (card?.type !== undefined) face.dataset.type = card.type;
+  if (card?.stadiumHalf !== undefined) face.dataset.half = card.stadiumHalf;
   face.append(el("span", "card-name", card?.name ?? defId));
-  const sub =
-    card?.hp !== undefined
-      ? `HP ${card.hp}`
-      : (TRAINER_KINDS[card?.trainerKind] ?? KINDS[card?.kind] ?? "");
-  face.append(el("span", "card-sub", sub));
+  face.append(el("span", "card-sub", cardSubtitle(card)));
   // 読み上げでは、マウスで出るプレビューの代わりにここを読む。
   if (card !== undefined) face.append(el("span", "visually-hidden", describeCard(card)));
   const src = imageUrl(defId);
@@ -1466,6 +1463,13 @@ function cardFace(defId) {
     face.append(image);
   }
   return face;
+}
+
+/** カードの面の下の段。ポケモンは HP、ほかは種類。2 枚 1 組のスタジアムは左右も添える。 */
+function cardSubtitle(card) {
+  if (card?.hp !== undefined) return `HP ${card.hp}`;
+  const kind = TRAINER_KINDS[card?.trainerKind] ?? KINDS[card?.kind] ?? "";
+  return card?.stadiumHalf === undefined ? kind : `${kind} ${HALVES[card.stadiumHalf]}半分`;
 }
 
 function cardBack() {

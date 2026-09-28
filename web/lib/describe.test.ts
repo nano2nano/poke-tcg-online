@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Player, PlayerEvent, SpectatorView } from "../../src/engine.js";
 import type { CardTable } from "./cards.js";
-import { describeEvents } from "./describe.js";
+import { cardSubtitle, describeEvents } from "./describe.js";
 
 const cards: CardTable = { pikachu: { name: "ピカチュウ", kind: "pokemon", hp: 60 } };
 const who = (player: Player) => ["あ", "い"][player]!;
@@ -70,5 +70,15 @@ describe("describeEvents", () => {
     expect(describeEvents([event({ kind: "pokemon-check-started" })], [null], who, cards)).toEqual([
       null,
     ]);
+  });
+});
+
+describe("cardSubtitle", () => {
+  it("2 枚 1 組のスタジアムは、同じ名前でも左右で面の下の段が違う", () => {
+    const half = { name: "伝説の海溝", kind: "trainer", trainerKind: "stadium" } as const;
+    const left = cardSubtitle({ ...half, stadiumHalf: "left" });
+    const right = cardSubtitle({ ...half, stadiumHalf: "right" });
+    expect(left).not.toBe(right);
+    expect(left).not.toBe(cardSubtitle(half));
   });
 });

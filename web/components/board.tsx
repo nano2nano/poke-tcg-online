@@ -36,6 +36,7 @@ export function CardFace({ defId, posture }: { defId: string; posture?: string |
       data-def-id={defId}
       data-kind={card?.kind ?? ""}
       data-type={card?.type}
+      data-half={card?.stadiumHalf}
       data-posture={posture}
     >
       <span className="card-name">{card?.name ?? defId}</span>
