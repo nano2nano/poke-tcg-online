@@ -2,21 +2,26 @@
  * 観戦の接続。観戦者が送るのは生きていることの `ping` だけである。
  *
  * 切れたら座席と同じく繋ぎ直す。断られたら、観戦は断っても誰も負けないので、そこでやめる。
+ *
+ * 届いた局面はすぐには描かず、`watch-frames.ts` に溜めて見る人の速さで送る。
+ * 結果の文と記録の行は、届いた時点の盤面とカードの表で作って局面に添えておく。
  */
 
-import { useEffect, useEffectEvent, useState } from "react";
-import type { Player } from "../../src/engine.js";
+import { useEffect, useEffectEvent, useReducer, useState, type ActionDispatch } from "react";
+import type { Player, PlayerView, SpectatorView } from "../../src/engine.js";
 import type { ServerMessage } from "../../src/protocol.js";
 import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl } from "./connection.js";
-import {
-  describeEvents,
-  eventLines,
-  seatDisplayName,
-  watchEndText,
-  type Notice,
-} from "./describe.js";
+import { describeMove, moveTargets } from "./describe-move.js";
+import { describeEvents, eventLines, seatDisplayName, type Notice } from "./describe.js";
 import { initialWatchState, watchReducer, type WatchState } from "./match-state.js";
+import {
+  initialPlayback,
+  playbackReducer,
+  type Playback,
+  type PlaybackAction,
+  type WatchFrame,
+} from "./watch-frames.js";
 
 export interface LoggedEvent {
   id: number;
@@ -27,14 +32,15 @@ export interface Watching {
   state: WatchState;
   /** 繋がっていないあいだの説明。繋がっていれば空。 */
   status: string;
-  /** 新しいものが先頭。 */
-  events: LoggedEvent[];
+  playback: Playback;
+  control: ActionDispatch<[PlaybackAction]>;
 }
 
+/** `notify` は、繋いでいるあいだにサーバが返したエラー応答を、局面の送りを待たずに出す。 */
 export function useWatch(token: string, notify: (notice: Notice) => void): Watching {
   const [state, setState] = useState(initialWatchState);
   const [status, setStatus] = useState("");
-  const [events, setEvents] = useState<LoggedEvent[]>([]);
+  const [playback, control] = useReducer(playbackReducer, undefined, initialPlayback);
 
   // 名前は届いた時点の表で引く。表が届いても繋ぎ直さない。
   const { table } = useCardData();
@@ -46,16 +52,13 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
     let synced = false;
     let disposed = false;
     let socket: WebSocket | null = null;
-    let logged = 0;
+    /** 直前に届いた局面の、両座席の射影。指された手の見出しは、指す直前の盤面から作る。 */
+    let seatViews: [PlayerView, PlayerView] | null = null;
     /** 先攻のコイントスを見せたか。`spectator-sync` は繋ぎ直すたびに届くので、2 度は出さない。 */
     let firstPlayerShown = false;
 
     const who = (player: Player) => seatDisplayName(current.seats, player);
-    const log = (texts: string[]) => {
-      if (texts.length === 0) return;
-      const added = texts.map((text) => ({ id: (logged += 1), text })).reverse();
-      setEvents((shown) => [...added, ...shown]);
-    };
+    const arrive = (frame: WatchFrame) => control({ t: "arrive", frame });
 
     const retry = reconnector(connect);
     connect();
@@ -75,42 +78,64 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
         current = watchReducer(current, message);
         setState(current);
         switch (message.t) {
-          case "spectator-sync":
+          case "spectator-sync": {
             synced = true;
             if (!joined) retry.connected();
             joined = true;
             setStatus("");
+            const notices: Notice[] = [];
             // 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。
             if (!firstPlayerShown && message.view.phase === "setup") {
               firstPlayerShown = true;
-              show({
+              notices.push({
                 text: `コイントスの結果、${who(message.firstPlayer)}が先攻です`,
                 coins: { results: [true], faces: ["先攻", "後攻"] },
               });
             }
-            return;
-          case "spectator-delta": {
-            const notices = describeEvents(
-              message.events,
-              [current.view, before.view],
-              who,
-              cardTable(),
-            );
-            log(eventLines(message.events, notices));
-            for (const notice of notices) {
-              if (notice !== null && !notice.repeated) show(notice);
-            }
+            seatViews = message.seatViews ?? null;
+            arrive({
+              stateVersion: message.stateVersion,
+              ...board(message.view, seatViews),
+              clock: message.clock,
+              moved: null,
+              lines: [],
+              notices,
+            });
             return;
           }
-          case "spectator-ended":
-            show({ text: watchEndText(message.matchResult, who) });
+          case "spectator-delta": {
+            const cards = cardTable();
+            const moved =
+              message.moved === undefined
+                ? null
+                : {
+                    seat: message.moved.seat,
+                    text: describeMove(message.moved.move, {
+                      view: seatViews?.[message.moved.seat] ?? null,
+                      cards,
+                    }),
+                    targets: moveTargets(message.moved.move),
+                  };
+            seatViews = message.seatViews ?? null;
+            const notices = describeEvents(message.events, [current.view, before.view], who, cards);
+            arrive({
+              stateVersion: message.stateVersion,
+              ...board(message.view, seatViews),
+              clock: message.clock,
+              moved,
+              lines: [
+                ...(moved === null ? [] : [`${who(moved.seat)}: ${moved.text}`]),
+                ...eventLines(message.events, notices),
+              ],
+              notices: notices.filter(
+                (notice): notice is Notice => notice !== null && !notice.repeated,
+              ),
+            });
             return;
+          }
           case "error":
             refusal = message.message;
-            if (synced) {
-              log([message.message]);
-              show({ text: message.message, tone: "attention" });
-            }
+            if (synced) show({ text: message.message, tone: "attention" });
             return;
           default:
             return;
@@ -146,5 +171,17 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
     };
   }, [token]);
 
-  return { state, status, events };
+  return { state, status, playback, control };
+}
+
+/** 局面のうち描くもの。座席の射影があれば、両者とも自分の側の射影で手札まで描く。 */
+function board(
+  view: SpectatorView,
+  seatViews: [PlayerView, PlayerView] | null,
+): Pick<WatchFrame, "open" | "sides" | "stadium"> {
+  return {
+    open: seatViews !== null,
+    sides: seatViews === null ? view.players : [seatViews[0].self, seatViews[1].self],
+    stadium: view.stadium,
+  };
 }

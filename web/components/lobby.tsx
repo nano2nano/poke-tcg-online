@@ -9,16 +9,17 @@ import {
   refreshAccount,
   storedSecret,
 } from "../lib/account.js";
-import { getJson, messageOf, postJson } from "../lib/api.js";
+import { messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import {
+  botListQuery,
   claim,
   builtDeck,
   liveSeatOf,
   newSeedShare,
+  presetName,
   shareFor,
   withShare,
-  type BotList,
   type DeckList,
   type DeckPreset,
   type JoinOutcome,
@@ -26,6 +27,7 @@ import {
 } from "../lib/join.js";
 import { parseDeck, storedDeckJson, subscribeDeck } from "../lib/deck.js";
 import type { StoredSeat } from "../lib/seat.js";
+import { BotWatchForm } from "./bot-watch.js";
 import { DeckBuilder, forCurrentDeck, NO_DECK_STATUS, type DeckMessage } from "./deck-builder.js";
 
 const SAMPLE_NOTE = {
@@ -77,19 +79,10 @@ export function Lobby({
   const name = typedName ?? account.data?.displayName ?? DEFAULT_NAME;
   const ensureAccount = () => queryClient.fetchQuery(accountOptions);
 
-  const bots = useQuery({
-    queryKey: ["bots"],
-    queryFn: () => getJson<BotList>("/api/bots"),
-    staleTime: Infinity,
-  });
+  const bots = useQuery(botListQuery);
   const botNames = bots.data?.bots ?? [];
   const decks = bots.data?.decks ?? [];
-  const deckName = (deck: DeckPreset) => {
-    const names = deck.aces.map((ace) => table[ace]?.name);
-    return names.length > 0 && names.every((one) => one !== undefined)
-      ? names.join("・")
-      : deck.label;
-  };
+  const deckName = (deck: DeckPreset) => presetName(deck, table);
   const [bot, setBot] = useState<string | null>(null);
   const [botDeck, setBotDeck] = useState<string | null>(null);
   /**
@@ -463,6 +456,7 @@ export function Lobby({
       <p>
         <output id="join-status">{status}</output>
       </p>
+      <BotWatchForm />
     </section>
   );
 }

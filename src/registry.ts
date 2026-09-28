@@ -114,7 +114,7 @@ export class MatchRegistry {
         seatToken: match.seatTokens[seat],
         seedCommit: match.seedCommitment.commit,
         seedShareCommits: match.seedShareCommits,
-        bot: match.bot !== null,
+        bot: match.bots.some((bot) => bot !== null),
       };
     }
     for (const pending of this.pending.values()) {
@@ -126,7 +126,7 @@ export class MatchRegistry {
         seatToken: pending.seatTokens[seat],
         seedCommit: pending.server.commit,
         seedShareCommits: pending.shareCommits,
-        bot: pending.bot !== null,
+        bot: pending.bots.some((bot) => bot !== null),
       };
     }
     return null;

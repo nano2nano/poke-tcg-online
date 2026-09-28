@@ -70,11 +70,10 @@ export interface SeatInfo {
   bot?: BotIdentity;
 }
 
-/** AI が座る座席と、その AI。 */
-export interface BotSeat {
-  seat: Player;
-  bot: Bot;
-}
+/** 座席ごとの AI。人の座席は null である。 */
+export type BotSeats = readonly [Bot | null, Bot | null];
+
+export const NO_BOTS: BotSeats = [null, null];
 
 /**
  * 対戦の決着（2.3 節）。エンジンの `GameOutcome` とは別に持つ。
@@ -125,8 +124,8 @@ export interface Match {
   readonly startedAt: string;
   /** 先攻。seed から決まる導出値で、再生の入力ではない。先攻の偏りを測るために残す。 */
   readonly firstPlayer: Player;
-  /** AI の座席。人どうしの対戦では null。 */
-  readonly bot: BotSeat | null;
+  /** 座席ごとの AI。人どうしの対戦では両方 null で、AI どうしの対戦では両方に座る。 */
+  readonly bots: BotSeats;
   /**
    * AI の座席の追跡器。伏せたカードの知識を使う方策のときだけ、その座席を追う。方策は手と手のあいだの
    * 記憶を持たず、重みは対戦どうしで共有するので、局ごとの記憶は対戦の側に置く。
@@ -135,7 +134,7 @@ export interface Match {
   /**
    * 同じ番で既に来た局面の記録。AI の座席には、そこへ戻る手を見せない。自己対戦が学習した方策に
    * 見せる候補と同じ絞り方で、これが無いと、何回でも使える特性で盤面を往復して番が終わらない方策がある。
-   * 人どうしの対戦では null で、局面を記録しない。
+   * AI のいない対戦では null で、局面を記録しない。
    */
   readonly botRevisit: RevisitTracker | null;
   state: GameState;
@@ -193,17 +192,17 @@ export interface CreateMatchOptions {
   seedCommitment?: SeedCommitment;
   seedShareCommits?: SeedShares;
   bankMs?: number;
-  bot?: BotSeat | null;
+  bots?: BotSeats;
 }
 
 export function createMatch(options: CreateMatchOptions): Match {
   const seedCommitment = options.seedCommitment ?? commitSeed();
   const created = createGame({ seed: seedCommitment.seed, decks: options.decks });
-  const bot = options.bot ?? null;
-  const tracked = (seat: Player) => bot?.seat === seat && bot.bot.tracksKnowledge;
+  const bots = options.bots ?? NO_BOTS;
+  const tracked = (seat: Player) => bots[seat]?.tracksKnowledge === true;
   const botKnowledge = new GameKnowledge(options.decks, [tracked(0), tracked(1)]);
   botKnowledge.observe(created.events);
-  const botRevisit = bot === null ? null : new RevisitTracker();
+  const botRevisit = bots.every((bot) => bot === null) ? null : new RevisitTracker();
   botRevisit?.arrive(created.state);
   return {
     matchId: options.matchId,
@@ -215,7 +214,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     spectatorToken: options.spectatorToken,
     startedAt: options.startedAt,
     firstPlayer: firstPlayerOf(created.events),
-    bot,
+    bots,
     botKnowledge,
     botRevisit,
     state: created.state,
@@ -306,8 +305,9 @@ function record(
   match.deckStack = nextDeckStack(match.deckStack, answered, move, applied);
   match.deckPlacement = deckPlacementOf(match.state, match.deckStack);
   match.effectReveals = nextEffectReveals(match.effectReveals, applied);
+  const mover = toMove(match);
   match.answerDestinations =
-    toMove(match) === match.bot?.seat
+    mover !== null && match.bots[mover] !== null
       ? null
       : answerDestinationsOf(match.state, match.effectReveals);
   match.version += 1;
@@ -601,7 +601,14 @@ export function viewFor(match: Match, seat: Player): PlayerView {
 
 /** AI の座席がその局面で知っている、自分の伏せたカード。知識を使わない方策には何も知らない入力を渡す。 */
 export function botKnowledgeFor(match: Match, view: PlayerView): HiddenKnowledge {
-  return match.bot === null ? NO_KNOWLEDGE : match.botKnowledge.snapshot(match.bot.seat, view);
+  return match.bots[view.viewer] === null
+    ? NO_KNOWLEDGE
+    : match.botKnowledge.snapshot(view.viewer, view);
+}
+
+/** 両座席とも AI の対戦か。座席に人がいないので、観戦者へ両座席の射影を見せる（7.4 節）。 */
+export function botsOnly(match: Pick<Match, "bots">): boolean {
+  return match.bots.every((bot) => bot !== null);
 }
 
 /**

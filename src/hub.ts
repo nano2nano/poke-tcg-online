@@ -9,12 +9,13 @@
  * `eventsFor` / `legalMovesFor` を通さない経路をここに作らない（1 節の S-2）。
  */
 
-import type { DomainEvent, Move, Player } from "./engine.js";
+import type { DomainEvent, Move, Player, PlayerView } from "./engine.js";
 import {
   answerDestinationsFor,
   botCandidates,
   botExtrasFor,
   botKnowledgeFor,
+  botsOnly,
   clockView,
   concede,
   deckPlacementFor,
@@ -28,9 +29,9 @@ import {
   submitSetup,
   toMove,
   viewFor,
-  type BotSeat,
   type Match,
 } from "./match.js";
+import type { Bot } from "./bots.js";
 import {
   SEAT_NOT_FOUND,
   SEAT_REPLACED,
@@ -66,6 +67,8 @@ export interface HubOptions {
   onFinish?: (record: MatchRecord) => void;
   /** AI が手を指すまでの間。既定は `BOT_DELAY_MS`。 */
   botDelayMs?: number;
+  /** AI どうしの対戦で、AI が手を指すまでの間。既定は `WATCH_DELAY_MS`。 */
+  watchDelayMs?: number;
 }
 
 /**
@@ -73,6 +76,18 @@ export interface HubOptions {
  * 間を置かないと番が回ってきた瞬間に何手も進み、人は画面で何が起きたかを追えない。
  */
 export const BOT_DELAY_MS = 700;
+
+/**
+ * AI どうしの対戦で、AI が手を指すまでの間（7.4 節）。見る速さは画面が届いた局面を溜めて決めるので、
+ * ここは画面のいちばん速い送りより短ければよい。長くすると、画面が速く送ったときに届くのを待つ。
+ */
+export const WATCH_DELAY_MS = 200;
+
+/**
+ * AI どうしの対戦で、見る人が繋ぐのを待つ上限（7.4 節）。繋ぐ前に動かすと、見る人は最初の数手を見られない。
+ * 誰も繋がなくても、これを過ぎたら動かし始める。止めたままにすると、持ち時間が尽きるまで対戦が残る。
+ */
+export const WATCH_START_MS = 30_000;
 
 export class MatchHub {
   /** 対戦 ID → 座席 → 接続。1 座席に 1 本だけ持つ。 */
@@ -85,10 +100,12 @@ export class MatchHub {
   /** 対戦 ID → AI が次の手を指すタイマー。1 局に 1 つだけ持つ。 */
   private readonly botTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly botDelayMs: number;
+  private readonly watchDelayMs: number;
 
   constructor(private readonly options: HubOptions) {
     this.now = options.now ?? (() => Date.now());
     this.botDelayMs = options.botDelayMs ?? BOT_DELAY_MS;
+    this.watchDelayMs = options.watchDelayMs ?? WATCH_DELAY_MS;
   }
 
   /**
@@ -183,10 +200,16 @@ export class MatchHub {
       send(socket, { t: "error", message: "観戦している人が多すぎる" });
       return false;
     }
+    const first = this.spectators.get(match.matchId) === undefined;
     watching.add(socket);
     this.spectators.set(match.matchId, watching);
     this.spectatorOf.set(socket, match.matchId);
     send(socket, this.spectatorSyncFor(match));
+    // 見る人が来るのを待っていた AI どうしの対戦を、いま動かし始める。
+    if (first && botsOnly(match) && match.version === 0) {
+      this.stopBot(match);
+      this.driveBot(match);
+    }
     return true;
   }
 
@@ -320,22 +343,44 @@ export class MatchHub {
   }
 
   /**
+   * 立てた AI どうしの対戦を動かす（7.4 節）。ロビーの中で始まるのは `wakeBot` と同じだが、
+   * 見る人が繋ぐまでは `WATCH_START_MS` だけ待つ（繋いだら `attachSpectator` が動かす）。
+   */
+  wakeWatch(spectatorToken: string): void {
+    const match = this.options.registry.bySpectatorToken(spectatorToken);
+    if (match !== undefined) this.driveBot(match);
+  }
+
+  /**
    * AI の番なら、間を置いて AI に 1 手指させる（7.3 節）。何度呼んでも、待っている手は 1 局に 1 つである。
    * 局面が動くところ（対戦の開始、手を受理したあと）と、座席が就いたところから呼ぶ。
    */
   private driveBot(match: Match): void {
-    const bot = match.bot;
-    if (bot === null || this.botTimers.has(match.matchId) || !isToMove(match, bot.seat)) return;
+    const seat = toMove(match);
+    const bot = seat === null ? null : match.bots[seat];
+    if (seat === null || bot === null || this.botTimers.has(match.matchId)) return;
     const timer = setTimeout(() => {
       this.botTimers.delete(match.matchId);
       try {
-        this.botMove(match, bot);
+        this.botMove(match, seat, bot);
       } catch (error) {
         console.error(`AI の手を進められなかった。投了で終える（${match.matchId}）:`, error);
-        this.botResigns(match, bot.seat);
+        this.botResigns(match, seat);
       }
-    }, this.botDelayMs);
+    }, this.botDelayFor(match));
     this.botTimers.set(match.matchId, timer);
+  }
+
+  private botDelayFor(match: Match): number {
+    if (!botsOnly(match)) return this.botDelayMs;
+    const awaited = match.version === 0 && !this.spectators.has(match.matchId);
+    return awaited ? WATCH_START_MS : this.watchDelayMs;
+  }
+
+  private stopBot(match: Match): void {
+    const timer = this.botTimers.get(match.matchId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.botTimers.delete(match.matchId);
   }
 
   /**
@@ -346,7 +391,7 @@ export class MatchHub {
    * 代わりに一様に選んだ手を指すと、方策が選んでいない手が `source: "bot"` として記録に混ざる。
    * 止めたまま待たせると、人は AI の持ち時間が尽きるまで待たされる。
    */
-  private botMove(match: Match, { seat, bot }: BotSeat): void {
+  private botMove(match: Match, seat: Player, bot: Bot): void {
     // 待っているあいだに終わった対戦（投了、時間切れ）には指さない。
     if (this.options.registry.bySeatToken(match.seatTokens[seat])?.match !== match) return;
     const legal = legalMovesFor(match, seat);
@@ -377,7 +422,7 @@ export class MatchHub {
       this.botResigns(match, seat);
       return;
     }
-    this.broadcastDelta(match, outcome.events);
+    this.broadcastDelta(match, outcome.events, { seat, move });
     if (match.result !== null) this.endMatch(match);
   }
 
@@ -389,9 +434,7 @@ export class MatchHub {
 
   /** 決着を両座席と観戦者へ伝え、レジストリから外す。 */
   endMatch(match: Match): void {
-    const botTimer = this.botTimers.get(match.matchId);
-    if (botTimer !== undefined) clearTimeout(botTimer);
-    this.botTimers.delete(match.matchId);
+    this.stopBot(match);
     const perMatch = this.sockets.get(match.matchId);
     for (const seat of [0, 1] as Player[]) {
       const socket = perMatch?.get(seat);
@@ -425,6 +468,7 @@ export class MatchHub {
             matchResult: match.result,
             outcome: engineOutcome(match),
             view: spectatorViewFor(match),
+            ...this.openViews(match),
           });
     for (const socket of watching) {
       this.spectatorOf.delete(socket);
@@ -461,7 +505,12 @@ export class MatchHub {
     }
   }
 
-  private broadcastDelta(match: Match, events: DomainEvent[]): void {
+  /** `moved` は AI どうしの対戦で、いま指された手である。観戦者にはその対戦でだけ見せる（7.4 節）。 */
+  private broadcastDelta(
+    match: Match,
+    events: DomainEvent[],
+    moved: { seat: Player; move: Move } | null = null,
+  ): void {
     const perMatch = this.sockets.get(match.matchId);
     for (const seat of [0, 1] as Player[]) {
       const socket = perMatch?.get(seat);
@@ -471,7 +520,7 @@ export class MatchHub {
     const watching = this.spectators.get(match.matchId);
     if (watching === undefined) return;
     // 観戦者はみな同じ値を受けるので、組み立ても JSON にするのも 1 度で足りる。
-    const delta = serialize(this.spectatorDeltaFor(match, events));
+    const delta = serialize(this.spectatorDeltaFor(match, events, moved));
     for (const socket of watching) socket.send(delta);
   }
 
@@ -524,17 +573,32 @@ export class MatchHub {
         { displayName: first.displayName, rating: first.rating },
         { displayName: second.displayName, rating: second.rating },
       ],
+      ...this.openViews(match),
     };
   }
 
-  private spectatorDeltaFor(match: Match, events: DomainEvent[]): SpectatorDeltaMessage {
+  private spectatorDeltaFor(
+    match: Match,
+    events: DomainEvent[],
+    moved: { seat: Player; move: Move } | null,
+  ): SpectatorDeltaMessage {
     return {
       t: "spectator-delta",
       stateVersion: match.version,
       events: eventsFor(events, "spectator"),
       view: spectatorViewFor(match),
       clock: clockView(match, this.now()),
+      ...this.openViews(match),
+      ...(moved !== null && botsOnly(match) ? { moved } : {}),
     };
+  }
+
+  /**
+   * 両座席とも AI の対戦でだけ、観戦者へ両座席の射影を添える（7.4 節）。座席に人がいないので、
+   * 観戦者が座席へ流して困る相手がいない。人が 1 人でも座る対戦には添えない（3.6 節）。
+   */
+  private openViews(match: Match): { seatViews?: [PlayerView, PlayerView] } {
+    return botsOnly(match) ? { seatViews: [viewFor(match, 0), viewFor(match, 1)] } : {};
   }
 }
 
