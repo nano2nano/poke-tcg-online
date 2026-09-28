@@ -41,6 +41,11 @@ function Seat() {
     setSeated(next);
     setStatus("");
   }, []);
+  /** 覚え直さない。離れてから別のタブが新しい対戦の座席を置いていれば、そちらを残す。 */
+  const resume = useCallback((back: StoredSeat) => {
+    setSeated(back);
+    setStatus("");
+  }, []);
   if (seated !== null) return <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />;
   return (
     <>
@@ -51,7 +56,7 @@ function Seat() {
           <a href="/">いまの画面</a> にあります。
         </p>
       </header>
-      <Lobby status={status} remembered={remembered} onSeated={sit} />
+      <Lobby status={status} remembered={remembered} onSeated={sit} onResume={resume} />
     </>
   );
 }

@@ -171,7 +171,7 @@ test("相手を待つあいだに知らない形の答えが届いたら、待�
   let claims = 0;
   await page.route("**/api/claim?**", async (route) => {
     claims += 1;
-    if (claims === 1) return route.fulfill({ json: { kind: "waiting" } });
+    if (claims !== 2) return route.fulfill({ json: { kind: "waiting" } });
     asked();
     await held;
     await route.fulfill({ json: { ok: true } });
@@ -187,6 +187,9 @@ test("相手を待つあいだに知らない形の答えが届いたら、待�
 
   // 待ち続けるなら、出ているのは待っている一言のままである。
   await expect(status).not.toHaveText(waiting ?? "");
+  // 表示だけ変えて取りに行き続けてもいない。取りに行く間隔より長く待って数える。
+  await page.waitForTimeout(2_500);
+  expect(claims).toBe(2);
 });
 
 test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {

@@ -28,15 +28,13 @@ import {
 import type { StoredSeat } from "../lib/seat.js";
 
 /**
- * サーバへ送っている頼み。`queue` は相手さがし、`bot` は AI との対戦である。
+ * サーバへ頼みを送っているあいだは、次の頼みを送らせない。
  *
  * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
  * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
  * 相手さがしの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
  * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすので構わない。
  */
-type Request = "queue" | "bot";
-
 interface DeckStatus {
   messages: string[];
   tone: "ok" | "ng" | "";
@@ -53,11 +51,13 @@ export function Lobby({
   status: initialStatus,
   remembered,
   onSeated,
+  onResume,
 }: {
   status: string;
   /** 覚えている座席。繋がらずにこの画面へ戻ったときに残っている。 */
   remembered: StoredSeat | null;
   onSeated: (seated: StoredSeat) => void;
+  onResume: (seated: StoredSeat) => void;
 }) {
   const queryClient = useQueryClient();
   const { table } = useCardData();
@@ -103,7 +103,7 @@ export function Lobby({
   const chosenBotDeck = botDeck ?? decks[0]?.label ?? "";
   const chosenOwnDeck = ownDeck ?? (hasDeck ? "" : (decks[0]?.label ?? ""));
 
-  const [requesting, setRequesting] = useState<Request | null>(null);
+  const [requesting, setRequesting] = useState(false);
   /** いま走っている頼み。終わったときに外すのは、自分が置いたものだけにする。 */
   const running = useRef<object | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -128,10 +128,10 @@ export function Lobby({
    */
   const botShare = useRef<SeedShare | null>(null);
 
-  const run = (kind: Request, task: (mine: object) => Promise<void>) => {
+  const run = (task: (mine: object) => Promise<void>) => {
     const mine = {};
     running.current = mine;
-    setRequesting(kind);
+    setRequesting(true);
     task(mine)
       .catch((error: unknown) => {
         if (mounted.current && running.current === mine) {
@@ -141,7 +141,7 @@ export function Lobby({
       .finally(() => {
         if (running.current !== mine) return;
         running.current = null;
-        if (mounted.current) setRequesting(null);
+        if (mounted.current) setRequesting(false);
       });
   };
 
@@ -197,6 +197,11 @@ export function Lobby({
     });
     if (!outcome.ok) return refused(outcome);
     accepted(request);
+    /**
+     * 待っているあいだに押し直すと、返事を待つあいだに前のチケットで席が決まって座席の画面へ移っていることがある。
+     * そのときは開いている対戦を残し、この頼みの答えは使わない。どちらを選んでも 1 局は時間切れになる。
+     */
+    if (!mounted.current) return;
     // 前のチケットはサーバが降ろした。前の待ちの答えで、この頼みの表示を上書きさせない。
     waitingFor.current = mine;
     if ("seat" in outcome) return onSeated(withShare(outcome.seat, share?.share));
@@ -204,11 +209,20 @@ export function Lobby({
     void waitForOpponent(mine, outcome.ticket, share?.share);
   };
 
-  /** 待つあいだの表示は、頼みが走っていないときだけ書く。走っていれば、その頼みの表示が先である。 */
   const waitForOpponent = async (mine: object, ticket: string, share: string | undefined) => {
     const current = () => mounted.current && waitingFor.current === mine;
+    /**
+     * 待っている様子は、変わったときだけ書く。押し直した頼みが断られたとき、
+     * 次に取りに行ったところでその理由を消さない。
+     */
+    let waitingText = "相手を待っています";
+    const showWaiting = (text: string) => {
+      if (!current() || text === waitingText || running.current !== null) return;
+      waitingText = text;
+      setStatus(text);
+    };
     const show = (text: string) => {
-      if (current() && running.current === null) setStatus(text);
+      if (current()) setStatus(text);
     };
     setWaiting(true);
     try {
@@ -218,13 +232,13 @@ export function Lobby({
         try {
           claimed = await claim(ticket);
           reached = true;
-          show("相手を待っています");
+          showWaiting("相手を待っています");
         } catch {
           /**
            * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
            * やめるとその対戦に座らないまま時間切れで負ける。チケットは何度でも使える。
            */
-          show("相手を待っています（つながりが悪いので取り直しています）");
+          showWaiting("相手を待っています（つながりが悪いので取り直しています）");
         }
         if (!current()) return;
         // 取りに行けなかったときは、答えが無いまま待ち直す。
@@ -312,8 +326,8 @@ export function Lobby({
               頼みや待ちの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。 */}
           <button
             id="resume-button"
-            disabled={requesting !== null || waiting}
-            onClick={() => onSeated(remembered)}
+            disabled={requesting || waiting}
+            onClick={() => onResume(remembered)}
           >
             指していた対戦へ戻る
           </button>
@@ -345,11 +359,7 @@ export function Lobby({
         <a href="/">いまの画面</a> にあります。
       </p>
       <div className="deck-actions">
-        <button
-          id="join-button"
-          disabled={requesting !== null}
-          onClick={() => run("queue", (mine) => join(mine))}
-        >
+        <button id="join-button" disabled={requesting} onClick={() => run((mine) => join(mine))}>
           対戦をさがす
         </button>
       </div>
@@ -408,8 +418,8 @@ export function Lobby({
         </label>
         <button
           id="bot-button"
-          disabled={requesting !== null || waiting || botNames.length === 0}
-          onClick={() => run("bot", joinBot)}
+          disabled={requesting || waiting || botNames.length === 0}
+          onClick={() => run(joinBot)}
         >
           AI と対戦する
         </button>

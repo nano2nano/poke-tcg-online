@@ -76,18 +76,28 @@ test("繋がらずにロビーへ戻っても、覚えている座席へ戻れ�
   release();
   await expect(page.locator("#resume-button")).toBeEnabled();
 
+  // 離れてから別のタブが新しい対戦の座席を置いた。戻っても、そちらを消さない。
+  await page.evaluate(() => {
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 1, seatToken: "別のタブの座席" }));
+  });
   await page.click("#resume-button");
   await expect.poll(() => opened).toBe(2);
+  const stored = await page.evaluate(() => localStorage.getItem("poke-seat"));
+  expect(JSON.parse(stored ?? "null")).toMatchObject({ seatToken: "別のタブの座席" });
 });
 
 test("相手を待つあいだに押し直して断られても、前のチケットを待ち続ける", async ({ page }) => {
-  const claimed = () => page.waitForRequest((request) => request.url().includes("/api/claim?"));
+  const claimed = () => page.waitForResponse((response) => response.url().includes("/api/claim?"));
+  const status = page.locator("#join-status");
 
   await page.goto(`${BASEPATH}/`);
   await page.fill("#room", `まちつづける-${Date.now()}`);
   const first = claimed();
   await page.click("#join-button");
   await first;
+  // 2 度目を取りに行くのは 1 度目の答えを出したあとなので、出ているのは待っている一言である。
+  await claimed();
+  const waiting = await status.textContent();
 
   // サーバが前のチケットを降ろすのは、新しい頼みを受け付けたときだけである。
   await page.route("**/api/join", (route) =>
@@ -96,6 +106,10 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   const refused = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
   await refused;
+  await expect(status).not.toHaveText(waiting ?? "");
 
+  // 待ち続けても、断られた理由を待っている一言で消さない。2 度目の答えは 1 度目の答えを出したあとに届く。
   await claimed();
+  await claimed();
+  expect(await status.textContent()).not.toBe(waiting);
 });
