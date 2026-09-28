@@ -216,7 +216,8 @@ export function Lobby({
     if (!outcome.ok) {
       if (outcome.code !== undefined) return refused(outcome);
       // `code` の無い断りは、デッキの違反である。
-      setDeckStatus({ messages: outcome.errors, tone: "ng" });
+      // 選んでいる途中なら、足りない枚数はその欄が伝えている。
+      setDeckStatus(keepPicking({ messages: outcome.errors, tone: "ng" }));
       setStatus("デッキを直してから、もう一度おしてください。");
       return;
     }

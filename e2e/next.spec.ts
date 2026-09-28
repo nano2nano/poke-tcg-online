@@ -292,7 +292,7 @@ test("公式のデッキコードで選んでいる途中に対戦をさがし�
     }),
   );
   await page.route("**/api/join", (route) =>
-    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
+    route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
   );
 
   await page.goto(`${BASEPATH}/`);
@@ -303,7 +303,7 @@ test("公式のデッキコードで選んでいる途中に対戦をさがし�
   const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
   await joined;
-  await expect(page.locator("#join-status")).toContainText("断った");
+  await expect(page.locator("#join-status")).toContainText("デッキを直して");
   await choices.first().click();
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
 });
