@@ -104,7 +104,7 @@ export interface Unreadable {
 }
 
 /**
- * 席を取りに行く。届かなかったときと、サーバが 5xx を返したときは null で、取り直せばよい。
+ * 席を取りに行く。届かなかったときと、サーバが一時的な失敗を返したときは null で、取り直せばよい。
  * それ以外で読めない答えは `unreadable` にする。取り直しても同じ答えが返るので、待つのをやめる。
  */
 export async function claim(ticket: string): Promise<ClaimOutcome | Unreadable | null> {
@@ -114,7 +114,8 @@ export async function claim(ticket: string): Promise<ClaimOutcome | Unreadable |
   } catch {
     return null;
   }
-  if (response.status >= 500) return null;
+  // 混んでいる、間に合わなかった、という答えは、取り直せば通る。
+  if (response.status >= 500 || response.status === 408 || response.status === 429) return null;
   const answer = response.ok
     ? ((await response.json().catch(() => null)) as ClaimOutcome | null)
     : null;

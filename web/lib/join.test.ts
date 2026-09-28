@@ -71,11 +71,13 @@ describe("claim", () => {
   const answer = (respond: () => Promise<Response>) =>
     vi.stubGlobal("fetch", vi.fn<() => Promise<Response>>(respond));
 
-  it("届かなかったときと 5xx は、取り直せばよいので null", async () => {
+  it("届かなかったときと一時的な失敗は、取り直せばよいので null", async () => {
     answer(() => Promise.reject(new TypeError("Failed to fetch")));
     expect(await claim("チケット")).toBeNull();
-    answer(async () => new Response("", { status: 503 }));
-    expect(await claim("チケット")).toBeNull();
+    for (const status of [503, 429, 408]) {
+      answer(async () => new Response("", { status }));
+      expect(await claim("チケット")).toBeNull();
+    }
   });
 
   it("サーバが答えたのに読めなければ、取り直しても同じなので unreadable", async () => {

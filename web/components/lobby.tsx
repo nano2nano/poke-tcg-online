@@ -7,7 +7,6 @@ import {
   DEFAULT_NAME,
   nameOrDefault,
   refreshAccount,
-  type Account,
   storedSecret,
 } from "../lib/account.js";
 import { getJson, postJson } from "../lib/api.js";
@@ -162,9 +161,8 @@ export function Lobby({
 
   /** 受け付けられた頼みは表示名を変えている。戻ってきたときに、前の名前を欄に出さない。 */
   const accepted = (request: { displayName?: string }) => {
-    const { displayName } = request;
-    if (displayName === undefined) return;
-    queryClient.setQueryData<Account>(accountKey, (known) => known && { ...known, displayName });
+    // サーバは見えない文字を落とし、長さを切ってから名前を付ける。付いた名前を読み直す。
+    if (request.displayName !== undefined) refreshAccount(queryClient).catch(() => {});
   };
 
   /** 送るデッキ。規則に通らなければ、理由を出して null。 */
