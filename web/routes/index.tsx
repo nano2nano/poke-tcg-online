@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 import { z } from "zod";
+import { Lobby } from "../components/lobby.js";
 import { SeatTable } from "../components/seat-table.js";
 import { WatchTable } from "../components/watch-table.js";
-import { storedSeat, type StoredSeat } from "../lib/seat.js";
+import { rememberSeat, storedSeat, type StoredSeat } from "../lib/seat.js";
 
 const search = z.object({
   /** 観戦のリンクが運ぶ観戦トークン。 */
@@ -32,16 +33,22 @@ function Seat() {
     setSeated(null);
     setStatus(reason);
   }, []);
+  const sit = useCallback((next: StoredSeat) => {
+    rememberSeat(next);
+    setSeated(next);
+    setStatus("");
+  }, []);
   if (seated !== null) return <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />;
   return (
-    <main id="next-home">
-      <h1>ポケカ オンライン対戦</h1>
-      <p>
-        新しい画面を作っているところです。対戦は <a href="/">いまの画面</a> からできます。
-      </p>
-      <p>
-        <output id="join-status">{status}</output>
-      </p>
-    </main>
+    <>
+      <header>
+        <h1>ポケカ オンライン対戦</h1>
+        <p className="note">
+          新しい画面を作っているところです。デッキを組む画面と、リプレイと戦績は{" "}
+          <a href="/">いまの画面</a> にあります。
+        </p>
+      </header>
+      <Lobby status={status} onSeated={sit} />
+    </>
   );
 }

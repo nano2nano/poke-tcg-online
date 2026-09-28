@@ -3,9 +3,11 @@
  * 切断中も時計は流れる（3.4 節）ので、読み込み直すのを待っていると、そのあいだに負ける。
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { Player } from "../../src/engine.js";
 import type { ClientMessage, ServerMessage } from "../../src/protocol.js";
+import { accountKey } from "./account.js";
 import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl, type Reconnector } from "./connection.js";
 import {
@@ -59,6 +61,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
   const { table } = useCardData();
   const cardTable = useEffectEvent(() => table);
   const show = useEffectEvent(notify);
+  const queryClient = useQueryClient();
 
   /** いまの状態と接続。ボタンから読むので、描いた時点の値ではなく最新を持つ。 */
   const live = useRef<{ state: SeatState; socket: WebSocket | null; log: (text: string) => void }>({
@@ -149,6 +152,8 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
           const text = seatEndText(message, seated.seat);
           log([text]);
           show({ text, tone: seatEndTone(message.matchResult.winner, seated.seat) });
+          // ロビーは閉じていても、読み直しておけば戻ったときに決着後の値が出る。
+          void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "all" });
           void checkShuffle(seated, message).then(([result, shown]) => {
             if (!disposed) setShuffle({ result, text: shown });
           });
@@ -240,7 +245,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
       channel?.close();
       live.current.socket?.close();
     };
-  }, [seated]);
+  }, [seated, queryClient]);
 
   // サーバは、処理の途中で投げた手には何も返さず、接続は保つ。返事だけを待つと、ボタンが戻らない。
   useEffect(() => {
