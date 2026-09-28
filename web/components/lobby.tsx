@@ -9,16 +9,14 @@ import {
   refreshAccount,
   storedSecret,
 } from "../lib/account.js";
-import { getJson, postJson } from "../lib/api.js";
+import { getJson, messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import {
   claim,
   builtDeck,
   liveSeatOf,
   newSeedShare,
-  parseDeck,
   shareFor,
-  storedDeckJson,
   withShare,
   type BotList,
   type DeckList,
@@ -26,14 +24,14 @@ import {
   type JoinOutcome,
   type SeedShare,
 } from "../lib/join.js";
+import { parseDeck, storedDeckJson, subscribeDeck } from "../lib/deck.js";
 import type { StoredSeat } from "../lib/seat.js";
+import { DeckBuilder, forCurrentDeck, NO_DECK_STATUS, type DeckMessage } from "./deck-builder.js";
 
-interface DeckStatus {
-  messages: string[];
-  tone: "ok" | "ng" | "";
-}
-
-const NO_DECK_STATUS: DeckStatus = { messages: [], tone: "" };
+const SAMPLE_NOTE = {
+  messages: ["デッキが空なので、サンプルデッキを使います。"],
+  tone: "",
+} satisfies Omit<DeckMessage, "deck">;
 
 /** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
 const SHARES_KEPT = 8;
@@ -58,7 +56,8 @@ export function Lobby({
   const queryClient = useQueryClient();
   const { table } = useCardData();
   const [status, setStatus] = useState(initialStatus);
-  const [deckStatus, setDeckStatus] = useState(NO_DECK_STATUS);
+  const [deckStatus, setDeckStatus] = useState<DeckMessage>(NO_DECK_STATUS);
+  const showDeckStatus = forCurrentDeck(setDeckStatus);
   const [room, setRoom] = useState("");
   /** 送る時点のルームコード。名前と同じく、押してから送るまでに直した分も送る。 */
   const roomNow = useRef("");
@@ -98,8 +97,7 @@ export function Lobby({
    * 空のまま押すとサンプルデッキになり、AI が学んだことの無い相手になる。
    */
   const [ownDeck, setOwnDeck] = useState<string | null>(null);
-  // デッキはいまの画面の別のタブで組むこともあるので、組んだかどうかは読み直す。
-  const deckJson = useSyncExternalStore(subscribeStorage, storedDeckJson);
+  const deckJson = useSyncExternalStore(subscribeDeck, storedDeckJson);
   const hasDeck = useMemo(() => parseDeck(deckJson).length > 0, [deckJson]);
   const chosenBot = bot ?? botNames[0]?.name ?? "";
   const chosenBotDeck = botDeck ?? decks[0]?.label ?? "";
@@ -210,10 +208,10 @@ export function Lobby({
   const join = async (mine: object) => {
     setStatus("デッキを送っています");
     // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
+    const sent = storedDeckJson();
     const { deck, sample } = await builtDeck();
-    setDeckStatus(
-      sample ? { messages: ["サンプルデッキで対戦します。"], tone: "ok" } : NO_DECK_STATUS,
-    );
+    // 組んだデッキなら、欄はいまのデッキについてのものなので残す。確かめている途中の表示も消さない。
+    if (sample) showDeckStatus({ ...SAMPLE_NOTE, deck: sent });
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
@@ -227,7 +225,12 @@ export function Lobby({
     if (!outcome.ok) {
       if (outcome.code !== undefined) return refused(outcome);
       // `code` の無い断りは、デッキの違反である。
-      setDeckStatus({ messages: outcome.errors, tone: "ng" });
+      // 待つあいだに組み替えていたら、理由は送ったデッキのものなので出さない。
+      if (sent !== storedDeckJson()) {
+        setStatus("待つあいだにデッキが変わりました。もう一度おしてください。");
+        return;
+      }
+      showDeckStatus({ messages: outcome.errors, tone: "ng", deck: sent });
       setStatus("デッキを直してから、もう一度おしてください。");
       return;
     }
@@ -307,11 +310,13 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    setDeckStatus(NO_DECK_STATUS);
     let deck: { deckPreset: string } | { deck: DeckList };
     if (chosenOwnDeck === "") {
       // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
-      deck = { deck: { cards: (await builtDeck()).deck.cards } };
+      const sent = storedDeckJson();
+      const built = await builtDeck();
+      if (built.sample) showDeckStatus({ ...SAMPLE_NOTE, deck: sent });
+      deck = { deck: { cards: built.deck.cards } };
     } else {
       deck = { deckPreset: chosenOwnDeck };
     }
@@ -385,25 +390,23 @@ export function Lobby({
 
       <h2>デッキ</h2>
       <p className="note">
-        いまの画面で組んだデッキを使います。組んでいなければサンプルデッキを使います。デッキを組む画面は、
-        <a href="/">いまの画面</a> にあります。
+        カード名で検索して、候補の「追加」を押します。ワザの名前や収録でも探せます。同じ名前のカードは
+        HP やワザ、収録で見分けます。
+        組んだデッキはこのブラウザに残ります。空のままならサンプルデッキを使います。
       </p>
-      <div className="deck-actions">
-        <button id="join-button" disabled={requesting} onClick={() => run((mine) => join(mine))}>
-          対戦をさがす
-        </button>
-      </div>
-      <div id="deck-status" className={`deck-status ${deckStatus.tone}`}>
-        {deckStatus.messages.map((message, index) => (
-          // 同じ文言の違反が並ぶことがある。並びは届いた答えのまま変わらない。
-          // oxlint-disable-next-line react/no-array-index-key
-          <p key={index}>{message}</p>
-        ))}
-      </div>
+      <DeckBuilder
+        status={deckStatus}
+        onStatus={setDeckStatus}
+        actions={
+          <button id="join-button" disabled={requesting} onClick={() => run((mine) => join(mine))}>
+            対戦をさがす
+          </button>
+        }
+      />
 
       <h2>AI と対戦する</h2>
       <p className="note">
-        学習した AI と指します。レーティングは動きません。自分のデッキは、組んだものか、AI
+        学習した AI と指します。レーティングは動きません。自分のデッキは、上で組んだものか、AI
         と同じ表のデッキから選べます。
       </p>
       <div className="bot-form">
@@ -438,7 +441,7 @@ export function Lobby({
             value={chosenOwnDeck}
             onChange={(event) => setOwnDeck(event.target.value)}
           >
-            <option value="">組んだデッキ</option>
+            <option value="">上で組んだデッキ</option>
             {decks.map((deck) => (
               <option key={deck.label} value={deck.label}>
                 {deckName(deck)}
@@ -469,13 +472,4 @@ async function secretOf(ensureAccount: () => Promise<unknown>): Promise<string> 
   const secret = storedSecret();
   if (secret === null) throw new Error("プレイヤーを用意できなかった");
   return secret;
-}
-
-function subscribeStorage(onChange: () => void): () => void {
-  addEventListener("storage", onChange);
-  return () => removeEventListener("storage", onChange);
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

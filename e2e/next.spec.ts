@@ -4,7 +4,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { expect, test, type WebSocket } from "@playwright/test";
+import { expect, test, type Page, type WebSocket } from "@playwright/test";
+import { loadGeneratedCards } from "../src/engine.js";
 import type { Seated } from "../src/lobby.js";
 import { BASEPATH } from "../web/basepath.js";
 
@@ -234,4 +235,290 @@ test("返事の届かなかったリクエストで席が決まっていたら�
   } finally {
     await other.close();
   }
+});
+
+/** サンプルデッキの先頭のカードを、検索から 1 枚足す。 */
+async function addFirstSampleCard(page: Page): Promise<string> {
+  const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { name: string; set?: string; number?: string }
+  >;
+  const defId = deck.cards[0] as string;
+  const card = cards[defId] as { name: string; set?: string; number?: string };
+  await page.fill("#card-search", [card.name, card.set, card.number].filter(Boolean).join(" "));
+  await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
+  return defId;
+}
+
+test("確かめる返事を待つあいだに組み替えたら、その返事の結果を出さない", async ({ page }) => {
+  await page.goto(`${BASEPATH}/`);
+  const defId = await addFirstSampleCard(page);
+  await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/deck/validate", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: true, errors: [] } });
+  });
+
+  await page.click("#check-button");
+  await page.locator(`#deck-cards .card-row[data-def-id="${defId}"] button.remove`).click();
+  const answered = page.waitForResponse((response) =>
+    response.url().endsWith("/api/deck/validate"),
+  );
+  release();
+  await answered;
+  // 確かめたのは 2 枚のデッキで、いまは 1 枚である。
+  await expect(page.locator("#deck-cards .card-count")).toHaveText("1");
+  await expect(page.locator("#deck-status")).not.toContainText("規則を通ります");
+});
+
+test("組み替える前に確かめた返事があとから届いても、組み替えてから確かめた結果を消さない", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  const defId = await addFirstSampleCard(page);
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  // どちらの検査も通ったことにする。1 度目の返事だけ、2 度目の結果が出たあとに届ける。
+  await page.route("**/api/deck/validate", async (route) => {
+    calls += 1;
+    if (calls === 1) await held;
+    await route.fulfill({ json: { ok: true, errors: [] } });
+  });
+
+  await page.click("#check-button");
+  await page.locator(`#deck-cards .card-row[data-def-id="${defId}"] button.add`).click();
+  await page.click("#check-button");
+  await expect(page.locator("#deck-status")).toContainText("デッキは 2 枚で、規則を通ります");
+  const late = page.waitForResponse((response) => response.url().endsWith("/api/deck/validate"));
+  release();
+  await late;
+  // 返事が届いてから欄に書くまでを待つ。待たないと、書く前の欄を見て通ってしまう。
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  await expect(page.locator("#deck-status")).toContainText("デッキは 2 枚で、規則を通ります");
+});
+
+/** 公式のカード ID のうち、このサーバで複数のカードに当たるもの。読み込むと、どれかを選ぶ欄が出る。 */
+function sharedCardId(): string {
+  const byCardId = new Map<string, string[]>();
+  for (const def of loadGeneratedCards()) {
+    for (const print of def.prints) {
+      byCardId.set(print.cardID, [...(byCardId.get(print.cardID) ?? []), def.defId]);
+    }
+  }
+  const [cardId] = [...byCardId].find(([, defIds]) => defIds.length > 1) as [string, string[]];
+  return cardId;
+}
+
+test("公式のデッキコードで選んでいる途中に対戦をさがしても、選ぶ欄を残す", async ({ page }) => {
+  const cardId = sharedCardId();
+  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_2_1" /></form>`,
+    }),
+  );
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
+  );
+
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  const choices = page.locator("#deck-status .choices button");
+  await expect(choices.first()).toBeVisible();
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await joined;
+  await expect(page.locator("#join-status")).toContainText("デッキを直して");
+  await expect(page.locator("#deck-status")).toContainText("あと 2 枚を選んでください");
+  await expect(page.locator("#deck-status")).toContainText("デッキは 60 枚にしてください");
+  await choices.first().click();
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+});
+
+test("公式のデッキコードで選んでいる途中でも、別のタブで組み替えたら、対戦をさがして断られた理由を出す", async ({
+  page,
+}) => {
+  const cardId = sharedCardId();
+  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_2_1" /></form>`,
+    }),
+  );
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
+  );
+
+  await page.goto(`${BASEPATH}/`);
+  const defId = await addFirstSampleCard(page);
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.click("#deck-code-button");
+  await expect(page.locator("#deck-status .choices button").first()).toBeVisible();
+
+  const other = await page.context().newPage();
+  await other.goto(page.url());
+  await other.evaluate(
+    (card) => localStorage.setItem("poke-deck", JSON.stringify([{ defId: card, count: 1 }])),
+    defId,
+  );
+  await other.close();
+  await expect(page.locator("#deck-status .choices button")).toHaveCount(0);
+  await page.click("#join-button");
+  await expect(page.locator("#deck-status")).toContainText("デッキは 60 枚にしてください");
+});
+
+test("対戦をさがす返事を待つあいだに最後の 1 枚を選んだら、選び終えたデッキを確かめた結果を出す", async ({
+  page,
+}) => {
+  const cardId = sharedCardId();
+  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_1_1" /></form>`,
+    }),
+  );
+  // 1 枚のデッキは規則に通らない。通ったことにして、その結果が残るのを見る。
+  await page.route("**/api/deck/validate", (route) =>
+    route.fulfill({ json: { ok: true, errors: [] } }),
+  );
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, errors: ["選ぶ前のデッキの理由"] } });
+  });
+
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.locator("#deck-status .choices button").first().waitFor();
+  await page.click("#join-button");
+  await page.locator("#deck-status .choices button").first().click();
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
+  release();
+  await joined;
+  await expect(page.locator("#join-status")).toContainText("デッキが変わりました");
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
+  await expect(page.locator("#deck-status")).not.toContainText("選ぶ前のデッキの理由");
+});
+
+test("対戦をさがす返事を待つあいだに組み替えたら、断られた理由を出さない", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } });
+  });
+
+  await page.goto(`${BASEPATH}/`);
+  await addFirstSampleCard(page);
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await page.locator("#deck-cards .card-row button.add").first().click();
+  release();
+  await joined;
+  await expect(page.locator("#join-status")).toContainText("デッキが変わりました");
+  await expect(page.locator("#deck-status")).not.toContainText("60 枚にしてください");
+});
+
+test("デッキを確かめた結果は、対戦をさがしても残す", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } });
+  });
+  // 1 枚のデッキは規則に通らない。通ったことにして、その結果が残るのを見る。
+  await page.route("**/api/deck/validate", (route) =>
+    route.fulfill({ json: { ok: true, errors: [] } }),
+  );
+
+  await page.goto(`${BASEPATH}/`);
+  await addFirstSampleCard(page);
+  await page.click("#check-button");
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await expect(page.locator("#join-status")).toContainText("デッキを送っています");
+  release();
+  await joined;
+  await expect(page.locator("#join-status")).toContainText("断った");
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
+});
+
+test("サンプルデッキを使うと出たあとに別のタブでデッキを組んだら、その文を消す", async ({
+  page,
+}) => {
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
+  );
+  await page.goto(`${BASEPATH}/`);
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await joined;
+  await expect(page.locator("#deck-status")).toContainText("サンプルデッキを使います");
+
+  const other = await page.context().newPage();
+  await other.goto(page.url());
+  const defId = await addFirstSampleCard(other);
+  await other.close();
+  await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
+  await expect(page.locator("#deck-status")).not.toContainText("サンプルデッキを使います");
+});
+
+test("最後の 1 枚を選んだあとの確かめに失敗したら、その失敗を出す", async ({ page }) => {
+  const cardId = sharedCardId();
+  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_1_1" /></form>`,
+    }),
+  );
+  await page.route("**/api/deck/validate", (route) => route.abort());
+
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  await page.locator("#deck-status .choices button").first().click();
+  await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
+});
+
+test("デッキを確かめるのに失敗したら、その失敗を出す", async ({ page }) => {
+  await page.route("**/api/deck/validate", (route) => route.abort());
+  await page.goto(`${BASEPATH}/`);
+  await addFirstSampleCard(page);
+  await page.click("#check-button");
+  await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
+});
+
+test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  await page.route("**/api/card-image/*", (route) => route.fulfill({ status: 502, body: "" }));
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#card-search", "エネルギー");
+  await expect(page.locator("#card-results .card-row").first()).toBeVisible();
+  await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
 });

@@ -32,19 +32,24 @@ export function CardFace({
   defId,
   posture,
   pickable,
+  thumb,
 }: {
   defId: string;
   posture?: string | undefined;
   /** 山札から選ぶ効果で並べたカードが、いま選べるか。 */
   pickable?: boolean;
+  /** 一覧の行に添える小さな面。 */
+  thumb?: boolean;
 }) {
   const { table, images } = useCardData();
   const card = table[defId];
   const src = imageUrl(images, card?.cardID);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // 画像の無い小さな面は名前も読めないので、出さない。
+  if (thumb === true && (src === null || src === failedSrc)) return null;
   return (
     <div
-      className="card"
+      className={thumb === true ? "card thumb" : "card"}
       data-def-id={defId}
       data-kind={card?.kind ?? ""}
       data-type={card?.type}
@@ -74,7 +79,7 @@ export function CardFace({
   );
 }
 
-function imageUrl(enabled: boolean, cardID: string | undefined): string | null {
+export function imageUrl(enabled: boolean, cardID: string | undefined): string | null {
   if (!enabled || cardID === undefined) return null;
   const url = `/api/card-image/${cardID}`;
   return failedImages.has(url) ? null : url;
