@@ -5,10 +5,13 @@
 
 import { createHash } from "node:crypto";
 import { expect, test, type Page, type WebSocket } from "@playwright/test";
+import type { Bot } from "../src/bots.js";
 import { loadGeneratedCards, type PlayerView } from "../src/engine.js";
+import { MatchHub } from "../src/hub.js";
 import type { Seated } from "../src/lobby.js";
-import { viewFor } from "../src/match.js";
-import { ensureCards, newMatch } from "../tests/helpers.js";
+import { concede, createMatch, viewFor } from "../src/match.js";
+import { MatchRegistry } from "../src/registry.js";
+import { ensureCards, legalDecks, newMatch } from "../tests/helpers.js";
 import { BASEPATH } from "../web/basepath.js";
 
 test("新しい画面は /next/ で描け、いまの画面は / に残る", async ({ page }) => {
@@ -1029,4 +1032,75 @@ test("追い越された局面の再現できない地点は、見出しに出�
   await last;
   await painted(page);
   await expect(page.locator("#replay-status")).not.toContainText("手目から先は");
+});
+
+/**
+ * AI どうしの対戦を、サーバと同じ組み立てで最初の数手ぶん観戦者へ流したときに届くもの。
+ * AI は候補の先頭を指す。重みは使わないので、e2e のサーバに重みを置かずに済む。
+ */
+async function botWatchMessages(moves: number): Promise<string[]> {
+  ensureCards();
+  const first: Bot = {
+    identity: { name: "first", label: "first", generation: 0, weightsSha256: "" },
+    tracksKnowledge: false,
+    choose: () => 0,
+  };
+  const registry = new MatchRegistry();
+  const match = createMatch({
+    matchId: "e2e-bot-watch",
+    decks: legalDecks(),
+    seats: [
+      { playerId: "bot:first", displayName: "AI first（1）", rating: null },
+      { playerId: "bot:first", displayName: "AI first（2）", rating: null },
+    ],
+    seatTokens: ["e2e-bot-watch-0", "e2e-bot-watch-1"],
+    spectatorToken: "e2e-bot-watch",
+    nowMs: 0,
+    startedAt: new Date(0).toISOString(),
+    bots: [first, first],
+  });
+  registry.add(match);
+  const hub = new MatchHub({ registry, watchDelayMs: 0 });
+  const sent: string[] = [];
+  hub.attachSpectator({ send: (data) => void sent.push(data), close() {} }, "e2e-bot-watch");
+  while (match.version < moves) await new Promise((resolve) => setTimeout(resolve, 1));
+  // 決着を付けて AI を止める。記録は作らない（Worker の外ではエンジンの版を引けない）。
+  concede(match, 0, 0);
+  // 局面の一式と、そのあとの手の数だけの局面。そこから先は送らない。
+  return sent.slice(0, moves + 1);
+}
+
+test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる。両者の手札も描く", async ({ page }) => {
+  const messages = await botWatchMessages(5);
+  await page.clock.install();
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    for (const message of messages) ws.send(message);
+  });
+  await page.goto(`${BASEPATH}/?watch=e2e-bot-watch`);
+
+  const position = page.locator("#watch-position");
+  await expect(position).toHaveAttribute("data-latest", "5");
+  await expect(position).toHaveAttribute("data-shown", "0");
+  for (const player of [0, 1]) {
+    await expect(page.locator(`#watch-side-${player} .hand .card[data-def-id]`)).not.toHaveCount(0);
+  }
+
+  // 人が選ぶまでは 1 秒ごとに送る。
+  await page.clock.runFor(1_000);
+  await expect(position).toHaveAttribute("data-shown", "1");
+  await expect(page.locator("#watch-move")).not.toBeEmpty();
+
+  await page.click("#watch-play");
+  await page.clock.runFor(3_000);
+  await expect(position).toHaveAttribute("data-shown", "1");
+  await page.click("#watch-forward");
+  await expect(position).toHaveAttribute("data-shown", "2");
+  await page.click("#watch-back");
+  await page.click("#watch-back");
+  await expect(position).toHaveAttribute("data-shown", "0");
+  await expect(page.locator("#watch-back")).toBeDisabled();
+
+  await page.selectOption("#watch-speed", "0");
+  await page.click("#watch-play");
+  await expect(position).toHaveAttribute("data-shown", "5");
 });

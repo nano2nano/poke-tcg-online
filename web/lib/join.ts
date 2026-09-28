@@ -5,7 +5,9 @@
 import type { BotEntry, DeckPreset } from "../../src/bots.js";
 import type { DeckList } from "../../src/engine.js";
 import type { ClaimOutcome, JoinOutcome, Seated } from "../../src/lobby.js";
+import { queryOptions } from "@tanstack/react-query";
 import { getJson } from "./api.js";
+import type { CardTable } from "./cards.js";
 import { deckCards, storedDeck } from "./deck.js";
 import { sha256Hex, storedSeat, toHex, type StoredSeat } from "./seat.js";
 
@@ -66,6 +68,21 @@ export function liveSeatOf(outcome: JoinOutcome): Seated | null {
 export interface BotList {
   bots: BotEntry[];
   decks: DeckPreset[];
+}
+
+/** AI の一覧。AI と対戦する欄と、AI どうしの対戦を立てる欄が同じ答えを使う。 */
+export const botListQuery = queryOptions({
+  queryKey: ["bots"],
+  queryFn: () => getJson<BotList>("/api/bots"),
+  staleTime: Infinity,
+});
+
+/** デッキの名前は看板のカードの名前をつなぐ。カードの表が届くまではラベルを出す（仕様 7.3 節）。 */
+export function presetName(deck: DeckPreset, cards: CardTable): string {
+  const names = deck.aces.map((ace) => cards[ace]?.name);
+  return names.length > 0 && names.every((one) => one !== undefined)
+    ? names.join("・")
+    : deck.label;
 }
 
 /** 成功を返したのに読めない答え。入れ替えのあとの古いタブが、新しいサーバに尋ねたときに起きる。 */

@@ -980,3 +980,27 @@ button.secondary {
     animation: none;
   }
 }
+
+.watch-controls label {
+  margin: 4px 0;
+}
+.watch-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.watch-controls .note {
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+/* 手の見出しは長さが手ごとに変わる。高さを取っておかないと、1 手ごとに下の欄が上下する。 */
+.watch-move {
+  min-height: 3.2em;
+  margin: 6px 0 0;
+}
+.watch-seat {
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}

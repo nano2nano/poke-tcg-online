@@ -75,8 +75,7 @@ export interface Bot {
  * 重みのバイト列から AI を作る。形式の見分け方はエンジンの `readWeightsFile` と同じで、
  * 形式 5 と形式 6 は先頭の印で、それ以外は JSON として読む。読めなければ投げる。
  *
- * 手は方策の確率どおりに引く。自己対戦とゲートが指すのと同じ選び方なので、
- * 学習の記録に出ている強さのまま指す。最も確率の高い手だけを指すと、別の方策になる。
+ * 手は方策の確率から、確率が `BOT_MIN_PROBABILITY` 未満の手を捨てて引く（`sampleLikely`）。
  */
 export function botFromBytes(
   name: string,
@@ -100,11 +99,44 @@ export function botFromBytes(
     },
     tracksKnowledge: tracksKnowledge(policy),
     choose: (view, legal, knowledge, extras) =>
-      sampleFrom(
+      sampleLikely(
         probabilitiesOf(policy, () => view, legal, knowledge, extras),
         uniform(),
       ),
   };
+}
+
+/**
+ * AI が指す手の確率の下限。
+ * 学習した方策は明らかな悪手にも小さな確率を残す。1 局に決定点が多いので、そのまま引くと 1 局の中で
+ * 何度か悪手を引きうる。いちばん確率の高い手だけを指すと、同じ局面で毎回同じ手になり、人に読まれる。
+ * そこで小さい確率の手だけを捨て、残りは確率で引く。Stratego の DeepNash が対局で使った下限と同じ値である
+ * （Perolat ら 2022, arXiv:2206.15378）。
+ */
+export const BOT_MIN_PROBABILITY = 0.03;
+
+/**
+ * 確率が `threshold` 未満の候補を 0 にし、残りの合計が 1 になるよう割り直す。
+ * どの候補も下限に届かなければ、確率をそのまま返す。
+ */
+export function dropUnlikely(
+  probabilities: readonly number[],
+  threshold: number = BOT_MIN_PROBABILITY,
+): readonly number[] {
+  let kept = 0;
+  for (const probability of probabilities) if (probability >= threshold) kept += probability;
+  if (kept === 0) return probabilities;
+  return probabilities.map((probability) => (probability >= threshold ? probability / kept : 0));
+}
+
+/** `dropUnlikely` で捨てた後の確率から、`uniform`（[0, 1) の一様乱数）で 1 つ引き、その位置を返す。 */
+export function sampleLikely(probabilities: readonly number[], uniform: number): number {
+  const likely = dropUnlikely(probabilities);
+  const index = sampleFrom(likely, uniform);
+  // 割り直した確率の累積が丸めで 1 に届かないと、`sampleFrom` は末尾を返す。末尾が捨てた手なら、残した手の最後にする。
+  let last = index;
+  while ((likely[last] as number) === 0 && last > 0) last -= 1;
+  return last;
 }
 
 function startsWith(buffer: Buffer, magic: string): boolean {

@@ -58,6 +58,13 @@ export const joinBotRequestSchema = z
   })
   .refine((body) => (body.deck === undefined) !== (body.deckPreset === undefined));
 
+/** AI どうしの対戦を立てる要求（7.4 節）。AI とデッキは座席 0、座席 1 の順に並べる。 */
+export const watchBotsRequestSchema = z.object({
+  secret: z.string(),
+  bots: z.tuple([z.string(), z.string()]),
+  decks: z.tuple([z.string(), z.string()]),
+});
+
 /** 自分のものを読むだけの要求。シークレットを URL に載せないので本文で受ける（7.2 節）。 */
 export const secretRequestSchema = z.object({
   secret: z.string(),

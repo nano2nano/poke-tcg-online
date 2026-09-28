@@ -19,7 +19,7 @@ let worker: TestWorker;
 
 beforeAll(async () => {
   ensureCards();
-  worker = await startWorker({ ACCOUNT_BURST: "0", BOT_DELAY_MS: "0" });
+  worker = await startWorker({ ACCOUNT_BURST: "0", BOT_DELAY_MS: "0", WATCH_DELAY_MS: "0" });
   await worker.archive.put(`${BOT_PREFIX}g0`, encodePpoWeights(newPpoWeightsFile("test-bot")));
 });
 
@@ -165,5 +165,47 @@ describe("AI と対戦する", () => {
       versionOnAttach = sync.stateVersion;
     }
     expect(versionOnAttach).toBeGreaterThan(0);
+  });
+});
+
+describe("AI どうしの対戦を見る", () => {
+  it("立てた対戦を観戦の接続で決着まで見られ、記録には両座席の AI が残る", async () => {
+    const { secret } = (await postJson("/api/account", { displayName: "見る人" })).body;
+    const request = {
+      secret,
+      bots: ["g0", "g0"],
+      decks: ["dragapult-28731", "alakazam-dudunsparce-72073"],
+    };
+    const opened = await postJson("/api/watch-bots", request);
+    expect(opened.body.ok).toBe(true);
+    const { spectatorToken } = opened.body;
+    // 終わるまでは次を立てず、立てた対戦の観戦トークンを返す。
+    const refused = await postJson("/api/watch-bots", request);
+    expect(refused.body).toMatchObject({ ok: false, code: "bot-watch-live", spectatorToken });
+
+    const socket = new WebSocket(`ws://${worker.host}/ws?spectatorToken=${spectatorToken}`);
+    const messages: ServerMessage[] = [];
+    await new Promise<void>((resolve) => {
+      socket.on("message", (raw) => {
+        messages.push(JSON.parse((raw as Buffer).toString()) as ServerMessage);
+      });
+      socket.on("close", () => resolve());
+    });
+    const deltas = messages.filter((message) => message.t === "spectator-delta");
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(
+      deltas.every((delta) => delta.moved !== undefined && delta.seatViews !== undefined),
+    ).toBe(true);
+    expect(messages.at(-1)?.t).toBe("spectator-ended");
+
+    // `/api/account/me` は記録を残し終えるのを待って答える。
+    await postJson("/api/account/me", { secret });
+    const { objects } = await worker.archive.list({ prefix: "matches/" });
+    const records: MatchRecord[] = [];
+    for (const { key } of objects) {
+      records.push(JSON.parse(await (await worker.archive.get(key))!.text()) as MatchRecord);
+    }
+    const record = records.find((each) => each.seats.every((seat) => seat.bot?.name === "g0"));
+    expect(record?.moves.length).toBe(deltas.length);
   });
 });

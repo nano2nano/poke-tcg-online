@@ -177,6 +177,8 @@ export interface SpectatorSyncMessage {
    * 対局ログと人を結び付けられる形にしない。
    */
   seats: [SpectatorSeat, SpectatorSeat];
+  /** 両座席とも AI の対戦でだけ載る、両座席の射影（7.4 節）。 */
+  seatViews?: [PlayerView, PlayerView];
 }
 
 export type SpectatorSeat = Pick<SeatInfo, "displayName" | "rating">;
@@ -187,6 +189,10 @@ export interface SpectatorDeltaMessage {
   events: PlayerEvent[];
   view: SpectatorView;
   clock: ClockView;
+  /** 両座席とも AI の対戦でだけ載る（7.4 節）。 */
+  seatViews?: [PlayerView, PlayerView];
+  /** 両座席とも AI の対戦でだけ載る、いま指された手と指した座席（7.4 節）。 */
+  moved?: { seat: Player; move: Move };
 }
 
 /** seed は明かさない。seed からは両者のデッキの中身がすべて割れる（6.6 節）。 */
@@ -195,6 +201,8 @@ export interface SpectatorEndedMessage {
   matchResult: MatchResult;
   outcome: GameOutcome | null;
   view: SpectatorView;
+  /** 両座席とも AI の対戦でだけ載る（7.4 節）。 */
+  seatViews?: [PlayerView, PlayerView];
 }
 
 export type ServerMessage =

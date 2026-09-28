@@ -5,11 +5,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AccountStore, INITIAL_RATING } from "../src/accounts.js";
 import { MatchArchive } from "../src/archive.js";
 import {
+  BOT_MIN_PROBABILITY,
   BOT_PREFIX,
   BOT_TRAINING_DECKS,
   botFromBytes,
   BotStore,
   deckPresets,
+  dropUnlikely,
+  sampleLikely,
   presetDeck,
   trainedDeckLabels,
   type Bot,
@@ -113,6 +116,33 @@ function matchWithChoice(): Match {
   return match;
 }
 
+describe("確率の小さい手を捨てる", () => {
+  it("下限より小さい候補を 0 にし、残りを合計 1 に割り直す", () => {
+    const dropped = dropUnlikely([0.5, 0.02, 0.48]);
+    expect(dropped[0]).toBeCloseTo(0.5 / 0.98, 12);
+    expect(dropped[1]).toBe(0);
+    expect(dropped[2]).toBeCloseTo(0.48 / 0.98, 12);
+  });
+
+  it("下限ちょうどの候補は残す", () => {
+    expect(dropUnlikely([BOT_MIN_PROBABILITY, 1 - BOT_MIN_PROBABILITY])).toEqual([
+      BOT_MIN_PROBABILITY,
+      1 - BOT_MIN_PROBABILITY,
+    ]);
+  });
+
+  it("捨てた手は引かない。累積が丸めで 1 に届かず末尾が捨てた手でも、残した手を返す", () => {
+    expect(sampleLikely([0.5, 0.02, 0.48], 0.52)).toBe(2);
+    // 0.05 / 0.549 + 0.499 / 0.549 は 1 - 2^-53 で、1 に届かない。
+    expect(sampleLikely([0.05, 0.499, 0.01], 1 - 2 ** -53)).toBe(1);
+  });
+
+  it("どの候補も下限に届かなければ、確率をそのまま返す", () => {
+    const uniform = Array.from({ length: 50 }, () => 1 / 50);
+    expect(dropUnlikely(uniform)).toEqual(uniform);
+  });
+});
+
 describe("重みから作る AI", () => {
   it("形式 5 の重みを読み、どの重みかを記録できる形で持つ", () => {
     ensureCards();
@@ -126,7 +156,7 @@ describe("重みから作る AI", () => {
     });
   });
 
-  it("手は方策の確率どおりに引く。世代 0 は全候補が同じ確率である", () => {
+  it("世代 0 は全候補が同じ確率なので、どの候補も引ける", () => {
     const match = matchWithChoice();
     const seat = toMove(match)!;
     const legal = legalMoves(match.state);
@@ -200,7 +230,7 @@ describe("AI に見せる候補", () => {
       nowMs: 0,
       startedAt: new Date(0).toISOString(),
       seedCommitment: commitSeed("bot-revisit"),
-      bot: { seat: 1, bot: botFromBytes("g0", generationZero()) },
+      bots: [null, botFromBytes("g0", generationZero())],
     });
     for (;;) {
       const mover = toMove(match);

@@ -7,6 +7,7 @@
  */
 
 import type { ZodType } from "zod";
+import type { DeckList } from "./engine.js";
 import { cardIndexJson } from "./card-index.js";
 import { describeViolation, validateDeck } from "./deck.js";
 import { resolveOfficialDeck } from "./official-deck.js";
@@ -22,6 +23,7 @@ import {
   createAccountSchema,
   deckListSchema,
   joinBotRequestSchema,
+  watchBotsRequestSchema,
   joinRequestSchema,
   officialDeckSchema,
   replayRequestSchema,
@@ -74,6 +76,8 @@ export interface AppOptions {
   bots?: BotStore | null;
   /** AI が手を指すまでの間。テストが待たずに済むように置く。 */
   botDelayMs?: number;
+  /** AI どうしの対戦で、AI が手を指すまでの間。テストが待たずに済むように置く。 */
+  watchDelayMs?: number;
   now?: () => number;
   /** アカウントを作れる速さ。`null` なら掛けない。 */
   accountLimit?: RateLimitOptions | null;
@@ -114,6 +118,8 @@ export interface AppVars {
   SILENCE_LIMIT_MS?: string;
   /** AI が手を指すまでのミリ秒。テストが待たずに済むように置く。 */
   BOT_DELAY_MS?: string;
+  /** AI どうしの対戦で、AI が手を指すまでのミリ秒。テストが待たずに済むように置く。 */
+  WATCH_DELAY_MS?: string;
 }
 
 /**
@@ -122,8 +128,11 @@ export interface AppVars {
  */
 export function optionsFromVars(
   vars: AppVars,
-): Pick<AppOptions, "accountLimit" | "silenceLimitMs" | "botDelayMs"> {
-  const options: Pick<AppOptions, "accountLimit" | "silenceLimitMs" | "botDelayMs"> = {};
+): Pick<AppOptions, "accountLimit" | "silenceLimitMs" | "botDelayMs" | "watchDelayMs"> {
+  const options: Pick<
+    AppOptions,
+    "accountLimit" | "silenceLimitMs" | "botDelayMs" | "watchDelayMs"
+  > = {};
   const burst = readCount("ACCOUNT_BURST", vars.ACCOUNT_BURST);
   if (burst !== null)
     options.accountLimit = burst === 0 ? null : { ...DEFAULT_ACCOUNT_LIMIT, burst };
@@ -132,6 +141,8 @@ export function optionsFromVars(
   else if (silence === 0) console.warn("SILENCE_LIMIT_MS は 1 以上にする。既定を使う。");
   const botDelay = readCount("BOT_DELAY_MS", vars.BOT_DELAY_MS);
   if (botDelay !== null) options.botDelayMs = botDelay;
+  const watchDelay = readCount("WATCH_DELAY_MS", vars.WATCH_DELAY_MS);
+  if (watchDelay !== null) options.watchDelayMs = watchDelay;
   return options;
 }
 
@@ -159,6 +170,7 @@ export function createApp(options: AppOptions): App {
     now,
     onFinish: (record) => void archive.settle(record),
     ...(options.botDelayMs === undefined ? {} : { botDelayMs: options.botDelayMs }),
+    ...(options.watchDelayMs === undefined ? {} : { watchDelayMs: options.watchDelayMs }),
   });
   const bots = options.bots ?? null;
   /** 接続 → 最後に何か届いた時刻。 */
@@ -422,6 +434,34 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const outcome = lobby.joinBot(joining, known, loaded.bot, botDeck);
     if (!outcome.ok || !("seat" in outcome)) return json(400, outcome);
     hub.wakeBot(outcome.seat.seatToken);
+    return json(200, outcome);
+  }
+  if (request.method === "POST" && url.pathname === "/api/watch-bots") {
+    const body = parseBody(watchBotsRequestSchema, await readBody(request));
+    const first = presetDeck(body.decks[0]);
+    const second = presetDeck(body.decks[1]);
+    if (first === null || second === null) {
+      return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
+    }
+    const decks: [DeckList, DeckList] = [first, second];
+    const known = await accounts.find(body.secret);
+    const refusal = lobby.refuseWatch(known, decks);
+    if (refusal !== null || known === null) return json(400, refusal);
+    if (bots === null) return json(400, { ok: false, errors: ["AI の重みの保存先が無い"] });
+    lobby.holdWatch(known.playerId);
+    let loaded: [BotLoad, BotLoad];
+    try {
+      // 読み込みは 1 本ずつ並ぶので、同じ AI どうしなら 2 本目はキャッシュを使う。
+      loaded = [await bots.load(body.bots[0]), await bots.load(body.bots[1])];
+    } finally {
+      lobby.releaseWatch(known.playerId);
+    }
+    const [zero, one] = loaded;
+    if (!zero.ok) return json(400, { ok: false, errors: [zero.error] });
+    if (!one.ok) return json(400, { ok: false, errors: [one.error] });
+    const outcome = lobby.watchBots(known, [zero.bot, one.bot], decks);
+    if (!outcome.ok) return json(400, outcome);
+    hub.wakeWatch(outcome.spectatorToken);
     return json(200, outcome);
   }
   if (request.method === "GET" && url.pathname === "/api/claim") {
