@@ -52,18 +52,20 @@ describe("shareFor", () => {
 
   it("覚えている座席が同じなら、そのシェアを使う", () => {
     rememberSeat({ ...seated, seedShare: "覚えていたシェア" });
-    expect(shareFor(seated, null)).toBe("覚えていたシェア");
+    expect(shareFor(seated, [])).toBe("覚えていたシェア");
   });
 
-  it("前に頼んだときのシェアは、この席のコミットに合うときだけ使う", () => {
-    expect(shareFor(seated, { share: "前のシェア", commit: "自分のコミット" })).toBe("前のシェア");
+  it("前に頼んだときのシェアは、この席のコミットに合うものだけ使う", () => {
+    const mine = { share: "前のシェア", commit: "自分のコミット" };
+    const other = { share: "その前のシェア", commit: "別のコミット" };
+    expect(shareFor(seated, [other, mine])).toBe("前のシェア");
     // 相手の席のコミットに合っても、自分のシェアではない。
-    expect(shareFor(seated, { share: "前のシェア", commit: "相手のコミット" })).toBeUndefined();
+    expect(shareFor(seated, [{ share: "前のシェア", commit: "相手のコミット" }])).toBeUndefined();
   });
 
   it("別の座席を覚えていても、そのシェアは使わない", () => {
     rememberSeat({ ...seated, seatToken: "別の座席", seedShare: "別のシェア" });
-    expect(shareFor(seated, null)).toBeUndefined();
+    expect(shareFor(seated, [])).toBeUndefined();
   });
 });
 

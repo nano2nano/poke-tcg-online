@@ -139,7 +139,9 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   // 待ち続けても、断られた理由を待っている一言で消さない。2 度目の答えは 1 度目の答えを出したあとに届く。
   await claimed();
   await claimed();
-  expect(await status.textContent()).toContain("断った");
+  // `code` の無い断りはデッキの違反なので、違反はデッキの欄に出る。
+  expect(await status.textContent()).toContain("デッキを直して");
+  await expect(page.locator("#deck-status")).toContainText("断った");
 });
 
 /** 座席へ繋ぐ URL から、座席トークンと開いたシェアを読む。 */
@@ -152,7 +154,7 @@ function commitOf(share: string | null): string | null {
   return share === null ? null : createHash("sha256").update(`share:${share}`).digest("hex");
 }
 
-test("待っているあいだに席が決まってから押し直すと、その席へ前のシェアで着く", async ({
+test("待っているあいだに席が決まってから押し直すと、あいだに届かなかった押し直しがあっても、その席へ前のシェアで着く", async ({
   page,
   browser,
 }) => {
@@ -175,6 +177,11 @@ test("待っているあいだに席が決まってから押し直すと、そ�
     await seated;
     const claimed = await page.request.get(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
     const { seat } = (await claimed.json()) as { seat: Seated };
+
+    // サーバに届かなかったリクエストのシェアが、前のシェアを押し出さない。
+    await page.route("**/api/join", (route) => route.abort(), { times: 1 });
+    await page.click("#join-button");
+    await expect(page.locator("#join-status")).toContainText("つながらなかった");
 
     // 席が決まったチケットは降ろすものが無い。サーバが 2 局目を始めると、この席は誰も座らないまま負けになる。
     const opened = openedSeat(page.waitForEvent("websocket"));
@@ -215,6 +222,10 @@ test("返事の届かなかったリクエストで席が決まっていたら�
     const outcome = (await (await seated).json()) as { seat: Seated };
     // 相手は座席 1 に座るので、こちらの席は座席 0 である。
     const commit = outcome.seat.seedShareCommits[0];
+    // 組み直しかけで規則に通らないデッキでも、続いている対戦へは戻れる。
+    await page.evaluate(() => {
+      localStorage.setItem("poke-deck", JSON.stringify([{ defId: "組みかけ", count: 1 }]));
+    });
 
     const opened = openedSeat(page.waitForEvent("websocket"));
     await page.click("#join-button");

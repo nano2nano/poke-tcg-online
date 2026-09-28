@@ -160,10 +160,10 @@ function runJoin(kind, task) {
 }
 
 /**
- * AI との対戦を頼んだときのシェア。返事が届かずに押し直したとき、サーバは続いている対戦の席を返すが、
+ * 最後に対戦を頼んだときのシェア。返事が届かずに押し直したとき、サーバは続いている対戦の席を返すが、
  * その席のシェアはこの画面が作ったものである。覚えていないと、シェアを開けないまま入り直すことになる。
  */
-let botShare = null;
+let lastShare = null;
 
 $("join-button").addEventListener("click", () => runJoin("queue", join));
 $("bot-button").addEventListener("click", () => runJoin("bot", joinBot));
@@ -417,7 +417,14 @@ async function join() {
   if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
   if (room !== "") request.roomCode = room;
 
+  const earlier = lastShare;
+  lastShare = contribution;
   const outcome = await postJson("/api/join", request);
+  // 終わっていない対戦があれば、サーバがその席を返す。この画面が席を失っていても、そこへ戻る。
+  if (liveSeatOf(outcome) !== null) {
+    openMatch({ ...outcome.seat, seedShare: shareFor(outcome.seat, earlier) });
+    return;
+  }
   if (!outcome.ok) {
     refused(outcome);
     return;
@@ -511,11 +518,11 @@ async function joinBot() {
   if (contribution !== null) request.seedShareCommit = contribution.commit;
   if (nameTouched) request.displayName = $("name").value.trim() || "ななし";
 
-  const earlier = botShare;
-  botShare = contribution;
+  const earlier = lastShare;
+  lastShare = contribution;
   const outcome = await postJson("/api/join-bot", request);
-  // 終わっていない AI との対戦があれば、サーバがその席を返す。この画面が席を失っていても、そこへ戻る。
-  if (!outcome.ok && outcome.code === "bot-match-live" && outcome.seat !== undefined) {
+  // 終わっていない対戦があれば、サーバがその席を返す。この画面が席を失っていても、そこへ戻る。
+  if (liveSeatOf(outcome) !== null) {
     openMatch({ ...outcome.seat, seedShare: shareFor(outcome.seat, earlier) });
     return;
   }
@@ -524,6 +531,12 @@ async function joinBot() {
     return;
   }
   openMatch({ ...outcome.seat, seedShare: contribution?.share ?? null });
+}
+
+/** 続いている対戦があるので断ったときに、サーバが一緒に返したその席。相手が人か AI かで `code` が分かれる。 */
+function liveSeatOf(outcome) {
+  if (outcome.ok || !["match-live", "bot-match-live"].includes(outcome.code)) return null;
+  return outcome.seat ?? null;
 }
 
 /**

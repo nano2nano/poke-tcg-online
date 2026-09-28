@@ -613,6 +613,18 @@ describe("AI の座席を開く", () => {
     });
   });
 
+  it("重みを読んでいるあいだは、同じ人の相手さがしも断る", async () => {
+    ensureCards();
+    const arena = newArena();
+    const { account, secret } = await arena.accounts.create("ひと", 0);
+    arena.lobby.holdBotJoin(account.playerId);
+
+    const refused = arena.lobby.join({ secret, deck: presetDeck("doraparuto")! }, account);
+
+    expect(refused).toMatchObject({ ok: false, code: BOT_MATCH_LIVE });
+    expect(arena.lobby.waitingCount()).toBe(0);
+  });
+
   it("AI との対戦が続いているあいだは、人との対戦も始めずその席を返す", async () => {
     ensureCards();
     const arena = newArena();

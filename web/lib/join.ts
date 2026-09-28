@@ -5,7 +5,7 @@
 import type { BotEntry, DeckPreset } from "../../src/bots.js";
 import type { DeckList } from "../../src/engine.js";
 import type { ClaimOutcome, JoinOutcome, Seated } from "../../src/lobby.js";
-import { getJson, postJson } from "./api.js";
+import { getJson } from "./api.js";
 import { sha256Hex, storedSeat, toHex, type StoredSeat } from "./seat.js";
 
 export type { BotEntry, DeckList, DeckPreset };
@@ -57,17 +57,6 @@ export async function builtDeck(): Promise<{ deck: DeckList; sample: boolean }> 
   };
 }
 
-/** 出すデッキ。規則に通らなければ、その理由を返す。 */
-export async function deckToSubmit(): Promise<
-  { ok: true; deck: DeckList; sample: boolean } | { ok: false; errors: string[] }
-> {
-  const { deck, sample } = await builtDeck();
-  if (sample) return { ok: true, deck, sample };
-  const outcome = await postJson<{ ok: boolean; errors?: string[] }>("/api/deck/validate", deck);
-  if (outcome.ok) return { ok: true, deck, sample };
-  return { ok: false, errors: outcome.errors ?? ["デッキが通りませんでした。"] };
-}
-
 export interface SeedShare {
   share: string;
   commit: string;
@@ -87,13 +76,13 @@ export async function newSeedShare(): Promise<SeedShare | null> {
  * 戻る席に出したシェア。覚えている席か、前に頼んだときのシェアのうち、その席のコミットに合うもの。
  * どちらにも無ければ undefined で、シェアを開かずに入る（シャッフルの検算はそのことを出す）。
  */
-export function shareFor(seated: Seated, earlier: SeedShare | null): string | undefined {
+export function shareFor(seated: Seated, earlier: readonly SeedShare[]): string | undefined {
   const stored = storedSeat();
   if (stored?.seatToken === seated.seatToken && typeof stored.seedShare === "string") {
     return stored.seedShare;
   }
   const commit = seated.seedShareCommits[seated.seat];
-  return earlier !== null && earlier.commit === commit ? earlier.share : undefined;
+  return earlier.find((share) => share.commit === commit)?.share;
 }
 
 export function withShare(seated: Seated, share: string | undefined): StoredSeat {
@@ -101,8 +90,6 @@ export function withShare(seated: Seated, share: string | undefined): StoredSeat
 }
 
 export type { ClaimOutcome, JoinOutcome, Seated };
-
-export type Accepted = Extract<JoinOutcome, { ok: true }>;
 
 /** 相手が人か AI かで分かれる。 */
 const LIVE_CODES: ReadonlySet<string> = new Set(["match-live", "bot-match-live"]);
