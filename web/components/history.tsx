@@ -4,9 +4,9 @@ import type { MatchSummary } from "../../src/archive.js";
 import type { ReplayFrame } from "../../src/history.js";
 import { accountQuery, storedSecret } from "../lib/account.js";
 import { messageOf, postJson } from "../lib/api.js";
-import { useCardData, type CardTable } from "../lib/cards.js";
-import { readerView } from "../lib/describe.js";
-import { describeMove } from "../lib/describe-move.js";
+import { useCardData } from "../lib/cards.js";
+import { describeSummary, readerView } from "../lib/describe.js";
+import { replayStatusText } from "../lib/describe-move.js";
 import { initialReplayState, replayReducer, type ReplayState } from "../lib/match-state.js";
 import { SideBoard, Stadium } from "./board.js";
 
@@ -33,7 +33,27 @@ export function History() {
   });
   /** 開いているリプレイ。開くたびに数を進め、前に開いたものの続きを描かせない。 */
   const [opened, setOpened] = useState<{ summary: MatchSummary; key: number } | null>(null);
+  /** 閉じてから開き直しても同じ数を配らないよう、減らさずに数える。 */
+  const opens = useRef(0);
+  const openKey = useRef<number | null>(null);
   const [failure, setFailure] = useState("");
+
+  const open = (summary: MatchSummary) => {
+    opens.current += 1;
+    openKey.current = opens.current;
+    setFailure("");
+    setOpened({ summary, key: opens.current });
+  };
+  const close = () => {
+    openKey.current = null;
+    setOpened(null);
+  };
+  /** 開けないものを空の欄で見せない。閉じたものや、別のものに開き直したものの失敗は出さない。 */
+  const failedToOpen = (key: number, error: unknown) => {
+    if (openKey.current !== key) return;
+    close();
+    setFailure(`開けませんでした: ${messageOf(error)}`);
+  };
 
   return (
     <>
@@ -60,14 +80,7 @@ export function History() {
         <div id="history-list" className="history-list">
           {matches.data?.length === 0 && "まだ読み返せる対戦がありません。"}
           {matches.data?.map((summary) => (
-            <button
-              key={summary.matchId}
-              type="button"
-              onClick={() => {
-                setFailure("");
-                setOpened((previous) => ({ summary, key: (previous?.key ?? 0) + 1 }));
-              }}
-            >
+            <button key={summary.matchId} type="button" onClick={() => open(summary)}>
               {describeSummary(summary)}
             </button>
           ))}
@@ -77,25 +90,12 @@ export function History() {
         <Replay
           key={opened.key}
           summary={opened.summary}
-          onClose={() => setOpened(null)}
-          onOpenFailed={(error) => {
-            // 開けないものを空の欄で見せない。
-            setOpened((current) => (current?.key === opened.key ? null : current));
-            setFailure(`開けませんでした: ${messageOf(error)}`);
-          }}
+          onClose={close}
+          onOpenFailed={(error) => failedToOpen(opened.key, error)}
         />
       )}
     </>
   );
-}
-
-function describeSummary(summary: MatchSummary): string {
-  const outcome = { win: "勝ち", loss: "負け", draw: "引き分け" }[summary.outcome];
-  const how = { normal: "", concede: "（投了）", timeout: "（時間切れ）" }[
-    summary.matchResult.kind
-  ];
-  const when = new Date(summary.endedAt).toLocaleString("ja-JP");
-  return `${when} ${summary.opponentName} と ${outcome}${how} ${summary.moveCount} 手`;
 }
 
 /**
@@ -134,6 +134,8 @@ function Replay({
         ply: wanted,
       }));
     } catch (error) {
+      // あとから頼んだものがあれば、この失敗はもう画面に関わらない。
+      if (latest.current.asked !== asked) return;
       update(replayReducer(latest.current, { t: "failed", asked }));
       throw error;
     }
@@ -180,7 +182,7 @@ function Replay({
         </button>
       </div>
       <p id="replay-status" className="note">
-        {failure || (frame === null ? "" : frameText(frame, seat, table))}
+        {failure || (frame === null ? "" : replayStatusText(frame, seat, table))}
       </p>
       <div className="board">
         <div className="board-side">
@@ -201,22 +203,4 @@ function Replay({
       </div>
     </section>
   );
-}
-
-function frameText(frame: ReplayFrame, seat: ReplayState["seat"], cards: CardTable): string {
-  // 出したカードは指したあとの手札にもう無いので、名前は指す前の盤面から引く。
-  const before = frame.beforeViews === null ? null : readerView(frame.beforeViews, seat);
-  const move =
-    frame.playedMove === null
-      ? "対戦の開始時"
-      : describeMove(frame.playedMove, { view: before, cards });
-  // エンジンの版が違っても止めない。止めるのはカードの定義が変わったときだけである（仕様 6.3 節）。
-  const warning = frame.engineCommitDiffers
-    ? "　※ この対戦を指したときとエンジンの版が違います"
-    : "";
-  const diverged =
-    frame.divergedAt === null
-      ? ""
-      : `　※ ${frame.divergedAt} 手目から先は、いまのエンジンでは再現できません`;
-  return `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}${diverged}`;
 }

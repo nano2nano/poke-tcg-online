@@ -7,6 +7,8 @@ import { createHash } from "node:crypto";
 import { expect, test, type Page, type WebSocket } from "@playwright/test";
 import { loadGeneratedCards } from "../src/engine.js";
 import type { Seated } from "../src/lobby.js";
+import { viewFor } from "../src/match.js";
+import { ensureCards, newMatch } from "../tests/helpers.js";
 import { BASEPATH } from "../web/basepath.js";
 
 test("新しい画面は /next/ で描け、いまの画面は / に残る", async ({ page }) => {
@@ -521,4 +523,105 @@ test("画像を読めなかったカードは、候補の行に小さな面を�
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
+});
+
+/** 一覧とリプレイの答えを差し替える。盤面は開始局面のまま、手数だけを返す。 */
+async function mockHistory(
+  page: Page,
+  frameFor: (matchId: string, ply: number) => Promise<"fail" | "ok">,
+): Promise<void> {
+  ensureCards();
+  const match = newMatch("next-history");
+  const views = [viewFor(match, 0), viewFor(match, 1)];
+  const summary = (matchId: string, opponentName: string) => ({
+    matchId,
+    startedAt: "2026-09-28T00:00:00Z",
+    endedAt: "2026-09-28T00:10:00Z",
+    seat: 0,
+    opponentName,
+    outcome: "win",
+    matchResult: { kind: "concede", winner: 0, conceded: 1 },
+    moveCount: 10,
+  });
+  await page.route("**/api/matches", (route) =>
+    route.fulfill({ json: { matches: [summary("a", "あ"), summary("b", "い")] } }),
+  );
+  await page.route("**/api/replay", async (route) => {
+    const { matchId, ply } = route.request().postDataJSON() as { matchId: string; ply: number };
+    if ((await frameFor(matchId, ply)) === "fail") {
+      return route.fulfill({ status: 503, json: { error: "落とした" } });
+    }
+    return route.fulfill({
+      json: {
+        frame: {
+          matchId,
+          ply,
+          moveCount: 10,
+          views,
+          playedMove: null,
+          beforeViews: null,
+          events: [[], []],
+          engineCommitDiffers: false,
+          divergedAt: null,
+        },
+      },
+    });
+  });
+}
+
+function gate(): [Promise<void>, () => void] {
+  let release = (): void => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return [promise, release];
+}
+
+test("閉じて別の対戦を開いたあとに、閉じた対戦を開けなかった答えが届いても、開いている方を閉じない", async ({
+  page,
+}) => {
+  const [slow, release] = gate();
+  await mockHistory(page, async (matchId) => {
+    if (matchId !== "a") return "ok";
+    await slow;
+    return "fail";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  const rows = page.locator("#history-list button");
+  await rows.nth(0).click();
+  await page.click("#replay-close");
+  await rows.nth(1).click();
+  await expect(page.locator("#replay-status")).toContainText("0 / 10 手");
+
+  const failed = page.waitForResponse((response) => response.url().endsWith("/api/replay"));
+  release();
+  await failed;
+  await expect(page.locator("#history-status")).toBeEmpty();
+  await expect(page.locator("#replay-status")).toContainText("0 / 10 手");
+});
+
+test("追い越された問い合わせの失敗は、描けた局面の見出しを隠さない", async ({ page }) => {
+  const [slow, release] = gate();
+  await mockHistory(page, async (_matchId, ply) => {
+    if (ply !== 1) return "ok";
+    await slow;
+    return "fail";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText("0 / 10 手");
+  await page.click("#replay-next");
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText("2 / 10 手");
+
+  const failed = page.waitForResponse((response) => response.url().endsWith("/api/replay"));
+  release();
+  await failed;
+  // 失敗を受けてから描き直すまでを待つ。
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  await expect(page.locator("#replay-status")).toContainText("2 / 10 手");
 });

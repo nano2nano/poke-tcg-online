@@ -4,6 +4,7 @@ import type { CardTable } from "./cards.js";
 import {
   cardSubtitle,
   describeEvents,
+  describeSummary,
   rejectText,
   seatClockText,
   seatEndText,
@@ -127,5 +128,21 @@ describe("cardSubtitle", () => {
     const right = cardSubtitle({ ...half, stadiumHalf: "right" });
     expect(left).not.toBe(right);
     expect(left).not.toBe(cardSubtitle(half));
+  });
+});
+
+describe("describeSummary", () => {
+  it("相手、結果と決着の仕方、手数を 1 行にする", () => {
+    const line = describeSummary({
+      matchId: "m",
+      startedAt: "2026-09-28T00:00:00Z",
+      endedAt: "2026-09-28T00:10:00Z",
+      seat: 0,
+      opponentName: "あいて",
+      outcome: "win",
+      matchResult: { kind: "concede", winner: 0, conceded: 1 },
+      moveCount: 12,
+    });
+    expect(line).toContain("あいて と 勝ち（投了） 12 手");
   });
 });

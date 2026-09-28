@@ -659,7 +659,7 @@ button.secondary {
    * 対戦のあいだは、下に続くリプレイの欄を出さない。出すとページがスクロールでき、盤面の上でホイールを回すと
    * 盤面ごと上へずれる。決着したら、その対戦をリプレイで開けるように戻す。
    */
-  body:has(> #table:not([hidden]):not([data-ended])) > #history {
+  body:has(> #table:not([hidden]):not([data-ended])) > :is(#history, #replay) {
     display: none;
   }
   .table:not([hidden]) {

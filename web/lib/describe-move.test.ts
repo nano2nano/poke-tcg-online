@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ChoiceAnswer, Move } from "../../src/engine.js";
+import type { ChoiceAnswer, Move, PlayerView } from "../../src/engine.js";
 import { viewFor } from "../../src/match.js";
 import { ensureCards, newMatch } from "../../tests/helpers.js";
 import type { CardTable } from "./cards.js";
 import { readerView } from "./describe.js";
-import { describeMove } from "./describe-move.js";
+import { describeMove, replayStatusText } from "./describe-move.js";
 
 const answering = (answer: ChoiceAnswer) =>
   describeMove(
@@ -42,5 +42,65 @@ describe("済んだ対戦を読み返す盤面", () => {
     );
     // 座席の射影では、相手の手札の中身は見えない。
     expect(describeMove(move, { view: views[0], cards })).not.toContain("読み返すカード");
+  });
+
+  it("相手の選択の中身は、相手の射影から取る", () => {
+    ensureCards();
+    const match = newMatch("describe-move-reader");
+    const views = [viewFor(match, 0), viewFor(match, 1)] as const;
+    const owner = views[0].choices[0]?.owner;
+    if (owner === undefined) throw new Error("選択が積まれていない");
+    const reader = owner === 0 ? 1 : 0;
+    expect(views[reader].choices[0]?.context).toBeNull();
+    expect(readerView(views, reader).choices[0]?.context).not.toBeNull();
+  });
+
+  it("答えのラベルは、その答えの選択で決める", () => {
+    ensureCards();
+    const match = newMatch("describe-move-reader");
+    const view = viewFor(match, 0);
+    const [answered] = view.choices;
+    const [card] = view.self.hand;
+    if (answered === undefined || card === undefined) throw new Error("選択か手札が無い");
+    const cards = { [card.defId]: { name: "答えたカード" } } as unknown as CardTable;
+    // 答えていない選択を上に積む。いちばん上で決めると、ベンチに出すと書いてしまう。
+    const stacked = {
+      ...view,
+      choices: [
+        { ...answered, kind: "setup-place-active" as const },
+        { ...answered, choiceId: "choice-other", kind: "setup-place-bench" as const },
+      ],
+    };
+    const move: Move = {
+      type: "AnswerChoice",
+      player: 0,
+      choiceId: answered.choiceId,
+      answer: { kind: "card", card: card.instanceId },
+    };
+    expect(describeMove(move, { view: stacked, cards })).toBe("答えたカード をバトル場に出す");
+  });
+
+  it("リプレイの見出しに、何手目か、直前の手、辿れない地点を出す", () => {
+    ensureCards();
+    const match = newMatch("describe-move-reader");
+    const views: [PlayerView, PlayerView] = [viewFor(match, 0), viewFor(match, 1)];
+    const text = replayStatusText(
+      {
+        matchId: match.matchId,
+        ply: 0,
+        moveCount: 4,
+        views,
+        playedMove: null,
+        beforeViews: null,
+        events: [[], []],
+        engineCommitDiffers: true,
+        divergedAt: 4,
+      },
+      0,
+      {},
+    );
+    expect(text).toContain("0 / 4 手　直前の手: 対戦の開始時");
+    expect(text).toContain("エンジンの版が違います");
+    expect(text).toContain("4 手目から先は、いまのエンジンでは再現できません");
   });
 });

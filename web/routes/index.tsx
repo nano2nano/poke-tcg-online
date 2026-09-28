@@ -57,24 +57,23 @@ function Seat() {
     setSeated(back);
     setStatus("");
   }, []);
-  if (seated !== null) {
-    return (
-      <>
-        <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />
-        <History />
-      </>
-    );
-  }
+  // 一覧とリプレイは同じ位置に置き、座るときと離れるときに開いているリプレイを閉じない。
   return (
     <>
-      <header id="next-home">
-        <h1>ポケカ オンライン対戦</h1>
-        <p className="note">
-          新しい画面を作っているところです。カードを大きく出す操作は、まだ{" "}
-          <a href="/">いまの画面</a> にしかありません。
-        </p>
-      </header>
-      <Lobby status={status} remembered={remembered} onSeated={sit} onResume={resume} />
+      {seated !== null ? (
+        <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />
+      ) : (
+        <>
+          <header id="next-home">
+            <h1>ポケカ オンライン対戦</h1>
+            <p className="note">
+              新しい画面を作っているところです。カードを大きく出す操作は、まだ{" "}
+              <a href="/">いまの画面</a> にしかありません。
+            </p>
+          </header>
+          <Lobby status={status} remembered={remembered} onSeated={sit} onResume={resume} />
+        </>
+      )}
       <History />
     </>
   );
