@@ -311,6 +311,7 @@ test("公式のデッキコードで選んでいる途中に対戦をさがし�
   await joined;
   await expect(page.locator("#join-status")).toContainText("デッキを直して");
   await expect(page.locator("#deck-status")).toContainText("あと 2 枚を選んでください");
+  await expect(page.locator("#deck-status")).toContainText("デッキは 60 枚にしてください");
   await choices.first().click();
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
 });
@@ -318,11 +319,12 @@ test("公式のデッキコードで選んでいる途中に対戦をさがし�
 test("公式のデッキコードで選んでいる途中でも、別のタブで組み替えたら、対戦をさがして断られた理由を出す", async ({
   page,
 }) => {
+  const cardId = sharedCardId();
   await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
     route.fulfill({
       contentType: "text/html; charset=UTF-8",
       headers: { "access-control-allow-origin": "*" },
-      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${sharedCardId()}_2_1" /></form>`,
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_2_1" /></form>`,
     }),
   );
   await page.route("**/api/join", (route) =>
@@ -346,6 +348,45 @@ test("公式のデッキコードで選んでいる途中でも、別のタブ�
   await expect(page.locator("#deck-status .choices button")).toHaveCount(0);
   await page.click("#join-button");
   await expect(page.locator("#deck-status")).toContainText("デッキは 60 枚にしてください");
+});
+
+test("対戦をさがす返事を待つあいだに最後の 1 枚を選んだら、選び終えたデッキを確かめた結果を出す", async ({
+  page,
+}) => {
+  const cardId = sharedCardId();
+  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_1_1" /></form>`,
+    }),
+  );
+  // 1 枚のデッキは規則に通らない。通ったことにして、その結果が残るのを見る。
+  await page.route("**/api/deck/validate", (route) =>
+    route.fulfill({ json: { ok: true, errors: [] } }),
+  );
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, errors: ["選ぶ前のデッキの理由"] } });
+  });
+
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.locator("#deck-status .choices button").first().waitFor();
+  await page.click("#join-button");
+  await page.locator("#deck-status .choices button").first().click();
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
+  release();
+  await joined;
+  await expect(page.locator("#join-status")).toContainText("デッキを直して");
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
+  await expect(page.locator("#deck-status")).not.toContainText("選ぶ前のデッキの理由");
 });
 
 test("対戦をさがす返事を待つあいだに組み替えたら、断られた理由を出さない", async ({ page }) => {

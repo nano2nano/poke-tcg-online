@@ -1,12 +1,4 @@
-import {
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type Dispatch,
-  type ReactNode,
-  type SetStateAction,
-} from "react";
+import { useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData, type CardTable } from "../lib/cards.js";
 import {
@@ -43,25 +35,16 @@ interface PendingGroup {
 }
 
 /**
- * 公式のデッキコードで読み込んだデッキの、まだ決まっていないカードと画面に出す理由。
- * `deck` はこの画面が最後に置いたデッキで、ほかの操作で組み替わっていたら候補を押させない。
- * 押させると、読み込んだのとは別のデッキにカードが足される。
+ * 公式のデッキコードで読み込んだデッキの、取り込めなかったカードとまだ決まっていないカード。
+ * `deck` はこの画面が最後に置いたデッキで、ほかの操作で組み替わっていたら出さない。
+ * 候補を押させると、読み込んだのとは別のデッキにカードが足される。
+ *
+ * 検査の結果とは別に持つ。同じ欄にすると、対戦に入る画面が理由を書くたびに選ぶ欄が消える。
  */
 interface OfficialImport {
   deck: string | null;
   missing: string[];
   pending: PendingGroup[];
-  /** 検査の結果。選び終えてから結果が届くまでは null。 */
-  errors: string[] | null;
-}
-
-/** 公式のデッキコードで読み込んだカードを、いまのデッキでまだ選んでいる途中か。 */
-export function stillPicking(status: DeckStatus, deck: string | null): boolean {
-  return (
-    "official" in status &&
-    status.official.deck === deck &&
-    status.official.pending.some((group) => group.left > 0)
-  );
 }
 
 export interface DeckMessage {
@@ -73,8 +56,6 @@ export interface DeckMessage {
    */
   deck?: string | null;
 }
-
-export type DeckStatus = DeckMessage | { official: OfficialImport };
 
 export const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "" };
 
@@ -89,8 +70,8 @@ export function DeckBuilder({
   onStatus,
   actions,
 }: {
-  status: DeckStatus;
-  onStatus: Dispatch<SetStateAction<DeckStatus>>;
+  status: DeckMessage;
+  onStatus: (status: DeckMessage) => void;
   actions: ReactNode;
 }) {
   const { table } = useCardData();
@@ -99,6 +80,7 @@ export function DeckBuilder({
   const [query, setQuery] = useState("");
   const [code, setCode] = useState("");
   const [importing, setImporting] = useState(false);
+  const [official, setOfficial] = useState<OfficialImport | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const rows = useMemo(() => searchRows(table), [table]);
   const found = useMemo(() => searchCards(rows, query), [rows, query]);
@@ -122,6 +104,7 @@ export function DeckBuilder({
     }
     saveDeck(next);
     // 前に出した検査の結果は、組み替えた時点で古くなる。
+    setOfficial(null);
     onStatus(NO_DECK_STATUS);
   };
 
@@ -130,17 +113,33 @@ export function DeckBuilder({
       onStatus({ messages: ["デッキにカードがありません。"], tone: "ng" });
       return;
     }
-    const deck = storedDeckJson();
-    const outcome = await postJson<{ ok: boolean; errors?: string[] }>(
-      "/api/deck/validate",
-      deckCards(entries),
-    );
-    onStatus(
-      outcome.ok
-        ? { messages: [`デッキは ${deckSize(entries)} 枚で、規則を通ります。`], tone: "ok", deck }
-        : { messages: outcome.errors ?? ["デッキが通りませんでした。"], tone: "ng", deck },
-    );
+    await validate(entries);
   };
+
+  /**
+   * 検査の結果を出す。待つあいだに組み替わっていたら、その結果は捨てる。欄に置くと、いまのデッキの
+   * 新しい結果を上書きする。
+   */
+  const validate = async (deckEntries: readonly DeckEntry[]) => {
+    const deck = storedDeckJson();
+    const outcome = await postJson<{ errors?: string[] }>(
+      "/api/deck/validate",
+      deckCards(deckEntries),
+    );
+    if (deck !== storedDeckJson()) return;
+    showVerdict(outcome.errors ?? [], deck);
+  };
+
+  const showVerdict = (errors: readonly string[], deck: string | null) =>
+    onStatus(
+      errors.length === 0
+        ? {
+            messages: [`デッキは ${deckSize(parseDeck(deck))} 枚で、規則を通ります。`],
+            tone: "ok",
+            deck,
+          }
+        : { messages: [...errors], tone: "ng", deck },
+    );
 
   /**
    * 公式のデッキコードのデッキと置き換える。取り込めないカードがあっても、取り込めたぶんで
@@ -156,9 +155,10 @@ export function DeckBuilder({
       return;
     }
     const before = storedDeckJson();
+    setOfficial(null);
     onStatus({ messages: ["公式サイトからデッキを読んでいます。"], tone: "" });
-    const official = await fetchOfficialDeck(parsed);
-    if (official === null) {
+    const page = await fetchOfficialDeck(parsed);
+    if (page === null) {
       onStatus({
         messages: [`デッキコード ${parsed} のデッキは公式サイトにありません。`],
         tone: "ng",
@@ -169,7 +169,7 @@ export function DeckBuilder({
       entries?: DeckEntry[];
       failures: OfficialFailure[];
       errors?: string[];
-    }>("/api/deck/official", { cards: official.cards });
+    }>("/api/deck/official", { cards: page.cards });
     if (outcome.entries === undefined) {
       onStatus({ messages: outcome.errors ?? ["読み込めませんでした。"], tone: "ng" });
       return;
@@ -182,7 +182,7 @@ export function DeckBuilder({
       });
       return;
     }
-    const officialName = (cardId: string) => official.names[cardId] ?? `カード ID ${cardId}`;
+    const officialName = (cardId: string) => page.names[cardId] ?? `カード ID ${cardId}`;
     const missing: string[] = [];
     const pending: PendingGroup[] = [];
     for (const failure of outcome.failures) {
@@ -204,9 +204,11 @@ export function DeckBuilder({
       return;
     }
     saveDeck(outcome.entries);
-    onStatus({
-      official: { deck: storedDeckJson(), missing, pending, errors: outcome.errors ?? [] },
-    });
+    const deck = storedDeckJson();
+    setOfficial({ deck, missing, pending });
+    // 選び終えるまでの検査の結果は、足りない枚数を言うだけである。選び終えたら確かめ直す。
+    if (pending.length > 0) onStatus(NO_DECK_STATUS);
+    else showVerdict(outcome.errors ?? [], deck);
   };
 
   /**
@@ -227,22 +229,11 @@ export function DeckBuilder({
     const pending = current.pending.map((each, index) =>
       index === group ? { ...each, left: each.left - 1 } : each,
     );
-    const done = pending.every((each) => each.left === 0);
-    // 選び終えたら、検査の結果が届くまでは「確かめています」を出す。
-    const picked: OfficialImport = {
-      ...current,
-      deck: storedDeckJson(),
-      pending,
-      errors: done ? null : current.errors,
-    };
-    onStatus({ official: picked });
-    if (!done) return;
-    const outcome = await postJson<{ errors?: string[] }>("/api/deck/validate", deckCards(next));
-    onStatus((latest) =>
-      "official" in latest && latest.official === picked && picked.deck === storedDeckJson()
-        ? { official: { ...picked, errors: outcome.errors ?? [] } }
-        : latest,
-    );
+    const deck = storedDeckJson();
+    setOfficial({ ...current, deck, pending });
+    if (pending.some((each) => each.left > 0)) return;
+    onStatus({ messages: ["デッキを確かめています。"], tone: "", deck });
+    await validate(next);
   };
 
   const fail = (lead: string) => (error: unknown) =>
@@ -258,7 +249,8 @@ export function DeckBuilder({
   };
 
   const total = deckSize(entries);
-  const shown = shownStatus(status, deckJson, total);
+  const picking = official !== null && official.deck === deckJson ? official : null;
+  const shown = shownStatus(picking, status, deckJson);
   const words = searchWords(query);
 
   return (
@@ -369,6 +361,7 @@ export function DeckBuilder({
           onClick={() => {
             if (entries.length === 0 || !confirm("デッキを空にしますか。")) return;
             saveDeck([]);
+            setOfficial(null);
             onStatus(NO_DECK_STATUS);
           }}
         >
@@ -382,30 +375,26 @@ export function DeckBuilder({
           // oxlint-disable-next-line react/no-array-index-key
           <p key={index}>{message}</p>
         ))}
-        {"official" in status &&
-          status.official.deck === deckJson &&
-          status.official.pending.map(
-            (group, index) =>
-              group.left > 0 && (
-                // 同じ名前のカードが 2 つの組に分かれることは無い。並びも読み込んだときのまま変わらない。
-                // oxlint-disable-next-line react/no-array-index-key
-                <div key={index} className="choices">
-                  {group.choices.map((choice) => (
-                    <button
-                      key={choice.defId}
-                      type="button"
-                      onClick={() =>
-                        void pick(status.official, index, choice.defId).catch(
-                          fail("確かめられませんでした"),
-                        )
-                      }
-                    >
-                      {`${group.name}（${describeCard(choice) || choice.defId}）`}
-                    </button>
-                  ))}
-                </div>
-              ),
-          )}
+        {picking?.pending.map(
+          (group, index) =>
+            group.left > 0 && (
+              // 同じ名前のカードが 2 つの組に分かれることは無い。並びも読み込んだときのまま変わらない。
+              // oxlint-disable-next-line react/no-array-index-key
+              <div key={index} className="choices">
+                {group.choices.map((choice) => (
+                  <button
+                    key={choice.defId}
+                    type="button"
+                    onClick={() =>
+                      void pick(picking, index, choice.defId).catch(fail("確かめられませんでした"))
+                    }
+                  >
+                    {`${group.name}（${describeCard(choice) || choice.defId}）`}
+                  </button>
+                ))}
+              </div>
+            ),
+        )}
       </div>
     </>
   );
@@ -464,25 +453,26 @@ function groupByKind(
     .filter(({ group }) => group.length > 0);
 }
 
-/** 欄に出すもの。検査の結果は、確かめたデッキがいまのデッキのときだけ出す。 */
-function shownStatus(status: DeckStatus, deck: string | null, total: number): DeckMessage {
-  if ("official" in status) {
-    return status.official.deck === deck ? officialView(status.official, total) : NO_DECK_STATUS;
-  }
-  return status.deck === undefined || status.deck === deck ? status : NO_DECK_STATUS;
-}
-
-function officialView(official: OfficialImport, total: number): DeckMessage {
-  const open = official.pending.filter((group) => group.left > 0);
-  const messages = [...official.missing];
-  for (const group of open) {
-    messages.push(
-      `${group.name} は ${group.choices.length} 通りあります。あと ${group.left} 枚を選んでください。`,
-    );
-  }
-  if (official.errors === null) messages.push("デッキを確かめています。");
-  else if (open.length === 0) messages.push(...official.errors);
-  const ok = open.length === 0 && official.missing.length === 0 && official.errors?.length === 0;
-  if (ok) messages.push(`デッキは ${total} 枚で、規則を通ります。`);
-  return { messages, tone: ok ? "ok" : official.errors === null ? "" : "ng" };
+/**
+ * 欄に出すもの。読み込んだデッキの残りを先に、検査の結果をあとに並べる。
+ * 検査の結果は、確かめたデッキがいまのデッキのときだけ出す。
+ */
+function shownStatus(
+  picking: OfficialImport | null,
+  status: DeckMessage,
+  deck: string | null,
+): DeckMessage {
+  const current = status.deck === undefined || status.deck === deck;
+  const messages = [
+    ...(picking?.missing ?? []),
+    ...(picking?.pending ?? [])
+      .filter((group) => group.left > 0)
+      .map(
+        (group) =>
+          `${group.name} は ${group.choices.length} 通りあります。あと ${group.left} 枚を選んでください。`,
+      ),
+    ...(current ? status.messages : []),
+  ];
+  const tone = (picking?.missing.length ?? 0) > 0 ? "ng" : current ? status.tone : "";
+  return { messages, tone };
 }

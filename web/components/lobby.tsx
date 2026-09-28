@@ -26,7 +26,7 @@ import {
 } from "../lib/join.js";
 import { parseDeck, storedDeckJson, subscribeDeck } from "../lib/deck.js";
 import type { StoredSeat } from "../lib/seat.js";
-import { DeckBuilder, NO_DECK_STATUS, stillPicking, type DeckStatus } from "./deck-builder.js";
+import { DeckBuilder, NO_DECK_STATUS, type DeckMessage } from "./deck-builder.js";
 
 /** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
 const SHARES_KEPT = 8;
@@ -51,7 +51,7 @@ export function Lobby({
   const queryClient = useQueryClient();
   const { table } = useCardData();
   const [status, setStatus] = useState(initialStatus);
-  const [deckStatus, setDeckStatus] = useState<DeckStatus>(NO_DECK_STATUS);
+  const [deckStatus, setDeckStatus] = useState<DeckMessage>(NO_DECK_STATUS);
   const [room, setRoom] = useState("");
   /** 送る時点のルームコード。名前と同じく、押してから送るまでに直した分も送る。 */
   const roomNow = useRef("");
@@ -200,11 +200,7 @@ export function Lobby({
     const sent = storedDeckJson();
     const { deck, sample } = await builtDeck();
     setDeckStatus(
-      keepPicking(
-        sample
-          ? { messages: ["サンプルデッキで対戦します。"], tone: "ok", deck: sent }
-          : NO_DECK_STATUS,
-      ),
+      sample ? { messages: ["サンプルデッキで対戦します。"], tone: "ok" } : NO_DECK_STATUS,
     );
     const share = await newSeedShare();
     const request = await common(share);
@@ -219,8 +215,10 @@ export function Lobby({
     if (!outcome.ok) {
       if (outcome.code !== undefined) return refused(outcome);
       // `code` の無い断りは、デッキの違反である。
-      // 選び終えていないデッキは、それだけで断られる。選び終えたら、その欄が確かめ直す。
-      setDeckStatus(keepPicking({ messages: outcome.errors, tone: "ng", deck: sent }));
+      // 待つあいだに組み替えていたら、理由は送ったデッキのものなので出さない。
+      if (sent === storedDeckJson()) {
+        setDeckStatus({ messages: outcome.errors, tone: "ng", deck: sent });
+      }
       setStatus("デッキを直してから、もう一度おしてください。");
       return;
     }
@@ -300,7 +298,7 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    setDeckStatus(keepPicking(NO_DECK_STATUS));
+    setDeckStatus(NO_DECK_STATUS);
     let deck: { deckPreset: string } | { deck: DeckList };
     if (chosenOwnDeck === "") {
       // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
@@ -453,13 +451,6 @@ export function Lobby({
       </p>
     </section>
   );
-}
-
-/**
- * 公式のデッキコードで読み込んだカードを選んでいる途中なら、その欄を残す。消すと、読み込み直すまで選べない。
- */
-function keepPicking(next: DeckStatus): (previous: DeckStatus) => DeckStatus {
-  return (previous) => (stillPicking(previous, storedDeckJson()) ? previous : next);
 }
 
 async function secretOf(ensureAccount: () => Promise<unknown>): Promise<string> {
