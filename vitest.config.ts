@@ -11,7 +11,7 @@ export default defineConfig({
     __CARD_IDS__: JSON.stringify(cardIdsOf(identity.cardDataText)),
   },
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.ts", "web/**/*.test.ts"],
     globalSetup: ["tests/global-setup.ts"],
   },
 });

@@ -1,61 +1,62 @@
-// @ts-check
 /**
- * 画面が持つ対戦の状態と、それを進める reducer。`web/lib/match-state.ts` と同じものを、
- * ビルドを通らないいまの画面のために JS で持つ。いまの画面を `web/` の画面と入れ替えたら消す。
- */
-
-/**
- * @import { CardDefId, Move, Player, PlayerView, SpectatorView } from "../src/engine.js"
- * @import { AnswerDestination, DeckPlacementView, MulliganReveal, SetupView } from "../src/match.js"
- * @import { ClockView, EndedMessage, ServerMessage, SpectatorEndedMessage, SpectatorSeat } from "../src/protocol.js"
- * @import { ReplayFrame } from "../src/history.js"
- */
-
-/**
- * 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、まだ出せる候補なら残す。
+ * 画面が持つ対戦の状態と、それを進める reducer。
  *
- * @typedef {object} SetupDraft
- * @property {string | null} active
- * @property {string[]} bench
- * @property {boolean} sent 送って返事を待っている。2 度目はサーバが断り、通った答えまで失敗に見える。
+ * DOM に触れず、受け取った値を書き換えない。同じ状態と同じメッセージからは、いつも同じ状態を返す。
  */
 
-/**
- * @typedef {object} SeatState
- * @property {Player} seat
- * @property {string | null} matchId
- * @property {number} stateVersion
- * @property {PlayerView | null} view
- * @property {Move[] | null} legalMoves
- * @property {SetupView | null} setup
- * @property {DeckPlacementView | null} deckPlacement
- * @property {(AnswerDestination | null)[] | null} answerDestinations
- * @property {CardDefId[] | null} revealedDeck
- * @property {MulliganReveal[]} mulligans
- * @property {Player | null} firstPlayer
- * @property {ClockView | null} clock
- * @property {string | null} spectatorToken 終わった対戦では通らないので、決着したら null にする。
- * @property {Omit<EndedMessage, "t" | "view"> | null} ended
- * @property {SetupDraft} setupDraft
- */
+import type { CardDefId, Move, Player, PlayerView, SpectatorView } from "../../src/engine.js";
+import type { ReplayFrame } from "../../src/history.js";
+import type {
+  AnswerDestination,
+  DeckPlacementView,
+  MulliganReveal,
+  SetupView,
+} from "../../src/match.js";
+import type {
+  ClockView,
+  EndedMessage,
+  ServerMessage,
+  SpectatorEndedMessage,
+  SpectatorSeat,
+} from "../../src/protocol.js";
 
-/**
- * 画面の中で起きる操作。サーバへ送る手そのものは状態を変えず、返ってきた局面で変わる。
- *
- * @typedef {{ t: "choose-active"; instanceId: string }
- *   | { t: "toggle-bench"; instanceId: string }
- *   | { t: "setup-sent" }} SetupAction
- */
+/** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、まだ出せる候補なら残す。 */
+export interface SetupDraft {
+  active: string | null;
+  bench: string[];
+  /** 送って返事を待っている。2 度目はサーバが断り、通った答えまで失敗に見える。 */
+  sent: boolean;
+}
 
-/** @typedef {ServerMessage | SetupAction} SeatAction */
+export interface SeatState {
+  seat: Player;
+  matchId: string | null;
+  stateVersion: number;
+  view: PlayerView | null;
+  legalMoves: Move[] | null;
+  setup: SetupView | null;
+  deckPlacement: DeckPlacementView | null;
+  answerDestinations: (AnswerDestination | null)[] | null;
+  revealedDeck: CardDefId[] | null;
+  mulligans: MulliganReveal[];
+  firstPlayer: Player | null;
+  clock: ClockView | null;
+  /** 終わった対戦では通らないので、決着したら null にする。 */
+  spectatorToken: string | null;
+  ended: Omit<EndedMessage, "t" | "view"> | null;
+  setupDraft: SetupDraft;
+}
 
-/**
- * 座席に着いたときの状態。局面は、両者がシェアを開いたあとの `sync` で届く。
- *
- * @param {Player} seat
- * @returns {SeatState}
- */
-export function initialSeatState(seat) {
+/** 画面の中で起きる操作。サーバへ送る手そのものは状態を変えず、返ってきた局面で変わる。 */
+export type SetupAction =
+  | { t: "choose-active"; instanceId: string }
+  | { t: "toggle-bench"; instanceId: string }
+  | { t: "setup-sent" };
+
+export type SeatAction = ServerMessage | SetupAction;
+
+/** 座席に着いたときの状態。局面は、両者がシェアを開いたあとの `sync` で届く。 */
+export function initialSeatState(seat: Player): SeatState {
   return {
     seat,
     matchId: null,
@@ -75,25 +76,16 @@ export function initialSeatState(seat) {
   };
 }
 
-/**
- * 準備のバトル場とベンチをまとめて選べる候補。選べないあいだは null。
- *
- * @param {SeatState} state
- */
-export function setupOffer(state) {
+/** 準備のバトル場とベンチをまとめて選べる候補。選べないあいだは null。 */
+export function setupOffer(state: SeatState): Extract<SetupView, { kind: "choose" }> | null {
   return state.ended === null && state.setup?.kind === "choose" ? state.setup : null;
 }
 
-/**
- * @param {SeatState} state
- * @param {SeatAction} action
- * @returns {SeatState}
- */
-export function seatReducer(state, action) {
+export function seatReducer(state: SeatState, action: SeatAction): SeatState {
   switch (action.t) {
     case "sync":
     case "delta": {
-      const next = {
+      const next: SeatState = {
         ...state,
         stateVersion: action.stateVersion,
         view: action.view,
@@ -159,19 +151,12 @@ export function seatReducer(state, action) {
   }
 }
 
-/** @returns {SetupDraft} */
-function emptyDraft() {
+function emptyDraft(): SetupDraft {
   return { active: null, bench: [], sent: false };
 }
 
-/**
- * 選びかけを、いま出せる候補に合わせて置く。バトル場に選んだカードはベンチから外す。
- *
- * @param {SeatState} state
- * @param {SetupDraft} draft
- * @returns {SeatState}
- */
-function withDraft(state, draft) {
+/** 選びかけを、いま出せる候補に合わせて置く。バトル場に選んだカードはベンチから外す。 */
+function withDraft(state: SeatState, draft: SetupDraft): SeatState {
   const offer = setupOffer(state);
   if (offer === null) return { ...state, setupDraft: emptyDraft() };
   const active = draft.active !== null && offer.active.includes(draft.active) ? draft.active : null;
@@ -181,27 +166,20 @@ function withDraft(state, draft) {
   return { ...state, setupDraft: { active, bench, sent: draft.sent } };
 }
 
-/**
- * @typedef {object} WatchState
- * @property {number} stateVersion
- * @property {SpectatorView | null} view
- * @property {[SpectatorSeat, SpectatorSeat] | null} seats
- * @property {Player | null} firstPlayer
- * @property {ClockView | null} clock
- * @property {Omit<SpectatorEndedMessage, "t" | "view"> | null} ended
- */
+export interface WatchState {
+  stateVersion: number;
+  view: SpectatorView | null;
+  seats: [SpectatorSeat, SpectatorSeat] | null;
+  firstPlayer: Player | null;
+  clock: ClockView | null;
+  ended: Omit<SpectatorEndedMessage, "t" | "view"> | null;
+}
 
-/** @returns {WatchState} */
-export function initialWatchState() {
+export function initialWatchState(): WatchState {
   return { stateVersion: 0, view: null, seats: null, firstPlayer: null, clock: null, ended: null };
 }
 
-/**
- * @param {WatchState} state
- * @param {ServerMessage} message
- * @returns {WatchState}
- */
-export function watchReducer(state, message) {
+export function watchReducer(state: WatchState, message: ServerMessage): WatchState {
   switch (message.t) {
     case "spectator-sync":
       return {
@@ -228,30 +206,35 @@ export function watchReducer(state, message) {
   }
 }
 
-/**
- * 開いているリプレイ。局面はサーバが毎回作り直すので、ここには辿る位置と直近の 1 枚だけを持つ。
- *
- * @typedef {object} ReplayState
- * @property {string} matchId
- * @property {Player} seat
- * @property {number} ply 描けている手数。
- * @property {number} wanted 頼んだ手数。まだ返ってきていないぶんを含む。
- * @property {number} moveCount 辿れる上限。再現できない地点があれば、そこまで下がる。
- * @property {number} asked 出した問い合わせの番号。返ってくる順は、出した順と同じとは限らない。
- * @property {ReplayFrame | null} frame
- */
+/** 開いているリプレイ。局面はサーバが毎回作り直すので、ここには辿る位置と直近の 1 枚だけを持つ。 */
+export interface ReplayState {
+  matchId: string;
+  seat: Player;
+  /** 描けている手数。 */
+  ply: number;
+  /** 頼んだ手数。まだ返ってきていないぶんを含む。 */
+  wanted: number;
+  /** 辿れる上限。再現できない地点があれば、そこまで下がる。 */
+  moveCount: number;
+  /** 出した問い合わせの番号。返ってくる順は、出した順と同じとは限らない。 */
+  asked: number;
+  frame: ReplayFrame | null;
+}
 
-/**
- * @typedef {{ t: "ask"; ply: number }
- *   | { t: "frame"; asked: number; frame: ReplayFrame }
- *   | { t: "failed"; asked: number }} ReplayAction
- */
+export type ReplayAction =
+  | { t: "ask"; ply: number }
+  | { t: "frame"; asked: number; frame: ReplayFrame }
+  | { t: "failed"; asked: number };
 
-/**
- * @param {{ matchId: string; seat: Player; moveCount: number }} summary
- * @returns {ReplayState}
- */
-export function initialReplayState({ matchId, seat, moveCount }) {
+export function initialReplayState({
+  matchId,
+  seat,
+  moveCount,
+}: {
+  matchId: string;
+  seat: Player;
+  moveCount: number;
+}): ReplayState {
   return { matchId, seat, ply: 0, wanted: 0, moveCount, asked: 0, frame: null };
 }
 
@@ -260,12 +243,8 @@ export function initialReplayState({ matchId, seat, moveCount }) {
  *
  * **最後に出した問い合わせの答えしか描かない。** 「1 手 ▶」を続けて押すと、出した順と返る順が
  * 入れ替わる。あとから来た古い盤面で上書きすると、手数の表示と盤面がずれたまま残る。
- *
- * @param {ReplayState} state
- * @param {ReplayAction} action
- * @returns {ReplayState}
  */
-export function replayReducer(state, action) {
+export function replayReducer(state: ReplayState, action: ReplayAction): ReplayState {
   switch (action.t) {
     case "ask":
       return {
