@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { claim, shareFor, storedDeck, type Seated } from "./join.js";
+import { claim, liveSeatOf, shareFor, storedDeck, type Seated } from "./join.js";
 import { rememberSeat } from "./seat.js";
 
 let items: Map<string, string>;
@@ -64,6 +64,29 @@ describe("shareFor", () => {
   it("別の座席を覚えていても、そのシェアは使わない", () => {
     rememberSeat({ ...seated, seatToken: "別の座席", seedShare: "別のシェア" });
     expect(shareFor(seated, null)).toBeUndefined();
+  });
+});
+
+describe("liveSeatOf", () => {
+  const seat: Seated = {
+    matchId: "対戦",
+    seat: 0,
+    seatToken: "座席",
+    seedCommit: "サーバのコミット",
+    seedShareCommits: [null, null],
+  };
+
+  it("人との対戦でも AI との対戦でも、続いている対戦の席を返す", () => {
+    for (const code of ["match-live", "bot-match-live"]) {
+      expect(liveSeatOf({ ok: false, code, errors: [], seat })).toBe(seat);
+    }
+  });
+
+  it("ほかの理由で断ったときと、席の無い断りは null", () => {
+    expect(liveSeatOf({ ok: false, code: "account-not-found", errors: [], seat })).toBeNull();
+    // AI の重みを読んでいる途中は、まだ席が無い。
+    expect(liveSeatOf({ ok: false, code: "bot-match-live", errors: [] })).toBeNull();
+    expect(liveSeatOf({ ok: true, ticket: "チケット", seat })).toBeNull();
   });
 });
 

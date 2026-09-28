@@ -102,6 +102,17 @@ export function withShare(seated: Seated, share: string | undefined): StoredSeat
 
 export type { ClaimOutcome, JoinOutcome, Seated };
 
+export type Accepted = Extract<JoinOutcome, { ok: true }>;
+
+/** 相手が人か AI かで分かれる。 */
+const LIVE_CODES: ReadonlySet<string> = new Set(["match-live", "bot-match-live"]);
+
+/** 続いている対戦があるので断ったときに、サーバが一緒に返したその席。 */
+export function liveSeatOf(outcome: JoinOutcome): Seated | null {
+  if (outcome.ok || outcome.code === undefined || !LIVE_CODES.has(outcome.code)) return null;
+  return outcome.seat ?? null;
+}
+
 export interface BotList {
   bots: BotEntry[];
   decks: DeckPreset[];
