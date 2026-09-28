@@ -1818,6 +1818,69 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
   await close();
 });
 
+const BOARD_IMAGES = "#opponent .card img, #stadium .card img, #self .card img";
+
+/**
+ * 要素を作り直すと、画像をキャッシュから出せない環境（Safari で起きた）では、手を打つたびにカードが
+ * 一瞬名前の面に戻る。
+ */
+test("手を打って盤面を描き直しても、出ていた画像の要素を使い回す", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `つかいまわし-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA = lastSeen(a);
+  await withCardImages(a, (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
+  );
+
+  await Promise.all([a.goto("./"), b.goto("./")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
+  await expect(a.locator("#self .card img").first()).toBeVisible();
+
+  for (let move = 0; move < 3; move += 1) {
+    // 場（`.mat`）が別の要素に替わるまで待つ。描き直す前に比べると、前の要素どうしを比べて通ってしまう。
+    const previous = await a.evaluateHandle(
+      (selector) => ({
+        mat: document.querySelector("#self .mat"),
+        images: new WeakSet(document.querySelectorAll(selector)),
+        urls: [...document.querySelectorAll(selector)].map((image) => image.getAttribute("src")),
+      }),
+      BOARD_IMAGES,
+    );
+    await advance(a, b, seenA);
+    await expect
+      .poll(() =>
+        a.evaluate(
+          ([selector, old]) => {
+            const after = [...document.querySelectorAll(selector)];
+            const copies = (urls: (string | null)[], url: string | null): number =>
+              urls.filter((other) => other === url).length;
+            const urls = after.map((image) => image.getAttribute("src"));
+            const kept = after
+              .filter((image) => old.images.has(image))
+              .map((image) => image.getAttribute("src"));
+            return {
+              redrawn: document.querySelector("#self .mat") !== old.mat,
+              // 前にも後にも出ている枚数ぶん、前の要素が残っていない URL。
+              recreated: [...new Set(old.urls)].filter(
+                (url) => copies(kept, url) < Math.min(copies(old.urls, url), copies(urls, url)),
+              ),
+            };
+          },
+          [BOARD_IMAGES, previous] as const,
+        ),
+      )
+      .toEqual({ redrawn: true, recreated: [] });
+    await previous.dispose();
+  }
+
+  await close();
+});
+
 test("画像を切ってある設定では、画像を頼まない", async ({ browser, pageErrors }) => {
   const room = `きってある-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
@@ -1845,6 +1908,13 @@ test("画像を出す設定なら、デッキを組む画面の候補にも画�
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card-row .card.thumb img").first()).toBeVisible();
+
+  // 足すと候補を描き直す。出ていた画像の要素は作り直さない。
+  const first = page.locator("#card-results .card-row").first();
+  const image = await first.locator(".card.thumb img").elementHandle();
+  await first.locator("button.add").click();
+  await expect(first.locator(".card-count")).not.toBeEmpty();
+  expect(await image.evaluate((node) => node.closest("#card-results") !== null)).toBe(true);
 });
 
 /**

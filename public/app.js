@@ -121,6 +121,8 @@ let cardImages = false;
  * 1 手ごとに全部のカードを頼み直す。開き直せば、もう一度頼む。
  */
 const failedImages = new Set();
+/** 描き直しのあいだだけ、描き直す前の画像の要素を URL ごとに持つ（`reusingImages`）。 */
+let reusableImages = null;
 
 /** 検索で並べる上限。これより多ければ、語を打ち足して絞ってもらう。 */
 const SEARCH_LIMIT = 30;
@@ -961,35 +963,37 @@ function renderDeck() {
   count.classList.toggle("full", total === DECK_SIZE);
 
   const box = $("deck-cards");
-  box.innerHTML = "";
-  // 名前の表が届くまでは、defId しか出せないので並べない。
-  if (Object.keys(cards).length === 0) {
-    if (total > 0) box.append(noteLine("カードの一覧を読み込んでいます。"));
-    return;
-  }
-  for (const kind of [...Object.keys(KINDS), null]) {
-    const entries = deckEntries.filter((entry) =>
-      kind === null ? !(cards[entry.defId]?.kind in KINDS) : cards[entry.defId]?.kind === kind,
-    );
-    if (entries.length === 0) continue;
-    const heading = document.createElement("h3");
-    const sum = entries.reduce((acc, entry) => acc + entry.count, 0);
-    heading.textContent = `${kind === null ? "そのほか" : KINDS[kind]} ${sum} 枚`;
-    box.append(heading);
-    for (const entry of entries) {
-      const row = cardRow(entry.defId);
-      const minus = rowButton("−", () => changeCount(entry.defId, -1));
-      minus.classList.add("remove");
-      const plus = rowButton("＋", () => changeCount(entry.defId, 1));
-      plus.classList.add("add");
-      plus.disabled = !canAdd(entry.defId);
-      const shown = document.createElement("span");
-      shown.className = "card-count";
-      shown.textContent = String(entry.count);
-      row.append(minus, shown, plus);
-      box.append(row);
+  reusingImages([box], () => {
+    box.innerHTML = "";
+    // 名前の表が届くまでは、defId しか出せないので並べない。
+    if (Object.keys(cards).length === 0) {
+      if (total > 0) box.append(noteLine("カードの一覧を読み込んでいます。"));
+      return;
     }
-  }
+    for (const kind of [...Object.keys(KINDS), null]) {
+      const entries = deckEntries.filter((entry) =>
+        kind === null ? !(cards[entry.defId]?.kind in KINDS) : cards[entry.defId]?.kind === kind,
+      );
+      if (entries.length === 0) continue;
+      const heading = document.createElement("h3");
+      const sum = entries.reduce((acc, entry) => acc + entry.count, 0);
+      heading.textContent = `${kind === null ? "そのほか" : KINDS[kind]} ${sum} 枚`;
+      box.append(heading);
+      for (const entry of entries) {
+        const row = cardRow(entry.defId);
+        const minus = rowButton("−", () => changeCount(entry.defId, -1));
+        minus.classList.add("remove");
+        const plus = rowButton("＋", () => changeCount(entry.defId, 1));
+        plus.classList.add("add");
+        plus.disabled = !canAdd(entry.defId);
+        const shown = document.createElement("span");
+        shown.className = "card-count";
+        shown.textContent = String(entry.count);
+        row.append(minus, shown, plus);
+        box.append(row);
+      }
+    }
+  });
 }
 
 /**
@@ -1000,39 +1004,41 @@ function renderDeck() {
  */
 function renderSearch() {
   const box = $("card-results");
-  box.innerHTML = "";
-  const words = searchKey($("card-search").value).split(/\s+/).filter(Boolean);
-  if (words.length === 0) return;
-  if (Object.keys(cards).length === 0) {
-    box.append(noteLine("カードの一覧を読み込んでいます。"));
-    return;
-  }
-  const first = words[0];
-  const matched = searchRows().filter(({ text }) => words.every((word) => text.includes(word)));
-  const found = [
-    ...matched.filter(({ name }) => name.startsWith(first)),
-    ...matched.filter(({ name }) => !name.startsWith(first)),
-  ];
-  if (found.length === 0) box.append(noteLine("見つかりません。"));
-  for (const { defId } of found.slice(0, SEARCH_LIMIT)) {
-    const row = cardRow(defId);
-    const inDeck = countInDeck(defId);
-    const shown = document.createElement("span");
-    shown.className = "card-count";
-    shown.textContent = inDeck === 0 ? "" : `${inDeck} 枚`;
-    const add = rowButton("追加", () => changeCount(defId, 1));
-    add.classList.add("add");
-    add.disabled = !canAdd(defId);
-    row.append(shown, add);
-    box.append(row);
-  }
-  if (found.length > SEARCH_LIMIT) {
-    box.append(
-      noteLine(
-        `ほかに ${found.length - SEARCH_LIMIT} 件あります。ワザの名前などを空白のあとに打ち足すと絞れます。`,
-      ),
-    );
-  }
+  reusingImages([box], () => {
+    box.innerHTML = "";
+    const words = searchKey($("card-search").value).split(/\s+/).filter(Boolean);
+    if (words.length === 0) return;
+    if (Object.keys(cards).length === 0) {
+      box.append(noteLine("カードの一覧を読み込んでいます。"));
+      return;
+    }
+    const first = words[0];
+    const matched = searchRows().filter(({ text }) => words.every((word) => text.includes(word)));
+    const found = [
+      ...matched.filter(({ name }) => name.startsWith(first)),
+      ...matched.filter(({ name }) => !name.startsWith(first)),
+    ];
+    if (found.length === 0) box.append(noteLine("見つかりません。"));
+    for (const { defId } of found.slice(0, SEARCH_LIMIT)) {
+      const row = cardRow(defId);
+      const inDeck = countInDeck(defId);
+      const shown = document.createElement("span");
+      shown.className = "card-count";
+      shown.textContent = inDeck === 0 ? "" : `${inDeck} 枚`;
+      const add = rowButton("追加", () => changeCount(defId, 1));
+      add.classList.add("add");
+      add.disabled = !canAdd(defId);
+      row.append(shown, add);
+      box.append(row);
+    }
+    if (found.length > SEARCH_LIMIT) {
+      box.append(
+        noteLine(
+          `ほかに ${found.length - SEARCH_LIMIT} 件あります。ワザの名前などを空白のあとに打ち足すと絞れます。`,
+        ),
+      );
+    }
+  });
 }
 
 /** 検索で比べる形と名前の順を、表ごとに 1 度だけ作る。打つたび、押すたびに全部を作り直さない。 */
@@ -1413,9 +1419,11 @@ function endTone(result) {
 }
 
 function renderView(view) {
-  renderSide($("opponent"), view.opponent, true);
-  renderStadium($("stadium"), view.stadium);
-  renderSide($("self"), view.self, false);
+  reusingImages([$("opponent"), $("stadium"), $("self")], () => {
+    renderSide($("opponent"), view.opponent, true);
+    renderStadium($("stadium"), view.stadium);
+    renderSide($("self"), view.self, false);
+  });
 }
 
 /** 子に渡した文字列は文字として入り、HTML としては読まない。 */
@@ -1449,20 +1457,45 @@ function cardFace(defId) {
   // 読み上げでは、マウスで出るプレビューの代わりにここを読む。
   if (card !== undefined) face.append(el("span", "visually-hidden", describeCard(card)));
   const src = imageUrl(defId);
-  if (src !== null) {
-    const image = document.createElement("img");
-    // 名前は下の面が持っている。読み上げで二重にしない。
-    image.alt = "";
-    image.loading = "lazy";
-    image.decoding = "async";
-    image.addEventListener("error", () => {
-      failedImages.add(src);
-      image.remove();
-    });
-    image.src = src;
-    face.append(image);
-  }
+  if (src !== null) face.append(reusableImages?.get(src)?.pop() ?? cardImage(src));
   return face;
+}
+
+function cardImage(src) {
+  const image = document.createElement("img");
+  // 名前は下の面が持っている。読み上げで二重にしない。
+  image.alt = "";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.addEventListener("error", () => {
+    failedImages.add(src);
+    image.remove();
+  });
+  image.src = src;
+  return image;
+}
+
+/**
+ * `containers` を描き直すあいだ、前に出していた画像の要素を同じ URL のカードへ移して使う。
+ * 作り直すと、画像をキャッシュから出せない環境では読み込み直すまで名前の面が見え、描き直すたびに
+ * カードが一瞬名前の面に戻る。Safari で起き、Chromium でもキャッシュを切ると同じになる。
+ */
+function reusingImages(containers, draw) {
+  const pool = new Map();
+  for (const container of containers) {
+    for (const image of container.querySelectorAll(".card img")) {
+      const src = image.getAttribute("src");
+      const same = pool.get(src);
+      if (same === undefined) pool.set(src, [image]);
+      else same.push(image);
+    }
+  }
+  reusableImages = pool;
+  try {
+    draw();
+  } finally {
+    reusableImages = null;
+  }
 }
 
 /** カードの面の下の段。ポケモンは HP、ほかは種類。2 枚 1 組のスタジアムは左右も添える。 */
@@ -1879,20 +1912,22 @@ function renderRevealedDeck(revealedDeck, moves) {
   const defIds = [...counts.keys()].sort(
     (a, b) => rank(a) - rank(b) || nameOf(a).localeCompare(nameOf(b), "ja"),
   );
-  box.replaceChildren(
-    el("h3", "", revealedDeckHeading(revealedDeck.length, seatState.view?.self?.deckCount)),
-    el(
-      "div",
-      "revealed-cards",
-      ...defIds.map((defId) => {
-        const face = zoomable(cardFace(defId), "山札", [defId]);
-        const can = pickable.has(defId);
-        face.dataset.pickable = String(can);
-        if (!can) face.append(el("span", "visually-hidden", "（選べません）"));
-        const item = el("div", "revealed-card", face, el("span", "", `×${counts.get(defId)}`));
-        item.dataset.count = String(counts.get(defId));
-        return item;
-      }),
+  reusingImages([box], () =>
+    box.replaceChildren(
+      el("h3", "", revealedDeckHeading(revealedDeck.length, seatState.view?.self?.deckCount)),
+      el(
+        "div",
+        "revealed-cards",
+        ...defIds.map((defId) => {
+          const face = zoomable(cardFace(defId), "山札", [defId]);
+          const can = pickable.has(defId);
+          face.dataset.pickable = String(can);
+          if (!can) face.append(el("span", "visually-hidden", "（選べません）"));
+          const item = el("div", "revealed-card", face, el("span", "", `×${counts.get(defId)}`));
+          item.dataset.count = String(counts.get(defId));
+          return item;
+        }),
+      ),
     ),
   );
 }
@@ -2017,17 +2052,20 @@ function renderMulligans(grew = false) {
   if (mulligansInSetup && !inSetup) details.open = false;
   mulligansInSetup = inSetup;
   const counts = [0, 0];
-  $("mulligan-list").replaceChildren(
-    ...mulligans.map(({ player, cards: shown }) => {
-      counts[player] += 1;
-      const own = player === view?.viewer;
-      const row = el("div", "mulligan", `${own ? "自分" : "相手"}（${counts[player]} 回目）`);
-      row.dataset.side = own ? "self" : "opponent";
-      const hand = el("div", "zone hand");
-      hand.append(...shown.map((defId) => zoomable(cardFace(defId), "見せた手札", [defId])));
-      row.append(hand);
-      return row;
-    }),
+  const list = $("mulligan-list");
+  reusingImages([list], () =>
+    list.replaceChildren(
+      ...mulligans.map(({ player, cards: shown }) => {
+        counts[player] += 1;
+        const own = player === view?.viewer;
+        const row = el("div", "mulligan", `${own ? "自分" : "相手"}（${counts[player]} 回目）`);
+        row.dataset.side = own ? "self" : "opponent";
+        const hand = el("div", "zone hand");
+        hand.append(...shown.map((defId) => zoomable(cardFace(defId), "見せた手札", [defId])));
+        row.append(hand);
+        return row;
+      }),
+    ),
   );
 }
 
@@ -2701,9 +2739,13 @@ function renderWatch() {
       info === undefined
         ? `座席 ${index}`
         : `${info.displayName}（${info.rating === null ? "AI" : info.rating}）`;
-    renderSide($(`watch-side-${index}`), view.players[index], index === 1);
   }
-  renderStadium($("watch-stadium"), view.stadium);
+  reusingImages([$("watch-side-0"), $("watch-stadium"), $("watch-side-1")], () => {
+    for (const index of [0, 1]) {
+      renderSide($(`watch-side-${index}`), view.players[index], index === 1);
+    }
+    renderStadium($("watch-stadium"), view.stadium);
+  });
 }
 
 function watchName(index) {
@@ -2974,7 +3016,9 @@ function readerBoard(views, index) {
 
 function renderReplayBoard({ frame: { views }, seat: index }) {
   const board = readerBoard(views, index);
-  renderSide($("replay-opponent"), board.opponent, true);
-  renderStadium($("replay-stadium"), views[index].stadium);
-  renderSide($("replay-self"), board.self, false);
+  reusingImages([$("replay-opponent"), $("replay-stadium"), $("replay-self")], () => {
+    renderSide($("replay-opponent"), board.opponent, true);
+    renderStadium($("replay-stadium"), views[index].stadium);
+    renderSide($("replay-self"), board.self, false);
+  });
 }
