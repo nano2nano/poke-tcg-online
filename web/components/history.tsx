@@ -2,8 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MatchSummary } from "../../src/archive.js";
 import type { ReplayFrame } from "../../src/history.js";
-import { accountQuery, storedSecret } from "../lib/account.js";
-import { messageOf, postJson } from "../lib/api.js";
+import { accountKey, accountQuery, storedSecret } from "../lib/account.js";
+import { messageOf, post, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import { describeSummary, readerView } from "../lib/describe.js";
 import { replayStatusText } from "../lib/describe-move.js";
@@ -16,48 +16,57 @@ import { SideBoard, Stadium } from "./board.js";
  * 横に広い画面では、対戦のあいだこの欄を CSS が隠す。卓と同じく `body` の直下に置く。
  */
 export function History() {
+  const account = useQuery(accountQuery());
+  const playerId = account.data?.playerId ?? null;
+  // サーバがプレイヤーを忘れて作り直したら、一覧も開いているリプレイも前のプレイヤーのもので、
+  // 新しいシークレットでは読めない。プレイヤーごとに作り直す。
+  return (
+    <PlayerHistory
+      key={playerId}
+      playerId={playerId}
+      // プレイヤーを読み終えるまでは押させない。読み終えると作り直すので、それまでに出した一覧は消える。
+      loadingAccount={account.isPending && account.isFetching}
+    />
+  );
+}
+
+function PlayerHistory({
+  playerId,
+  loadingAccount,
+}: {
+  playerId: string | null;
+  loadingAccount: boolean;
+}) {
   const queryClient = useQueryClient();
-  // 取りには行かず、いまのプレイヤーを読むだけ。取りに行くのは一覧を出すときとロビーである。
-  const account = useQuery({ ...accountQuery(), enabled: false });
   const matches = useQuery({
-    queryKey: ["matches"],
+    queryKey: ["matches", playerId],
     queryFn: async () => {
       // 初めて来た人はシークレットをまだ持たない。待たずに送ると、アカウントが見つからないと断られる。
-      const { playerId } = await queryClient.fetchQuery(accountQuery());
-      const { matches: list } = await postJson<{ matches: MatchSummary[] }>("/api/matches", {
-        secret: storedSecret(),
-      });
-      return { playerId, list };
+      // 待つあいだにプレイヤーが替わったら、この部品ごと作り直されるので、返すものは使われない。
+      await queryClient.fetchQuery(accountQuery());
+      const response = await post("/api/matches", { secret: storedSecret() });
+      const answer = (await response.json().catch(() => null)) as {
+        matches?: MatchSummary[];
+        code?: unknown;
+        error?: unknown;
+      } | null;
+      if (response.ok && answer?.matches !== undefined) return answer.matches;
+      // ロビーと同じく、覚えているプレイヤーを古いものとし、次に押したときに作り直す。
+      if (answer?.code === "account-not-found") {
+        void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
+      }
+      throw new Error(
+        typeof answer?.error === "string"
+          ? answer.error
+          : `/api/matches が ${response.status} を返した`,
+      );
     },
     // 押したときだけ取りに行く。決着した対戦は、押し直せば一覧に加わる。
     enabled: false,
     retry: false,
   });
-  /** 開いているリプレイ。開くたびに数を進め、前に開いたものの続きを描かせない。 */
-  const [opened, setOpened] = useState<{ summary: MatchSummary; key: number } | null>(null);
-  /** 閉じてから開き直しても同じ数を配らないよう、減らさずに数える。 */
-  const opens = useRef(0);
-  const openKey = useRef<number | null>(null);
+  const [opened, setOpened] = useState<MatchSummary | null>(null);
   const [failure, setFailure] = useState("");
-  // サーバがプレイヤーを忘れて作り直したら、前のプレイヤーの一覧は新しいシークレットでは開けない。
-  const list = matches.data?.playerId === account.data?.playerId ? matches.data?.list : undefined;
-
-  const open = (summary: MatchSummary) => {
-    opens.current += 1;
-    openKey.current = opens.current;
-    setFailure("");
-    setOpened({ summary, key: opens.current });
-  };
-  const close = () => {
-    openKey.current = null;
-    setOpened(null);
-  };
-  /** 開けないものを空の欄で見せない。閉じたものや、別のものに開き直したものの失敗は出さない。 */
-  const failedToOpen = (key: number, error: unknown) => {
-    if (openKey.current !== key) return;
-    close();
-    setFailure(`開けませんでした: ${messageOf(error)}`);
-  };
 
   return (
     <>
@@ -70,6 +79,7 @@ export function History() {
         <button
           id="history-button"
           className="secondary"
+          disabled={loadingAccount}
           onClick={() => {
             setFailure("");
             // 取りに行っている途中なら、それを止めて取り直す。遅れて届いた古い一覧で新しい一覧を消さない。
@@ -80,12 +90,21 @@ export function History() {
         </button>
         <p id="history-status" className="note">
           {failure ||
-            (matches.isError ? `一覧を出せませんでした: ${messageOf(matches.error)}` : "")}
+            (matches.isError && !matches.isFetching
+              ? `一覧を出せませんでした: ${messageOf(matches.error)}`
+              : "")}
         </p>
         <div id="history-list" className="history-list">
-          {list?.length === 0 && "まだ読み返せる対戦がありません。"}
-          {list?.map((summary) => (
-            <button key={summary.matchId} type="button" onClick={() => open(summary)}>
+          {matches.data?.length === 0 && "まだ読み返せる対戦がありません。"}
+          {matches.data?.map((summary) => (
+            <button
+              key={summary.matchId}
+              type="button"
+              onClick={() => {
+                setFailure("");
+                setOpened(summary);
+              }}
+            >
               {describeSummary(summary)}
             </button>
           ))}
@@ -93,10 +112,15 @@ export function History() {
       </section>
       {opened !== null && (
         <Replay
-          key={opened.key}
-          summary={opened.summary}
-          onClose={close}
-          onOpenFailed={(error) => failedToOpen(opened.key, error)}
+          // 別の対戦を開いたら、前の対戦の局面や問い合わせを持ち越さない。
+          key={opened.matchId}
+          summary={opened}
+          onClose={() => setOpened(null)}
+          onOpenFailed={(error) => {
+            // 開けないものを空の欄で見せない。
+            setOpened(null);
+            setFailure(`開けませんでした: ${messageOf(error)}`);
+          }}
         />
       )}
     </>
@@ -150,16 +174,30 @@ function Replay({
     setFailure("");
   };
 
-  // 開いたら最初の局面を取りに行く。開き直すと `key` が変わり、別の部品として取り直す。
-  const openFirst = useEffectEvent(() => {
-    goTo(0).catch(onOpenFailed);
+  // 開いたら最初の局面を取りに行く。閉じたあとや別の対戦に開き直したあとに届いた失敗では、
+  // いま開いているものを閉じない。
+  const openFirst = useEffectEvent((closed: () => boolean) => {
+    goTo(0).catch((error: unknown) => {
+      if (!closed()) onOpenFailed(error);
+    });
   });
-  useEffect(() => openFirst(), []);
+  useEffect(() => {
+    let closed = false;
+    openFirst(() => closed);
+    return () => {
+      closed = true;
+    };
+  }, []);
 
   const step = (to: (state: ReplayState) => number) => () => {
+    const target = to(latest.current);
+    // 端でさらに押しても、行き先は変わらない。同じ局面をサーバに作り直させない。
+    if (replayReducer(latest.current, { t: "ask", ply: target }).wanted === latest.current.wanted) {
+      return;
+    }
     // 数えるのは頼んだ手数からである。描けた手数から数えると、続けて押したぶんが
     // すべて同じ 1 手への問い合わせになり、押しただけ進まない。
-    goTo(to(latest.current)).catch((error: unknown) => {
+    goTo(target).catch((error: unknown) => {
       setFailure(`辿れませんでした: ${messageOf(error)}`);
     });
   };

@@ -660,11 +660,14 @@ test("辿れなかったときも、描けている局面の手数を出した�
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
 });
 
-test("サーバがプレイヤーを忘れて作り直したら、前のプレイヤーの一覧を出さない", async ({ page }) => {
+test("サーバがプレイヤーを忘れて作り直したら、前のプレイヤーの一覧とリプレイを出さない", async ({
+  page,
+}) => {
   await mockHistory(page, async () => "ok");
   await page.goto(`${BASEPATH}/`);
   await page.click("#history-button");
-  await expect(page.locator("#history-list button")).toHaveCount(2);
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
 
   await page.route("**/api/join", (route) =>
     route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
@@ -680,6 +683,7 @@ test("サーバがプレイヤーを忘れて作り直したら、前のプレ�
     await expect(page.locator("#join-button")).toBeEnabled();
   }
   await expect(page.locator("#history-list button")).toHaveCount(0);
+  await expect(page.locator("#replay")).toHaveCount(0);
 });
 
 test("一覧を取り直せなかったあとに開けなかったら、開けなかった理由を出す", async ({ page }) => {
@@ -694,4 +698,75 @@ test("一覧を取り直せなかったあとに開けなかったら、開け�
   await expect(page.locator("#history-status")).toContainText("一覧を出せませんでした");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#history-status")).toContainText("開けませんでした");
+});
+
+test("端でさらに押しても、同じ局面を取りに行かない", async ({ page }) => {
+  const asked: number[] = [];
+  await mockHistory(page, async (_matchId, ply) => {
+    asked.push(ply);
+    return "ok";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-prev");
+  await page.click("#replay-first");
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText(atPly(1));
+  expect(asked).toEqual([0, 1]);
+});
+
+test("一覧を取りに行けなかった理由は、取り直しているあいだは出さない", async ({ page }) => {
+  const [slow, release] = gate();
+  let calls = 0;
+  await page.route("**/api/matches", async (route) => {
+    calls += 1;
+    if (calls === 1) return route.fulfill({ json: { matches: [] } });
+    if (calls === 2) return route.fulfill({ status: 503, json: { error: "落とした" } });
+    await slow;
+    return route.fulfill({ json: { matches: [] } });
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  // 一覧を持っている取り直しの失敗は、次の取り直しのあいだも失敗のまま残る。
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("一覧を出せませんでした");
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toBeEmpty();
+  release();
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+});
+
+test("サーバがプレイヤーを忘れていたら、次に一覧を出すときにプレイヤーを作り直す", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect(page.locator("#history-button")).toBeEnabled();
+  const missing = {
+    status: 404,
+    json: { error: "アカウントが見つからない", code: "account-not-found" },
+  };
+  await page.route("**/api/matches", (route) => route.fulfill(missing));
+  await page.route("**/api/account/me", (route) => route.fulfill(missing));
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+
+  const created = page.waitForRequest((request) => request.url().endsWith("/api/account"));
+  await page.click("#history-button");
+  await created;
+});
+
+test("プレイヤーを読み終えるまでは、一覧を出させない", async ({ page }) => {
+  const [slow, release] = gate();
+  // 初めて開いた画面はシークレットを持たないので、プレイヤーを作るところで止める。
+  await page.route("**/api/account", async (route) => {
+    await slow;
+    await route.continue();
+  });
+  await page.goto(`${BASEPATH}/`);
+  await expect(page.locator("#history-button")).toBeDisabled();
+  release();
+  await expect(page.locator("#history-button")).toBeEnabled();
 });
