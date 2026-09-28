@@ -4,6 +4,8 @@ import {
   accountKey,
   accountQuery,
   accountText,
+  DEFAULT_NAME,
+  nameOrDefault,
   refreshAccount,
   type Account,
   storedSecret,
@@ -27,14 +29,6 @@ import {
 } from "../lib/join.js";
 import type { StoredSeat } from "../lib/seat.js";
 
-/**
- * サーバへ頼みを送っているあいだは、次の頼みを送らせない。
- *
- * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
- * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
- * 相手さがしの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
- * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすので構わない。
- */
 interface DeckStatus {
   messages: string[];
   tone: "ok" | "ng" | "";
@@ -73,11 +67,11 @@ export function Lobby({
    * 送るのも打ったときだけにする。
    */
   const [typedName, setTypedName] = useState<string | null>(null);
-  /** 打った名前か既定の名前。プレイヤーを作るときと、名前を変えるときに送る。 */
-  const nameToSend = () => typedName?.trim() || "ななし";
-  const accountOptions = accountQuery(nameToSend);
+  /** 送る時点の欄の値。押してから送るまでのあいだに打ち足した分も送る。 */
+  const typedNow = useRef<string | null>(null);
+  const accountOptions = accountQuery();
   const account = useQuery(accountOptions);
-  const name = typedName ?? account.data?.displayName ?? "ななし";
+  const name = typedName ?? account.data?.displayName ?? DEFAULT_NAME;
   const ensureAccount = () => queryClient.fetchQuery(accountOptions);
 
   const bots = useQuery({
@@ -103,6 +97,14 @@ export function Lobby({
   const chosenBotDeck = botDeck ?? decks[0]?.label ?? "";
   const chosenOwnDeck = ownDeck ?? (hasDeck ? "" : (decks[0]?.label ?? ""));
 
+  /**
+   * サーバへ頼みを送っているあいだは、次の頼みを送らせない。
+   *
+   * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
+   * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
+   * 相手さがしの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
+   * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすので構わない。
+   */
   const [requesting, setRequesting] = useState(false);
   /** いま走っている頼み。終わったときに外すのは、自分が置いたものだけにする。 */
   const running = useRef<object | null>(null);
@@ -180,7 +182,7 @@ export function Lobby({
   const common = async (share: SeedShare | null) => ({
     secret: await secretOf(ensureAccount),
     ...(share === null ? {} : { seedShareCommit: share.commit }),
-    ...(typedName === null ? {} : { displayName: nameToSend() }),
+    ...(typedNow.current === null ? {} : { displayName: nameOrDefault(typedNow.current) }),
   });
 
   const join = async (mine: object) => {
@@ -254,7 +256,10 @@ export function Lobby({
               refreshAccount(queryClient).catch(() => {});
               return;
             case "dropped":
-              show("別のタブから入り直したので、このタブは待つのをやめました。");
+              // 頼みが走っていれば、降ろしたのはこのタブの押し直しである。表示はその頼みが書く。
+              if (running.current === null) {
+                show("別のタブから入り直したので、このタブは待つのをやめました。");
+              }
               return;
             case "waiting":
               break;
@@ -308,7 +313,8 @@ export function Lobby({
       return refused(outcome);
     }
     accepted(request);
-    if ("seat" in outcome) onSeated(withShare(outcome.seat, share?.share));
+    // 画面を離れていたら座席を覚えない。AI との対戦は、次に頼んだときにサーバがその席を返す。
+    if (mounted.current && "seat" in outcome) onSeated(withShare(outcome.seat, share?.share));
   };
 
   const botStatus = bots.isError
@@ -334,7 +340,15 @@ export function Lobby({
         </p>
       )}
       <label>
-        名前 <input id="name" value={name} onChange={(event) => setTypedName(event.target.value)} />
+        名前{" "}
+        <input
+          id="name"
+          value={name}
+          onChange={(event) => {
+            typedNow.current = event.target.value;
+            setTypedName(event.target.value);
+          }}
+        />
       </label>
       <p id="account" className="note">
         {account.data !== undefined

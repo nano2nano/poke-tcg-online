@@ -22,12 +22,12 @@ export function storedSecret(): string | null {
  * プレイヤーを 1 人だけ用意する。画面を開いたときの読み込みと「対戦をさがす」は同じクエリの結果を待つ。
  * 重なって 2 人できると、画面に出ているレーティングと実際に指すプレイヤーが食い違う。
  *
- * `displayName` は、作るときに付ける表示名。読み直すときには使わない。
+ * 作るときは既定の名前を付ける。名前の欄に打った名前は、対戦に入るときに送って付け替える。
  */
-export function accountQuery(displayName: () => string) {
+export function accountQuery() {
   return queryOptions({
     queryKey: accountKey,
-    queryFn: () => loadAccount(displayName()),
+    queryFn: () => loadAccount(DEFAULT_NAME),
     staleTime: Infinity,
     // 取り直しはプレイヤーを作る要求にもなる。取りに行くのは、画面を開いたときと押したときだけにする。
     retry: false,
@@ -74,6 +74,13 @@ export async function refreshAccount(queryClient: QueryClient): Promise<void> {
   if (secret === null) return;
   const response = await post("/api/account/me", { secret });
   if (response.ok) queryClient.setQueryData(accountKey, (await response.json()) as Account);
+}
+
+export const DEFAULT_NAME = "ななし";
+
+/** 名前の欄が空なら既定の名前にする。 */
+export function nameOrDefault(typed: string): string {
+  return typed.trim() || DEFAULT_NAME;
 }
 
 /** レーティングと戦績の 1 行。 */

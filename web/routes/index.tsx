@@ -31,11 +31,16 @@ function Seat() {
   const [status, setStatus] = useState("");
   /** 離れたあとも覚えている座席。繋がらなかっただけなら、まだ指していた対戦が続いている。 */
   const [remembered, setRemembered] = useState<StoredSeat | null>(null);
-  const leave = useCallback((reason: string) => {
-    setSeated(null);
-    setStatus(reason);
-    setRemembered(storedSeat());
-  }, []);
+  const leave = useCallback(
+    (reason: string) => {
+      // 別のタブが置いた座席へは戻らせない。こちらで繋ぐと、そのタブの接続を追い出す。
+      const stored = storedSeat();
+      setRemembered(stored?.seatToken === seated?.seatToken ? stored : null);
+      setSeated(null);
+      setStatus(reason);
+    },
+    [seated],
+  );
   const sit = useCallback((next: StoredSeat) => {
     rememberSeat(next);
     setSeated(next);

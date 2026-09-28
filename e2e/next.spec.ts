@@ -86,6 +86,28 @@ test("繋がらずにロビーへ戻っても、覚えている座席へ戻れ�
   expect(JSON.parse(stored ?? "null")).toMatchObject({ seatToken: "別のタブの座席" });
 });
 
+test("離れるあいだに別のタブが座席を置いていたら、その座席へは戻らせない", async ({ page }) => {
+  await page.routeWebSocket(
+    (url) => url.searchParams.has("seatToken"),
+    async (socket) => {
+      await page.evaluate(() => {
+        localStorage.setItem("poke-seat", JSON.stringify({ seat: 1, seatToken: "別のタブの座席" }));
+      });
+      void socket.close();
+    },
+  );
+  await page.addInitScript(() => {
+    if (localStorage.getItem("poke-seat") === null) {
+      localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つながらない座席" }));
+    }
+  });
+
+  await page.goto(`${BASEPATH}/`);
+  await expect(page.locator("#join")).toBeVisible();
+  // ここで繋ぐと、別のタブの接続を追い出す。
+  await expect(page.locator("#resume-button")).toHaveCount(0);
+});
+
 test("相手を待つあいだに押し直して断られても、前のチケットを待ち続ける", async ({ page }) => {
   const claimed = () => page.waitForResponse((response) => response.url().includes("/api/claim?"));
   const status = page.locator("#join-status");
@@ -111,5 +133,5 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   // 待ち続けても、断られた理由を待っている一言で消さない。2 度目の答えは 1 度目の答えを出したあとに届く。
   await claimed();
   await claimed();
-  expect(await status.textContent()).not.toBe(waiting);
+  expect(await status.textContent()).toContain("断った");
 });

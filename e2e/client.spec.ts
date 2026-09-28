@@ -155,6 +155,27 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
   await expect(page.locator("#name")).toHaveValue("ぼくのなまえ");
 });
 
+test("押してから送るまでのあいだに打ち足した名前も送る", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/sample-deck", async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  await page.goto("./");
+  await page.fill("#name", "たろ");
+  await page.fill("#room", `うちたし-${Date.now()}`);
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await page.fill("#name", "たろう");
+  release();
+
+  expect((await sent).postDataJSON()).toMatchObject({ displayName: "たろう" });
+});
+
 test("相手を待つあいだに知らない形の答えが届いたら、待つのをやめる", async ({ page }) => {
   let release = (): void => {};
   const held = new Promise<void>((resolve) => {
