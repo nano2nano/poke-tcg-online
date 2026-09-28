@@ -384,7 +384,7 @@ test("対戦をさがす返事を待つあいだに最後の 1 枚を選んだ�
   await expect(page.locator("#deck-status")).toContainText("規則を通ります");
   release();
   await joined;
-  await expect(page.locator("#join-status")).toContainText("デッキを直して");
+  await expect(page.locator("#join-status")).toContainText("デッキが変わりました");
   await expect(page.locator("#deck-status")).toContainText("規則を通ります");
   await expect(page.locator("#deck-status")).not.toContainText("選ぶ前のデッキの理由");
 });
@@ -406,8 +406,35 @@ test("対戦をさがす返事を待つあいだに組み替えたら、断ら�
   await page.locator("#deck-cards .card-row button.add").first().click();
   release();
   await joined;
-  await expect(page.locator("#join-status")).toContainText("デッキを直して");
+  await expect(page.locator("#join-status")).toContainText("デッキが変わりました");
   await expect(page.locator("#deck-status")).not.toContainText("60 枚にしてください");
+});
+
+test("デッキを確かめた結果は、対戦をさがしても残す", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } });
+  });
+  // 1 枚のデッキは規則に通らない。通ったことにして、その結果が残るのを見る。
+  await page.route("**/api/deck/validate", (route) =>
+    route.fulfill({ json: { ok: true, errors: [] } }),
+  );
+
+  await page.goto(`${BASEPATH}/`);
+  await addFirstSampleCard(page);
+  await page.click("#check-button");
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await expect(page.locator("#join-status")).toContainText("デッキを送っています");
+  release();
+  await joined;
+  await expect(page.locator("#join-status")).toContainText("断った");
+  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
 });
 
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {

@@ -199,9 +199,8 @@ export function Lobby({
     // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
     const sent = storedDeckJson();
     const { deck, sample } = await builtDeck();
-    setDeckStatus(
-      sample ? { messages: ["サンプルデッキで対戦します。"], tone: "ok" } : NO_DECK_STATUS,
-    );
+    // 組んだデッキなら、欄はいまのデッキについてのものなので残す。確かめている途中の表示も消さない。
+    if (sample) setDeckStatus({ messages: ["サンプルデッキで対戦します。"], tone: "ok" });
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
@@ -216,9 +215,11 @@ export function Lobby({
       if (outcome.code !== undefined) return refused(outcome);
       // `code` の無い断りは、デッキの違反である。
       // 待つあいだに組み替えていたら、理由は送ったデッキのものなので出さない。
-      if (sent === storedDeckJson()) {
-        setDeckStatus({ messages: outcome.errors, tone: "ng", deck: sent });
+      if (sent !== storedDeckJson()) {
+        setStatus("待つあいだにデッキが変わりました。もう一度おしてください。");
+        return;
       }
+      setDeckStatus({ messages: outcome.errors, tone: "ng", deck: sent });
       setStatus("デッキを直してから、もう一度おしてください。");
       return;
     }
@@ -298,7 +299,6 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    setDeckStatus(NO_DECK_STATUS);
     let deck: { deckPreset: string } | { deck: DeckList };
     if (chosenOwnDeck === "") {
       // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。

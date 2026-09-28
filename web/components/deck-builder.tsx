@@ -110,7 +110,7 @@ export function DeckBuilder({
 
   const check = async () => {
     if (entries.length === 0) {
-      onStatus({ messages: ["デッキにカードがありません。"], tone: "ng" });
+      onStatus({ messages: ["デッキにカードがありません。"], tone: "ng", deck: null });
       return;
     }
     await validate(entries);
