@@ -669,6 +669,8 @@ test("サーバがプレイヤーを忘れて作り直したら、前のプレ�
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
 
+  // 作り直したプレイヤーはまだ対戦を指していない。
+  await page.route("**/api/matches", (route) => route.fulfill({ json: { matches: [] } }));
   await page.route("**/api/join", (route) =>
     route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
   );
@@ -682,7 +684,7 @@ test("サーバがプレイヤーを忘れて作り直したら、前のプレ�
     await joined;
     await expect(page.locator("#join-button")).toBeEnabled();
   }
-  await expect(page.locator("#history-list button")).toHaveCount(0);
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   await expect(page.locator("#replay")).toHaveCount(0);
 });
 
@@ -753,12 +755,15 @@ test("サーバがプレイヤーを忘れていたら、次に一覧を出す�
   await page.click("#history-button");
   await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
 
+  await page.unroute("**/api/matches");
   const created = page.waitForRequest((request) => request.url().endsWith("/api/account"));
   await page.click("#history-button");
   await created;
+  // 作り直したプレイヤーの一覧を、押し直さずに出す。
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
 });
 
-test("プレイヤーを読み終えるまでは、一覧を出させない", async ({ page }) => {
+test("プレイヤーを作っているあいだに押しても、作り終えたら一覧を出す", async ({ page }) => {
   const [slow, release] = gate();
   // 初めて開いた画面はシークレットを持たないので、プレイヤーを作るところで止める。
   await page.route("**/api/account", async (route) => {
@@ -766,7 +771,50 @@ test("プレイヤーを読み終えるまでは、一覧を出させない", as
     await route.continue();
   });
   await page.goto(`${BASEPATH}/`);
-  await expect(page.locator("#history-button")).toBeDisabled();
+  await page.click("#history-button");
   release();
-  await expect(page.locator("#history-button")).toBeEnabled();
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+});
+
+test("リプレイでサーバがプレイヤーを忘れていたと分かったら、次に一覧を出すときに作り直す", async ({
+  page,
+}) => {
+  await mockHistory(page, async () => "ok");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-list button")).toHaveCount(2);
+  const missing = {
+    status: 404,
+    json: { error: "アカウントが見つからない", code: "account-not-found" },
+  };
+  await page.route("**/api/replay", (route) => route.fulfill(missing));
+  await page.route("**/api/account/me", (route) => route.fulfill(missing));
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#history-status")).toContainText("開けませんでした");
+
+  const created = page.waitForRequest((request) => request.url().endsWith("/api/account"));
+  await page.click("#history-button");
+  await created;
+});
+
+test("席に着いたまま開き直しても、一覧の欄はプレイヤーを読みに行かない", async ({ page }) => {
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/account")) asked.push(request.url());
+  });
+  await page.routeWebSocket(
+    (url) => url.searchParams.has("seatToken"),
+    () => {},
+  );
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "poke-seat",
+      JSON.stringify({ seat: 0, seatToken: "つながったままの座席" }),
+    );
+  });
+  await page.goto(`${BASEPATH}/`);
+  await expect(page.locator("#table")).toBeVisible();
+  await expect(page.locator("#history")).toBeAttached();
+  await painted(page);
+  expect(asked).toEqual([]);
 });
