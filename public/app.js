@@ -471,12 +471,17 @@ async function loadBots() {
 }
 
 /**
- * AI が握れるデッキの表。名前は看板のカード（`ace`）の名前で出す。
+ * AI が握れるデッキの表。名前は看板のカード（`aces`）の名前を「・」でつないで出す。
  * 名前の表が届く前はラベルで出し、届いたら `redraw` から出し直す。
  */
 let botDecks = [];
 
-const deckName = (deck) => cards[deck.ace]?.name ?? deck.label;
+const deckName = (deck) => {
+  const names = deck.aces.map((ace) => cards[ace]?.name);
+  return names.length > 0 && names.every((one) => one !== undefined)
+    ? names.join("・")
+    : deck.label;
+};
 
 function renderBotDecks() {
   for (const select of [$("bot-deck"), $("own-deck")]) {

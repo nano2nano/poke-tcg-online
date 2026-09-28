@@ -10,7 +10,13 @@ import {
   newEntityWeightsFile,
   newPpoWeightsFile,
 } from "../src/engine.js";
-import { checkLoads, plan, readRunPointers, RUN_STATE } from "../tools/publish-bots.js";
+import {
+  checkLoads,
+  checkRunDecks,
+  plan,
+  readRunPointers,
+  RUN_STATE,
+} from "../tools/publish-bots.js";
 import { ensureCards } from "./helpers.js";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -30,6 +36,7 @@ function runDir(state: unknown): string {
 
 const pointers = {
   gate: "measure" as const,
+  decks: "jp-2026h1:L-seen",
   current: "ppo-clip-g23.weights",
   anchors: [0, 5, 10, 15, 20, 23].map((generation) => ({
     generation,
@@ -41,7 +48,7 @@ describe("走りの状態", () => {
   it("いまの方策と凍結した世代を読む", () => {
     const dir = runDir({
       version: 4,
-      config: { gate: "measure", trust: "clip" },
+      config: { gate: "measure", trust: "clip", decks: pointers.decks },
       attempts: 30,
       current: { weights: pointers.current, adam: null },
       anchors: pointers.anchors,
@@ -53,6 +60,21 @@ describe("走りの状態", () => {
     expect(() => readRunPointers(runDir({ config: { gate: "filter" }, anchors: [] }))).toThrow(
       /current\.weights/,
     );
+  });
+
+  it("学習のデッキが無い状態は読まない", () => {
+    expect(() =>
+      readRunPointers(
+        runDir({ config: { gate: "filter" }, current: { weights: pointers.current }, anchors: [] }),
+      ),
+    ).toThrow(/config\.decks/);
+  });
+
+  it("AI の座席が握る本と違う本で学んだ走りは上げない", () => {
+    expect(() => checkRunDecks("jp-2026h1:L-seen")).not.toThrow();
+    for (const decks of ["meta", "jp-2026h1", "jp-2026h1:F-seen", "jp-2026h1:L-heldout"]) {
+      expect(() => checkRunDecks(decks), decks).toThrow(/上げない/);
+    }
   });
 
   it("ゲートの扱いが分からない状態は読まない", () => {

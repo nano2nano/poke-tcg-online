@@ -13,12 +13,15 @@ import type { R2Bucket } from "@cloudflare/workers-types/index.ts";
 import {
   decodeEntityWeights,
   decodePpoWeights,
+  deckListOf,
+  labelsOf,
+  matchupDeckLabels,
   ENTITY_MAGIC,
-  metaDecks,
   policyOf,
   PPO_MAGIC,
   probabilitiesOf,
   sampleFrom,
+  tournamentDecks,
   tracksKnowledge,
   type CardDefId,
   type DecisionExtras,
@@ -250,18 +253,36 @@ export class BotStore {
 }
 
 /**
- * AI が握れるデッキ。学習と評価に使っているデッキそのもので、表はエンジンが持つ。
- * 画面に出す名前は、看板のカード（`ace`）の名前をカードの表から引く。カード名はエンジンのデータなので、ここには持たない。
+ * AI が握れるデッキ。表はエンジンが持つ。画面に出す名前は、看板のカード（`aces`）の名前をカードの表から引く。
+ * カード名はエンジンのデータなので、ここには持たない。
  */
 export interface DeckPreset {
   label: string;
-  ace: CardDefId;
+  aces: CardDefId[];
 }
 
+/**
+ * AI に握らせるデッキを決める、学習の `--decks` の値。方策は学習で握った本の間でしか学んでいないので、
+ * 取り置いた本も表の外のデッキも握らせない。置く重みがこの値で学んだかは `tools/publish-bots.ts` が確かめる。
+ */
+export const BOT_TRAINING_DECKS = "jp-2026h1:L-seen";
+
+/**
+ * `--decks` の値で学習が握る本のラベル。学習と同じ関数で組を並べ、組の両側の本を集める。
+ * 大会の表の組でない構成（`meta` など）が入っていれば投げる。
+ */
+export function trainedDeckLabels(decks: string): Set<string> {
+  return new Set(labelsOf(decks).flatMap((label) => matchupDeckLabels(label)));
+}
+
+const trained = trainedDeckLabels(BOT_TRAINING_DECKS);
+const presetDecks = tournamentDecks.filter((deck) => trained.has(deck.label));
+
 export function deckPresets(): DeckPreset[] {
-  return metaDecks.map(({ label, ace }) => ({ label, ace }));
+  return presetDecks.map(({ label, aces }) => ({ label, aces: [...aces] }));
 }
 
 export function presetDeck(label: string): DeckList | null {
-  return metaDecks.find((preset) => preset.label === label)?.deck() ?? null;
+  const deck = presetDecks.find((preset) => preset.label === label);
+  return deck === undefined ? null : deckListOf(deck);
 }
