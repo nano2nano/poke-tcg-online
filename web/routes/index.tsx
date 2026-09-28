@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useCallback, useState } from "react";
 import { z } from "zod";
+import { SeatTable } from "../components/seat-table.js";
 import { WatchTable } from "../components/watch-table.js";
+import { storedSeat, type StoredSeat } from "../lib/seat.js";
 
 const search = z.object({
   /** 観戦のリンクが運ぶ観戦トークン。 */
@@ -11,13 +14,33 @@ export const Route = createFileRoute("/")({ validateSearch: search, component: H
 
 function Home() {
   const { watch } = Route.useSearch();
-  // リンクを開き直したら、前の対戦の盤面とできごとを持ち越さない。
   if (watch !== undefined) return <WatchTable key={watch} token={watch} />;
+  return <Seat />;
+}
+
+/**
+ * 覚えている座席があれば、そこへ繋ぎ直す。観戦で開いたときは繋がない。繋ぐと観戦の画面の裏で
+ * 対戦が開き、どちらを見ているのか分からなくなる。
+ *
+ * **カードの名前の表を待たずに繋ぐ。** 指していないあいだも時計は流れるので（3.4 節）、
+ * 取りに行っているあいだに手番が終わる。
+ */
+function Seat() {
+  const [seated, setSeated] = useState<StoredSeat | null>(storedSeat);
+  const [status, setStatus] = useState("");
+  const leave = useCallback((reason: string) => {
+    setSeated(null);
+    setStatus(reason);
+  }, []);
+  if (seated !== null) return <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />;
   return (
     <main id="next-home">
       <h1>ポケカ オンライン対戦</h1>
       <p>
         新しい画面を作っているところです。対戦は <a href="/">いまの画面</a> からできます。
+      </p>
+      <p>
+        <output id="join-status">{status}</output>
       </p>
     </main>
   );

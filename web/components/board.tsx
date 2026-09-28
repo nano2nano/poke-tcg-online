@@ -18,6 +18,9 @@ type Pokemon = NonNullable<Side["active"]>;
  */
 const failedImages = new Set<string>();
 
+export type AimedSet = ReadonlySet<string>;
+const NOTHING_AIMED: AimedSet = new Set();
+
 /** ねむり・マヒ・こんらんは、卓で向きを変えて示すのに合わせてカードを傾ける。 */
 const POSTURES = new Set(["asleep", "paralyzed", "confused"]);
 
@@ -25,7 +28,16 @@ const POSTURES = new Set(["asleep", "paralyzed", "confused"]);
  * カード 1 枚。名前と種類の面を敷き、画像を出すときはその上に重ねる。
  * 画像が読めなければ外して、下の面をそのまま見せる。
  */
-export function CardFace({ defId, posture }: { defId: string; posture?: string | undefined }) {
+export function CardFace({
+  defId,
+  posture,
+  pickable,
+}: {
+  defId: string;
+  posture?: string | undefined;
+  /** 山札から選ぶ効果で並べたカードが、いま選べるか。 */
+  pickable?: boolean;
+}) {
   const { table, images } = useCardData();
   const card = table[defId];
   const src = imageUrl(images, card?.cardID);
@@ -37,11 +49,13 @@ export function CardFace({ defId, posture }: { defId: string; posture?: string |
       data-kind={card?.kind ?? ""}
       data-type={card?.type}
       data-posture={posture}
+      data-pickable={pickable === undefined ? undefined : String(pickable)}
     >
       <span className="card-name">{card?.name ?? defId}</span>
       <span className="card-sub">{cardSubtitle(card)}</span>
       {/* 読み上げでは、同じ名前の別のカードを見分けられるよう、種類と収録まで読む。 */}
       {card !== undefined && <span className="visually-hidden">{describeCard(card)}</span>}
+      {pickable === false && <span className="visually-hidden">（選べません）</span>}
       {src !== null && src !== failedSrc && (
         // 名前は下の面が持っている。読み上げで二重にしない。
         <img
@@ -109,13 +123,17 @@ function PileZone({ name, label, pile }: { name: string; label: string; pile: Ca
 }
 
 /** 場のポケモン 1 匹。ついているカードは下からのぞかせ、ダメージと特殊状態は印で出す。 */
-function PokemonSlot({ pokemon }: { pokemon: Pokemon | null }) {
+function PokemonSlot({ pokemon, aimed }: { pokemon: Pokemon | null; aimed: AimedSet }) {
   if (pokemon === null) return <EmptySlot />;
   if ("concealed" in pokemon) return <CardBack />;
   const top = pokemon.stack[pokemon.stack.length - 1]!;
   const posture = pokemon.conditions.find((condition) => POSTURES.has(condition.kind))?.kind;
   return (
-    <div className="pokemon" data-in-play-id={pokemon.inPlayId} data-damage={pokemon.damage}>
+    <div
+      className={aimed.has(pokemon.inPlayId) ? "pokemon aimed" : "pokemon"}
+      data-in-play-id={pokemon.inPlayId}
+      data-damage={pokemon.damage}
+    >
       <CardFace defId={top.defId} posture={posture} />
       <div className="marks">
         {pokemon.damage > 0 && <span className="damage">{pokemon.damage}</span>}
@@ -145,9 +163,12 @@ function PokemonSlot({ pokemon }: { pokemon: Pokemon | null }) {
 export const SideBoard = memo(function SideBoard({
   side,
   mirrored,
+  aimed = NOTHING_AIMED,
 }: {
   side: Side;
   mirrored: boolean;
+  /** 指せる手のボタンが狙っているポケモン。盤面のそのポケモンを囲む。 */
+  aimed?: AimedSet;
 }) {
   const faceUp = new Map(side.faceUpPrizes.map((prize) => [prize.index, prize.defId]));
   // ベンチの枠の数はスタジアムで変わり、射影には載っていない。空いた枠は描かない。
@@ -176,7 +197,7 @@ export const SideBoard = memo(function SideBoard({
       </div>
       <div className="field">
         <Zone name="active" label="バトル場">
-          <PokemonSlot pokemon={side.active} />
+          <PokemonSlot pokemon={side.active} aimed={aimed} />
         </Zone>
         <Zone name="bench" label="ベンチ">
           {bench.length === 0 ? (
@@ -186,6 +207,7 @@ export const SideBoard = memo(function SideBoard({
               <PokemonSlot
                 key={"inPlayId" in pokemon ? pokemon.inPlayId : index}
                 pokemon={pokemon}
+                aimed={aimed}
               />
             ))
           )}

@@ -49,6 +49,13 @@ const CONDITIONS: Record<string, string> = {
   confused: "こんらん",
 };
 
+/** 山札を種類で並べるときの順。 */
+export function kindRank(card: CardBrief | undefined): number {
+  const kinds = Object.keys(KINDS);
+  const index = card === undefined ? -1 : kinds.indexOf(card.kind);
+  return index === -1 ? kinds.length : index;
+}
+
 export function nameOf(cards: CardTable, defId: string): string {
   return cards[defId]?.name ?? defId;
 }
@@ -113,6 +120,13 @@ function moveRemainingText(clock: ClockView): string {
     : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
 }
 
+export function seatClockText(clock: ClockView, seat: Player): string {
+  const mine = Math.round(clock.bankMs[seat] / 1000);
+  const theirs = Math.round(clock.bankMs[seat === 0 ? 1 : 0] / 1000);
+  const turn = clock.toMove === seat ? "あなたの番です" : "相手が考えています";
+  return `${turn}${moveRemainingText(clock)} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
+}
+
 export function watchClockText(clock: ClockView, who: (player: Player) => string): string {
   const turn = clock.toMove === null ? "" : `${who(clock.toMove)} が考えています`;
   const banks = ([0, 1] as const)
@@ -154,7 +168,7 @@ export interface Notice {
   repeated?: boolean;
 }
 
-type View = PlayerView | SpectatorView;
+export type View = PlayerView | SpectatorView;
 
 /**
  * 届いたイベントを、人に見せる結果へ直す。見せないイベントの位置は null にする。
@@ -266,7 +280,7 @@ function pokemonName(
 }
 
 /** 座席の番号と、その座席の場の組。座席と観戦で盤面の形が違う。 */
-function sidesOf(view: View | null): [Player, Side][] {
+export function sidesOf(view: View | null): [Player, Side][] {
   if (view === null) return [];
   if (view.viewer === "spectator")
     return [
