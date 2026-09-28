@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
+import { useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData, type CardTable } from "../lib/cards.js";
 import {
@@ -64,25 +57,24 @@ export interface DeckMessage {
   deck: string | null;
 }
 
-const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "", deck: null };
+export const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "", deck: null };
 
 /**
- * 組んだデッキの欄。組み替わったあとに届いた、前のデッキについての文は置かない。置くと、
- * いまのデッキについての新しい文を上書きする。
+ * 組み替わったあとに届いた、前のデッキについての文を捨てる。欄に置くと、いまのデッキについての
+ * 新しい文を上書きする。
  */
-export function useDeckStatus(): [DeckMessage, (message: DeckMessage) => void] {
-  const [status, setStatus] = useState(NO_DECK_STATUS);
-  const show = useCallback((message: DeckMessage) => {
-    if (message.deck === storedDeckJson()) setStatus(message);
-  }, []);
-  return [status, show];
+export function forCurrentDeck(
+  show: (message: DeckMessage) => void,
+): (message: DeckMessage) => void {
+  return (message) => {
+    if (message.deck === storedDeckJson()) show(message);
+  };
 }
 
 /**
  * デッキを組む。組んだデッキはこのブラウザに残り、対戦に入るときはそれを出す。
  *
  * `status` は組む画面と対戦に入る画面が一緒に使う欄で、デッキが規則に通らない理由もここに出る。
- * `useDeckStatus` で作る。
  * `actions` は、組む画面のボタンの並びに添えるもの。
  */
 export function DeckBuilder({
@@ -95,6 +87,7 @@ export function DeckBuilder({
   actions: ReactNode;
 }) {
   const { table } = useCardData();
+  const post = forCurrentDeck(onStatus);
   const deckJson = useSyncExternalStore(subscribeDeck, storedDeckJson);
   const entries = useMemo(() => parseDeck(deckJson), [deckJson]);
   const [query, setQuery] = useState("");
@@ -128,37 +121,30 @@ export function DeckBuilder({
     say([], "");
   };
 
-  /** いまのデッキについての文を出す。 */
-  const say = (messages: string[], tone: DeckMessage["tone"]) =>
-    onStatus({ messages, tone, deck: storedDeckJson() });
+  const say = (messages: string[], tone: DeckMessage["tone"], deck = storedDeckJson()) =>
+    post({ messages, tone, deck });
 
   const check = async () => {
     if (entries.length === 0) {
       say(["デッキにカードがありません。"], "ng");
       return;
     }
-    await validate(entries);
+    await validate();
   };
 
-  const validate = async (deckEntries: readonly DeckEntry[]) => {
+  const validate = async () => {
     const deck = storedDeckJson();
     const outcome = await postJson<{ errors?: string[] }>(
       "/api/deck/validate",
-      deckCards(deckEntries),
+      deckCards(parseDeck(deck)),
     );
     showVerdict(outcome.errors ?? [], deck);
   };
 
   const showVerdict = (errors: readonly string[], deck: string | null) =>
-    onStatus(
-      errors.length === 0
-        ? {
-            messages: [`デッキは ${deckSize(parseDeck(deck))} 枚で、規則を通ります。`],
-            tone: "ok",
-            deck,
-          }
-        : { messages: [...errors], tone: "ng", deck },
-    );
+    errors.length === 0
+      ? say([`デッキは ${deckSize(parseDeck(deck))} 枚で、規則を通ります。`], "ok", deck)
+      : say([...errors], "ng", deck);
 
   /**
    * 公式のデッキコードのデッキと置き換える。取り込めないカードがあっても、取り込めたぶんで
@@ -173,9 +159,10 @@ export function DeckBuilder({
     const before = storedDeckJson();
     setOfficial(null);
     say(["公式サイトからデッキを読んでいます。"], "");
+    // 待つあいだに組み替えていたら、読み込みの結果は前のデッキについてのものなので出さない。
     const page = await fetchOfficialDeck(parsed);
     if (page === null) {
-      say([`デッキコード ${parsed} のデッキは公式サイトにありません。`], "ng");
+      say([`デッキコード ${parsed} のデッキは公式サイトにありません。`], "ng", before);
       return;
     }
     const outcome = await postJson<{
@@ -184,7 +171,7 @@ export function DeckBuilder({
       errors?: string[];
     }>("/api/deck/official", { cards: page.cards });
     if (outcome.entries === undefined) {
-      say(outcome.errors ?? ["読み込めませんでした。"], "ng");
+      say(outcome.errors ?? ["読み込めませんでした。"], "ng", before);
       return;
     }
     // 待つあいだに組み替えられていたら、置き換えると組み替えたぶんが黙って消える。
@@ -240,17 +227,19 @@ export function DeckBuilder({
     setOfficial({ ...current, deck, pending });
     if (pending.some((each) => each.left > 0)) return;
     say(["デッキを確かめています。"], "");
-    await validate(next);
+    await validate();
   };
 
-  const fail = (lead: string) => (error: unknown) => say([`${lead}: ${messageOf(error)}`], "ng");
+  /** `deck` は、失敗した操作を始めたときのデッキ。 */
+  const fail = (lead: string, deck: string | null) => (error: unknown) =>
+    say([`${lead}: ${messageOf(error)}`], "ng", deck);
 
   const startImport = () => {
     if (importing) return;
     if (entries.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
     setImporting(true);
     importCode()
-      .catch(fail("読み込めませんでした"))
+      .catch(fail("読み込めませんでした", storedDeckJson()))
       .finally(() => setImporting(false));
   };
 
@@ -357,7 +346,7 @@ export function DeckBuilder({
         <button
           id="check-button"
           className="secondary"
-          onClick={() => void check().catch(fail("確かめられませんでした"))}
+          onClick={() => void check().catch(fail("確かめられませんでした", storedDeckJson()))}
         >
           デッキを確かめる
         </button>
@@ -392,7 +381,9 @@ export function DeckBuilder({
                     key={choice.defId}
                     type="button"
                     onClick={() =>
-                      void pick(picking, index, choice.defId).catch(fail("確かめられませんでした"))
+                      void pick(picking, index, choice.defId).catch(
+                        fail("確かめられませんでした", storedDeckJson()),
+                      )
                     }
                   >
                     {`${group.name}（${describeCard(choice) || choice.defId}）`}

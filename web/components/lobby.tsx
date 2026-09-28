@@ -26,7 +26,7 @@ import {
 } from "../lib/join.js";
 import { parseDeck, storedDeckJson, subscribeDeck } from "../lib/deck.js";
 import type { StoredSeat } from "../lib/seat.js";
-import { DeckBuilder, useDeckStatus } from "./deck-builder.js";
+import { DeckBuilder, forCurrentDeck, NO_DECK_STATUS, type DeckMessage } from "./deck-builder.js";
 
 /** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
 const SHARES_KEPT = 8;
@@ -51,7 +51,8 @@ export function Lobby({
   const queryClient = useQueryClient();
   const { table } = useCardData();
   const [status, setStatus] = useState(initialStatus);
-  const [deckStatus, setDeckStatus] = useDeckStatus();
+  const [deckStatus, setDeckStatus] = useState<DeckMessage>(NO_DECK_STATUS);
+  const showDeckStatus = forCurrentDeck(setDeckStatus);
   const [room, setRoom] = useState("");
   /** 送る時点のルームコード。名前と同じく、押してから送るまでに直した分も送る。 */
   const roomNow = useRef("");
@@ -199,8 +200,10 @@ export function Lobby({
     // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
     const sent = storedDeckJson();
     const { deck, sample } = await builtDeck();
-    // デッキの欄はいまのデッキについてのもので、この頼みのことは出さない。確かめている途中の表示を消さない。
-    if (sample) setStatus("サンプルデッキを送っています");
+    // 組んだデッキなら、欄はいまのデッキについてのものなので残す。確かめている途中の表示も消さない。
+    if (sample) {
+      showDeckStatus({ messages: ["サンプルデッキで対戦します。"], tone: "ok", deck: sent });
+    }
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
@@ -219,7 +222,7 @@ export function Lobby({
         setStatus("待つあいだにデッキが変わりました。もう一度おしてください。");
         return;
       }
-      setDeckStatus({ messages: outcome.errors, tone: "ng", deck: sent });
+      showDeckStatus({ messages: outcome.errors, tone: "ng", deck: sent });
       setStatus("デッキを直してから、もう一度おしてください。");
       return;
     }
