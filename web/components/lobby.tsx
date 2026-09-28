@@ -9,7 +9,7 @@ import {
   refreshAccount,
   storedSecret,
 } from "../lib/account.js";
-import { getJson, postJson } from "../lib/api.js";
+import { getJson, messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import {
   claim,
@@ -199,7 +199,9 @@ export function Lobby({
     // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
     const { deck, sample } = await builtDeck();
     setDeckStatus(
-      sample ? { messages: ["サンプルデッキで対戦します。"], tone: "ok" } : NO_DECK_STATUS,
+      keepPicking(
+        sample ? { messages: ["サンプルデッキで対戦します。"], tone: "ok" } : NO_DECK_STATUS,
+      ),
     );
     const share = await newSeedShare();
     const request = await common(share);
@@ -294,7 +296,7 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    setDeckStatus(NO_DECK_STATUS);
+    setDeckStatus(keepPicking(NO_DECK_STATUS));
     let deck: { deckPreset: string } | { deck: DeckList };
     if (chosenOwnDeck === "") {
       // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
@@ -449,13 +451,16 @@ export function Lobby({
   );
 }
 
+/**
+ * 公式のデッキコードで読み込んだカードを選んでいる途中なら、その欄を残す。消すと、読み込み直すまで選べない。
+ */
+function keepPicking(next: DeckStatus): (previous: DeckStatus) => DeckStatus {
+  return (previous) => ("official" in previous ? previous : next);
+}
+
 async function secretOf(ensureAccount: () => Promise<unknown>): Promise<string> {
   await ensureAccount();
   const secret = storedSecret();
   if (secret === null) throw new Error("プレイヤーを用意できなかった");
   return secret;
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

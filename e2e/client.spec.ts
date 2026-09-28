@@ -1658,6 +1658,35 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
   await close();
 });
 
+test("別のタブで組み替えたら、こちらのデッキも合わせ、「規則を通ります」を消す", async ({
+  page,
+}) => {
+  await page.goto("./");
+  const [first, second] = await sampleDeckEntries(page);
+  if (first === undefined || second === undefined) throw new Error("サンプルデッキが短い");
+  await page.fill(
+    "#card-search",
+    `${first.name} ${[first.set, first.number].filter(Boolean).join(" ")}`,
+  );
+  await page.locator(`#card-results .card-row[data-def-id="${first.defId}"] button.add`).click();
+  // 1 枚のデッキは規則に通らない。通ったことにして、結果が消えるのを見る。
+  await page.route("**/api/deck/validate", (route) =>
+    route.fulfill({ json: { ok: true, errors: [] } }),
+  );
+  await page.click("#check-button");
+  await expect(page.locator("#deck-status")).toHaveClass(/ok/);
+
+  const other = await page.context().newPage();
+  await other.goto(page.url());
+  await other.evaluate(
+    (defId) => localStorage.setItem("poke-deck", JSON.stringify([{ defId, count: 1 }])),
+    second.defId,
+  );
+  await expect(page.locator(`#deck-cards .card-row[data-def-id="${second.defId}"]`)).toHaveCount(1);
+  await expect(page.locator("#deck-status")).not.toContainText("規則を通ります");
+  await other.close();
+});
+
 test("減らしきった行は、デッキから消える", async ({ page }) => {
   await page.goto("./");
   const [entry] = await sampleDeckEntries(page);

@@ -45,6 +45,8 @@ export function CardFace({
   const card = table[defId];
   const src = imageUrl(images, card?.cardID);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // 画像の無い小さな面は名前も読めないので、出さない。
+  if (thumb === true && (src === null || src === failedSrc)) return null;
   return (
     <div
       className={thumb === true ? "card thumb" : "card"}

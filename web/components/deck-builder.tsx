@@ -7,7 +7,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { postJson } from "../lib/api.js";
+import { messageOf, postJson } from "../lib/api.js";
 import { useCardData, type CardTable } from "../lib/cards.js";
 import {
   canAdd,
@@ -30,7 +30,7 @@ import {
   type OfficialFailure,
 } from "../lib/deck.js";
 import { describeCard, KIND_ORDER, KINDS } from "../lib/describe.js";
-import { CardFace, imageUrl } from "./board.js";
+import { CardFace } from "./board.js";
 
 const SEARCH_LIMIT = 30;
 
@@ -55,11 +55,19 @@ interface OfficialImport {
   errors: string[] | null;
 }
 
-export type DeckStatus =
-  | { messages: string[]; tone: "ok" | "ng" | "" }
-  | { official: OfficialImport };
+export interface DeckMessage {
+  messages: string[];
+  tone: "ok" | "ng" | "";
+  /**
+   * 検査の結果なら、確かめたデッキ。組み替わったら出さない。別のタブで組み替えることもあり、
+   * 返事を待つあいだに組み替えることもある。
+   */
+  deck?: string | null;
+}
 
-export const NO_DECK_STATUS: DeckStatus = { messages: [], tone: "" };
+export type DeckStatus = DeckMessage | { official: OfficialImport };
+
+export const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "" };
 
 /**
  * デッキを組む。組んだデッキはこのブラウザに残り、対戦に入るときはそれを出す。
@@ -76,7 +84,7 @@ export function DeckBuilder({
   onStatus: Dispatch<SetStateAction<DeckStatus>>;
   actions: ReactNode;
 }) {
-  const { table, images } = useCardData();
+  const { table } = useCardData();
   const deckJson = useSyncExternalStore(subscribeDeck, storedDeckJson);
   const entries = useMemo(() => parseDeck(deckJson), [deckJson]);
   const [query, setQuery] = useState("");
@@ -113,14 +121,15 @@ export function DeckBuilder({
       onStatus({ messages: ["デッキにカードがありません。"], tone: "ng" });
       return;
     }
+    const deck = storedDeckJson();
     const outcome = await postJson<{ ok: boolean; errors?: string[] }>(
       "/api/deck/validate",
       deckCards(entries),
     );
     onStatus(
       outcome.ok
-        ? { messages: [`デッキは ${deckSize(entries)} 枚で、規則を通ります。`], tone: "ok" }
-        : { messages: outcome.errors ?? ["デッキが通りませんでした。"], tone: "ng" },
+        ? { messages: [`デッキは ${deckSize(entries)} 枚で、規則を通ります。`], tone: "ok", deck }
+        : { messages: outcome.errors ?? ["デッキが通りませんでした。"], tone: "ng", deck },
     );
   };
 
@@ -196,6 +205,7 @@ export function DeckBuilder({
    * 枚数を左右にどう分けるかはデッキコードからは分からない。
    */
   const pick = async (current: OfficialImport, group: number, defId: string) => {
+    if (current.pending[group]?.left === 0) return;
     if (current.deck !== storedDeckJson()) {
       onStatus({
         messages: ["デッキが変わっています。もう一度デッキコードを読み込んでください。"],
@@ -239,7 +249,7 @@ export function DeckBuilder({
   };
 
   const total = deckSize(entries);
-  const shown = "official" in status ? officialView(status.official, total) : status;
+  const shown = shownStatus(status, deckJson, total);
   const words = searchWords(query);
 
   return (
@@ -283,7 +293,7 @@ export function DeckBuilder({
         {found.slice(0, SEARCH_LIMIT).map(({ defId }) => {
           const inDeck = entries.find((entry) => entry.defId === defId)?.count ?? 0;
           return (
-            <CardRow key={defId} defId={defId} table={table} images={images}>
+            <CardRow key={defId} defId={defId} table={table}>
               <span className="card-count">{inDeck === 0 ? "" : `${inDeck} 枚`}</span>
               <button
                 type="button"
@@ -313,7 +323,7 @@ export function DeckBuilder({
           groupByKind(entries, table).map(({ kind, group }) => (
             <DeckGroup key={kind ?? ""} kind={kind} count={deckSize(group)}>
               {group.map(({ defId, count }) => (
-                <CardRow key={defId} defId={defId} table={table} images={images}>
+                <CardRow key={defId} defId={defId} table={table}>
                   <button
                     type="button"
                     className="secondary remove"
@@ -364,6 +374,7 @@ export function DeckBuilder({
           <p key={index}>{message}</p>
         ))}
         {"official" in status &&
+          status.official.deck === deckJson &&
           status.official.pending.map(
             (group, index) =>
               group.left > 0 && (
@@ -394,19 +405,16 @@ export function DeckBuilder({
 function CardRow({
   defId,
   table,
-  images,
   children,
 }: {
   defId: string;
   table: CardTable;
-  images: boolean;
   children: ReactNode;
 }) {
   const card = table[defId];
   return (
     <div className="card-row" data-def-id={defId}>
-      {/* 画像が無いときの小さな面は名前も読めないので、画像を出すときだけ並べる。 */}
-      {imageUrl(images, card?.cardID) !== null && <CardFace defId={defId} thumb />}
+      <CardFace defId={defId} thumb />
       <span className="card-label">
         <strong>{card?.name ?? defId}</strong>{" "}
         <span className="card-detail">{describeCard(card)}</span>
@@ -447,11 +455,15 @@ function groupByKind(
     .filter(({ group }) => group.length > 0);
 }
 
-/** 読み込んだデッキの欄。選び終わるまでの検査の結果は、選ぶ前のデッキのものなので出さない。 */
-function officialView(
-  official: OfficialImport,
-  total: number,
-): { messages: string[]; tone: "ok" | "ng" | "" } {
+/** 欄に出すもの。検査の結果は、確かめたデッキがいまのデッキのときだけ出す。 */
+function shownStatus(status: DeckStatus, deck: string | null, total: number): DeckMessage {
+  if ("official" in status) {
+    return status.official.deck === deck ? officialView(status.official, total) : NO_DECK_STATUS;
+  }
+  return status.deck === undefined || status.deck === deck ? status : NO_DECK_STATUS;
+}
+
+function officialView(official: OfficialImport, total: number): DeckMessage {
   const open = official.pending.filter((group) => group.left > 0);
   const messages = [...official.missing];
   for (const group of open) {
@@ -464,8 +476,4 @@ function officialView(
   const ok = open.length === 0 && official.missing.length === 0 && official.errors?.length === 0;
   if (ok) messages.push(`デッキは ${total} 枚で、規則を通ります。`);
   return { messages, tone: ok ? "ok" : official.errors === null ? "" : "ng" };
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
