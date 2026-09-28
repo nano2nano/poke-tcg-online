@@ -21,7 +21,6 @@ import {
   storedDeckJson,
   withShare,
   type BotList,
-  type ClaimOutcome,
   type DeckList,
   type DeckPreset,
   type JoinOutcome,
@@ -104,6 +103,7 @@ export function Lobby({
    * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
    * 相手さがしの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
    * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすので構わない。
+   * ただし席が決まったチケットは降ろさないので、押し直す前に前のチケットの席を一度取りに行く。
    */
   const [requesting, setRequesting] = useState(false);
   /** いま走っている頼み。終わったときに外すのは、自分が置いたものだけにする。 */
@@ -116,6 +116,8 @@ export function Lobby({
    * なので、デッキで断られたときなどに先に待ちをやめると、前のチケットがキューに残ったまま誰も席を取りに行かない。
    */
   const waitingFor = useRef<object | null>(null);
+  /** 待っているチケットと、そのチケットで出したシェア。 */
+  const waitingTicket = useRef<{ ticket: string; share: string | undefined } | null>(null);
   /** 画面を離れたら、相手を待つのをやめる。席はもう別の画面が持っている。 */
   const mounted = useRef(true);
   useEffect(() => {
@@ -192,6 +194,14 @@ export function Lobby({
     const share = await newSeedShare();
     const roomCode = room.trim();
     const request = await common(share);
+    const earlier = waitingTicket.current;
+    if (earlier !== null) {
+      const last = await claim(earlier.ticket);
+      if (last?.kind === "seated") {
+        waitingFor.current = null;
+        return onSeated(withShare(last.seat, earlier.share));
+      }
+    }
     const outcome = await postJson<JoinOutcome>("/api/join", {
       ...request,
       deck: { cards: deck.cards },
@@ -227,25 +237,22 @@ export function Lobby({
       if (current()) setStatus(text);
     };
     setWaiting(true);
+    waitingTicket.current = { ticket, share };
     try {
       while (current()) {
-        let claimed: ClaimOutcome | null = null;
-        let reached = false;
-        try {
-          claimed = await claim(ticket);
-          reached = true;
-          showWaiting("相手を待っています");
-        } catch {
-          /**
-           * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
-           * やめるとその対戦に座らないまま時間切れで負ける。チケットは何度でも使える。
-           */
-          showWaiting("相手を待っています（つながりが悪いので取り直しています）");
-        }
+        const claimed = await claim(ticket);
+        /**
+         * **1 度取りに行けなかっただけで待つのをやめない。** 席はもう取れているかもしれず、
+         * やめるとその対戦に座らないまま時間切れで負ける。チケットは何度でも使える。
+         */
+        showWaiting(
+          claimed === null
+            ? "相手を待っています（つながりが悪いので取り直しています）"
+            : "相手を待っています",
+        );
         if (!current()) return;
-        // 取りに行けなかったときは、答えが無いまま待ち直す。
-        if (reached) {
-          switch (claimed?.kind) {
+        if (claimed !== null) {
+          switch (claimed.kind) {
             case "seated":
               return onSeated(withShare(claimed.seat, share));
             case "finished":
@@ -277,6 +284,7 @@ export function Lobby({
     } finally {
       if (waitingFor.current === mine) {
         waitingFor.current = null;
+        waitingTicket.current = null;
         if (mounted.current) setWaiting(false);
       }
     }
@@ -305,6 +313,7 @@ export function Lobby({
     });
     // 終わっていない AI との対戦があれば、サーバがその席を返す。この画面が席を失っていても、そこへ戻る。
     if (!outcome.ok && outcome.code === "bot-match-live" && outcome.seat !== undefined) {
+      if (!mounted.current) return;
       return onSeated(withShare(outcome.seat, shareFor(outcome.seat, earlier)));
     }
     if (!outcome.ok) {

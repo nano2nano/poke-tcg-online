@@ -98,6 +98,25 @@ export interface BotList {
   decks: DeckPreset[];
 }
 
-export function claim(ticket: string): Promise<ClaimOutcome> {
-  return getJson<ClaimOutcome>(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
+/** サーバが答えたのに読めなかった。入れ替えのあとの古いタブが、新しいサーバに尋ねたときに起きる。 */
+export interface Unreadable {
+  kind: "unreadable";
+}
+
+/**
+ * 席を取りに行く。届かなかったときと、サーバが 5xx を返したときは null で、取り直せばよい。
+ * それ以外で読めない答えは `unreadable` にする。取り直しても同じ答えが返るので、待つのをやめる。
+ */
+export async function claim(ticket: string): Promise<ClaimOutcome | Unreadable | null> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
+  } catch {
+    return null;
+  }
+  if (response.status >= 500) return null;
+  const answer = response.ok
+    ? ((await response.json().catch(() => null)) as ClaimOutcome | null)
+    : null;
+  return answer ?? { kind: "unreadable" };
 }

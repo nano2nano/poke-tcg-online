@@ -135,3 +135,44 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   await claimed();
   expect(await status.textContent()).toContain("断った");
 });
+
+test("押し直す前に前のチケットで席が決まっていたら、その席に着いて頼み直さない", async ({
+  page,
+}) => {
+  // 待つあいだの取り直しを止め、押し直すときの 1 回だけが席を取りに行くようにする。
+  await page.clock.install();
+  let seated = false;
+  await page.route("**/api/claim?**", (route) =>
+    route.fulfill({
+      json: seated
+        ? {
+            kind: "seated",
+            seat: {
+              matchId: "決まった対戦",
+              seat: 0,
+              seatToken: "決まった座席",
+              seedCommit: "",
+              seedShareCommits: [null, null],
+            },
+          }
+        : { kind: "waiting" },
+    }),
+  );
+  const joins: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/join")) joins.push(request.url());
+  });
+
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#room", `きまっていた-${Date.now()}`);
+  const first = page.waitForResponse((response) => response.url().includes("/api/claim?"));
+  await page.click("#join-button");
+  await first;
+
+  // サーバは席が決まったチケットを降ろさないので、頼み直すと 2 局を抱える。
+  seated = true;
+  const opened = page.waitForEvent("websocket");
+  await page.click("#join-button");
+  expect(new URL((await opened).url()).searchParams.get("seatToken")).toBe("決まった座席");
+  expect(joins).toHaveLength(1);
+});

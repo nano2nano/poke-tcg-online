@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shareFor, storedDeck, type Seated } from "./join.js";
+import { claim, shareFor, storedDeck, type Seated } from "./join.js";
 import { rememberSeat } from "./seat.js";
 
 let items: Map<string, string>;
@@ -64,5 +64,29 @@ describe("shareFor", () => {
   it("別の座席を覚えていても、そのシェアは使わない", () => {
     rememberSeat({ ...seated, seatToken: "別の座席", seedShare: "別のシェア" });
     expect(shareFor(seated, null)).toBeUndefined();
+  });
+});
+
+describe("claim", () => {
+  const answer = (respond: () => Promise<Response>) =>
+    vi.stubGlobal("fetch", vi.fn<() => Promise<Response>>(respond));
+
+  it("届かなかったときと 5xx は、取り直せばよいので null", async () => {
+    answer(() => Promise.reject(new TypeError("Failed to fetch")));
+    expect(await claim("チケット")).toBeNull();
+    answer(async () => new Response("", { status: 503 }));
+    expect(await claim("チケット")).toBeNull();
+  });
+
+  it("サーバが答えたのに読めなければ、取り直しても同じなので unreadable", async () => {
+    answer(async () => new Response("Not Found", { status: 404 }));
+    expect(await claim("チケット")).toEqual({ kind: "unreadable" });
+    answer(async () => new Response("<!doctype html>", { status: 200 }));
+    expect(await claim("チケット")).toEqual({ kind: "unreadable" });
+  });
+
+  it("読めた答えはそのまま返す", async () => {
+    answer(async () => Response.json({ kind: "waiting" }));
+    expect(await claim("チケット")).toEqual({ kind: "waiting" });
   });
 });

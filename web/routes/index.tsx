@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { z } from "zod";
 import { Lobby } from "../components/lobby.js";
+import { refreshAccount } from "../lib/account.js";
 import { SeatTable } from "../components/seat-table.js";
 import { WatchTable } from "../components/watch-table.js";
 import { rememberSeat, storedSeat, type StoredSeat } from "../lib/seat.js";
@@ -27,6 +29,7 @@ function Home() {
  * 取りに行っているあいだに手番が終わる。
  */
 function Seat() {
+  const queryClient = useQueryClient();
   const [seated, setSeated] = useState<StoredSeat | null>(storedSeat);
   const [status, setStatus] = useState("");
   /** 離れたあとも覚えている座席。繋がらなかっただけなら、まだ指していた対戦が続いている。 */
@@ -36,10 +39,12 @@ function Seat() {
       // 別のタブが置いた座席へは戻らせない。こちらで繋ぐと、そのタブの接続を追い出す。
       const stored = storedSeat();
       setRemembered(stored?.seatToken === seated?.seatToken ? stored : null);
+      // 離れているあいだに決着していれば、レーティングが動いている。
+      refreshAccount(queryClient).catch(() => {});
       setSeated(null);
       setStatus(reason);
     },
-    [seated],
+    [seated, queryClient],
   );
   const sit = useCallback((next: StoredSeat) => {
     rememberSeat(next);

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadAccount } from "./account.js";
+import { QueryClient } from "@tanstack/react-query";
+import { accountKey, accountQuery, loadAccount } from "./account.js";
 
 let items: Map<string, string>;
 const created = { secret: "新しいシークレット", account: { displayName: "ななし" } };
@@ -18,7 +19,7 @@ afterEach(() => {
 
 /** `/api/account/me` には `me` を返し、`/api/account` にはプレイヤーを作った答えを返す。 */
 function answer(me: Response) {
-  const fetch = vi.fn<(url: string) => Promise<Response>>(async (url) =>
+  const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async (url) =>
     url === "/api/account/me" ? me : Response.json(created),
   );
   vi.stubGlobal("fetch", fetch);
@@ -30,6 +31,18 @@ describe("loadAccount", () => {
     answer(Response.json({ error: "いない", code: "account-not-found" }, { status: 404 }));
     await loadAccount("ななし");
     expect(items.get("poke-account-secret")).toBe("新しいシークレット");
+  });
+
+  it("作り直すときは、サーバが忘れたプレイヤーの名前を引き継ぐ", async () => {
+    const fetch = answer(
+      Response.json({ error: "いない", code: "account-not-found" }, { status: 404 }),
+    );
+    const client = new QueryClient();
+    client.setQueryData(accountKey, { displayName: "たろう" });
+    await client.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
+    await client.fetchQuery(accountQuery());
+    const [, init] = fetch.mock.calls.find(([url]) => url === "/api/account") ?? [];
+    expect(JSON.parse(init?.body as string)).toEqual({ displayName: "たろう" });
   });
 
   it("合図の無い 404 では、シークレットを消さずに投げる", async () => {
