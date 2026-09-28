@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { CardBrief } from "../../src/card-index.js";
+import { getJson } from "./api.js";
 
 export type { CardBrief };
 export type CardTable = Readonly<Record<string, CardBrief>>;
@@ -34,12 +35,6 @@ export function CardDataProvider({ children }: { children: ReactNode }) {
 
 export function useCardData(): CardData {
   return useContext(CardDataContext);
-}
-
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`${path} が ${response.status} を返した`);
-  return (await response.json()) as T;
 }
 
 /** 取れるまで間を空けて取り直す。取れないと、盤面にカードの名前が出ない。 */

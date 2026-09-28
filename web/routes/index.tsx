@@ -1,9 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { z } from "zod";
+import { Lobby } from "../components/lobby.js";
+import { refreshAccount } from "../lib/account.js";
 import { SeatTable } from "../components/seat-table.js";
 import { WatchTable } from "../components/watch-table.js";
-import { storedSeat, type StoredSeat } from "../lib/seat.js";
+import { rememberSeat, storedSeat, type StoredSeat } from "../lib/seat.js";
 
 const search = z.object({
   /** 観戦のリンクが運ぶ観戦トークン。 */
@@ -26,22 +29,44 @@ function Home() {
  * 取りに行っているあいだに手番が終わる。
  */
 function Seat() {
+  const queryClient = useQueryClient();
   const [seated, setSeated] = useState<StoredSeat | null>(storedSeat);
   const [status, setStatus] = useState("");
-  const leave = useCallback((reason: string) => {
-    setSeated(null);
-    setStatus(reason);
+  /** 離れたあとも覚えている座席。繋がらなかっただけなら、まだ指していた対戦が続いている。 */
+  const [remembered, setRemembered] = useState<StoredSeat | null>(null);
+  const leave = useCallback(
+    (reason: string, resumable: boolean) => {
+      // 戻す先は離れた座席である。覚えている座席は別のタブが置き換えていることがあり、そこへ繋ぐと
+      // そのタブの接続を追い出す。
+      setRemembered(resumable ? seated : null);
+      // 離れているあいだに決着していれば、レーティングが動いている。
+      refreshAccount(queryClient).catch(() => {});
+      setSeated(null);
+      setStatus(reason);
+    },
+    [seated, queryClient],
+  );
+  const sit = useCallback((next: StoredSeat) => {
+    rememberSeat(next);
+    setSeated(next);
+    setStatus("");
+  }, []);
+  /** 覚え直さない。離れてから別のタブが新しい対戦の座席を置いていれば、そちらを残す。 */
+  const resume = useCallback((back: StoredSeat) => {
+    setSeated(back);
+    setStatus("");
   }, []);
   if (seated !== null) return <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />;
   return (
-    <main id="next-home">
-      <h1>ポケカ オンライン対戦</h1>
-      <p>
-        新しい画面を作っているところです。対戦は <a href="/">いまの画面</a> からできます。
-      </p>
-      <p>
-        <output id="join-status">{status}</output>
-      </p>
-    </main>
+    <>
+      <header id="next-home">
+        <h1>ポケカ オンライン対戦</h1>
+        <p className="note">
+          新しい画面を作っているところです。デッキを組む画面と、リプレイと戦績は{" "}
+          <a href="/">いまの画面</a> にあります。
+        </p>
+      </header>
+      <Lobby status={status} remembered={remembered} onSeated={sit} onResume={resume} />
+    </>
   );
 }

@@ -155,6 +155,66 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
   await expect(page.locator("#name")).toHaveValue("ぼくのなまえ");
 });
 
+test("押してから送るまでのあいだに直した名前とルームコードも送る", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/sample-deck", async (route) => {
+    await held;
+    await route.continue();
+  });
+
+  await page.goto("./");
+  const room = `うちたし-${Date.now()}`;
+  await page.fill("#name", "たろ");
+  await page.fill("#room", `${room}-まちがい`);
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await page.fill("#name", "たろう");
+  await page.fill("#room", room);
+  release();
+
+  expect((await sent).postDataJSON()).toMatchObject({ displayName: "たろう", roomCode: room });
+});
+
+test("相手を待つあいだに知らない形の答えが届いたら、待つのをやめる", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let asked = (): void => {};
+  const claiming = new Promise<void>((resolve) => {
+    asked = resolve;
+  });
+  /**
+   * 1 度目は待っていると答え、2 度目は入れ替えのあとの古いタブが新しいサーバの答えを受け取ったときの形で答える。
+   * 2 度目を頼むのは 1 度目の答えを出したあとなので、そのとき出ているのが待っている一言である。
+   */
+  let claims = 0;
+  await page.route("**/api/claim?**", async (route) => {
+    claims += 1;
+    if (claims !== 2) return route.fulfill({ json: { kind: "waiting" } });
+    asked();
+    await held;
+    await route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto("./");
+  await join(page, `しらない-${Date.now()}`);
+  await claiming;
+  const status = page.locator("#join-status");
+  const waiting = await status.textContent();
+  expect(waiting).not.toBe("");
+  release();
+
+  // 待ち続けるなら、出ているのは待っている一言のままである。
+  await expect(status).not.toHaveText(waiting ?? "");
+  // 表示だけ変えて取りに行き続けてもいない。取りに行く間隔より長く待って数える。
+  await page.waitForTimeout(2_500);
+  expect(claims).toBe(2);
+});
+
 test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {
   const room = `あいことば-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
