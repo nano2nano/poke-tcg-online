@@ -17,15 +17,17 @@ import { SideBoard, Stadium } from "./board.js";
  */
 export function History() {
   const queryClient = useQueryClient();
+  // 取りには行かず、いまのプレイヤーを読むだけ。取りに行くのは一覧を出すときとロビーである。
+  const account = useQuery({ ...accountQuery(), enabled: false });
   const matches = useQuery({
     queryKey: ["matches"],
     queryFn: async () => {
       // 初めて来た人はシークレットをまだ持たない。待たずに送ると、アカウントが見つからないと断られる。
-      await queryClient.fetchQuery(accountQuery());
+      const { playerId } = await queryClient.fetchQuery(accountQuery());
       const { matches: list } = await postJson<{ matches: MatchSummary[] }>("/api/matches", {
         secret: storedSecret(),
       });
-      return list;
+      return { playerId, list };
     },
     // 押したときだけ取りに行く。決着した対戦は、押し直せば一覧に加わる。
     enabled: false,
@@ -37,6 +39,8 @@ export function History() {
   const opens = useRef(0);
   const openKey = useRef<number | null>(null);
   const [failure, setFailure] = useState("");
+  // サーバがプレイヤーを忘れて作り直したら、前のプレイヤーの一覧は新しいシークレットでは開けない。
+  const list = matches.data?.playerId === account.data?.playerId ? matches.data?.list : undefined;
 
   const open = (summary: MatchSummary) => {
     opens.current += 1;
@@ -79,8 +83,8 @@ export function History() {
             (matches.isError ? `一覧を出せませんでした: ${messageOf(matches.error)}` : "")}
         </p>
         <div id="history-list" className="history-list">
-          {matches.data?.length === 0 && "まだ読み返せる対戦がありません。"}
-          {matches.data?.map((summary) => (
+          {list?.length === 0 && "まだ読み返せる対戦がありません。"}
+          {list?.map((summary) => (
             <button key={summary.matchId} type="button" onClick={() => open(summary)}>
               {describeSummary(summary)}
             </button>
@@ -156,28 +160,43 @@ function Replay({
     // 数えるのは頼んだ手数からである。描けた手数から数えると、続けて押したぶんが
     // すべて同じ 1 手への問い合わせになり、押しただけ進まない。
     goTo(to(latest.current)).catch((error: unknown) => {
-      // 最初の局面より先に押したものが失敗したら、開けなかったのと同じで描くものが無い。
-      if (latest.current.frame === null) onOpenFailed(error);
-      else setFailure(`辿れませんでした: ${messageOf(error)}`);
+      setFailure(`辿れませんでした: ${messageOf(error)}`);
     });
   };
 
   const { frame, seat } = state;
   const board = frame === null ? null : readerView(frame.views, seat);
+  // 最初の局面が描けるまでは辿らせない。先に押したものが追い越すと、開けたかどうかが決まらない。
+  const waiting = frame === null;
   return (
     <section id="replay">
       <h2>リプレイ</h2>
       <div className="replay-controls">
-        <button id="replay-first" className="secondary" onClick={step(() => 0)}>
+        <button id="replay-first" className="secondary" disabled={waiting} onClick={step(() => 0)}>
           さいしょ
         </button>
-        <button id="replay-prev" className="secondary" onClick={step(({ wanted }) => wanted - 1)}>
+        <button
+          id="replay-prev"
+          className="secondary"
+          disabled={waiting}
+          onClick={step(({ wanted }) => wanted - 1)}
+        >
           ◀ 1 手
         </button>
-        <button id="replay-next" className="secondary" onClick={step(({ wanted }) => wanted + 1)}>
+        <button
+          id="replay-next"
+          className="secondary"
+          disabled={waiting}
+          onClick={step(({ wanted }) => wanted + 1)}
+        >
           1 手 ▶
         </button>
-        <button id="replay-last" className="secondary" onClick={step(({ moveCount }) => moveCount)}>
+        <button
+          id="replay-last"
+          className="secondary"
+          disabled={waiting}
+          onClick={step(({ moveCount }) => moveCount)}
+        >
           さいご
         </button>
         <button id="replay-close" className="secondary" onClick={onClose}>
@@ -185,7 +204,9 @@ function Replay({
         </button>
       </div>
       <p id="replay-status" className="note">
-        {failure || (frame === null ? "" : replayStatusText(frame, seat, table))}
+        {[frame === null ? "" : replayStatusText(frame, seat, table), failure]
+          .filter((line) => line !== "")
+          .join("　")}
       </p>
       <div className="board">
         <div className="board-side">

@@ -634,22 +634,52 @@ test("追い越された問い合わせの失敗は、描けた局面の見出�
   await expect(page.locator("#replay-status")).toContainText(atPly(2));
 });
 
-test("最初の局面が届く前に押した手数を取りに行けなかったら、開けなかったとして閉じる", async ({
-  page,
-}) => {
+test("最初の局面が描けるまでは、辿るボタンを押せない", async ({ page }) => {
   const [slow, release] = gate();
-  await mockHistory(page, async (_matchId, ply) => {
-    if (ply === 1) return "fail";
+  await mockHistory(page, async () => {
     await slow;
     return "ok";
   });
   await page.goto(`${BASEPATH}/`);
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
-  await page.click("#replay-next");
-  await expect(page.locator("#history-status")).toContainText("開けませんでした");
-  await expect(page.locator("#replay")).toHaveCount(0);
+  await expect(page.locator("#replay-next")).toBeDisabled();
   release();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await expect(page.locator("#replay-next")).toBeEnabled();
+});
+
+test("辿れなかったときも、描けている局面の手数を出したままにする", async ({ page }) => {
+  await mockHistory(page, async (_matchId, ply) => (ply === 1 ? "fail" : "ok"));
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText("辿れませんでした");
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+});
+
+test("サーバがプレイヤーを忘れて作り直したら、前のプレイヤーの一覧を出さない", async ({ page }) => {
+  await mockHistory(page, async () => "ok");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-list button")).toHaveCount(2);
+
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
+  );
+  await page.route("**/api/account/me", (route) =>
+    route.fulfill({ status: 404, json: { error: "いない", code: "account-not-found" } }),
+  );
+  // 1 度目で断られ、2 度目の前にプレイヤーを作り直す。
+  for (let round = 0; round < 2; round += 1) {
+    const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+    await page.click("#join-button");
+    await joined;
+    await expect(page.locator("#join-button")).toBeEnabled();
+  }
+  await expect(page.locator("#history-list button")).toHaveCount(0);
 });
 
 test("一覧を取り直せなかったあとに開けなかったら、開けなかった理由を出す", async ({ page }) => {
