@@ -276,7 +276,8 @@ test("確かめる返事を待つあいだに組み替えたら、その返事�
   await expect(page.locator("#deck-status")).not.toContainText("規則を通ります");
 });
 
-test("公式のデッキコードで選んでいる途中に対戦をさがしても、選ぶ欄を残す", async ({ page }) => {
+/** 公式のカード ID のうち、このサーバで複数のカードに当たるもの。読み込むと、どれかを選ぶ欄が出る。 */
+function sharedCardId(): string {
   const byCardId = new Map<string, string[]>();
   for (const def of loadGeneratedCards()) {
     for (const print of def.prints) {
@@ -284,6 +285,11 @@ test("公式のデッキコードで選んでいる途中に対戦をさがし�
     }
   }
   const [cardId] = [...byCardId].find(([, defIds]) => defIds.length > 1) as [string, string[]];
+  return cardId;
+}
+
+test("公式のデッキコードで選んでいる途中に対戦をさがしても、選ぶ欄を残す", async ({ page }) => {
+  const cardId = sharedCardId();
   await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
     route.fulfill({
       contentType: "text/html; charset=UTF-8",
@@ -304,8 +310,63 @@ test("公式のデッキコードで選んでいる途中に対戦をさがし�
   await page.click("#join-button");
   await joined;
   await expect(page.locator("#join-status")).toContainText("デッキを直して");
+  await expect(page.locator("#deck-status")).toContainText("あと 2 枚を選んでください");
   await choices.first().click();
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+});
+
+test("公式のデッキコードで選んでいる途中でも、別のタブで組み替えたら、対戦をさがして断られた理由を出す", async ({
+  page,
+}) => {
+  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${sharedCardId()}_2_1" /></form>`,
+    }),
+  );
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
+  );
+
+  await page.goto(`${BASEPATH}/`);
+  const defId = await addFirstSampleCard(page);
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.click("#deck-code-button");
+  await expect(page.locator("#deck-status .choices button").first()).toBeVisible();
+
+  const other = await page.context().newPage();
+  await other.goto(page.url());
+  await other.evaluate(
+    (card) => localStorage.setItem("poke-deck", JSON.stringify([{ defId: card, count: 1 }])),
+    defId,
+  );
+  await other.close();
+  await expect(page.locator("#deck-status .choices button")).toHaveCount(0);
+  await page.click("#join-button");
+  await expect(page.locator("#deck-status")).toContainText("デッキは 60 枚にしてください");
+});
+
+test("対戦をさがす返事を待つあいだに組み替えたら、断られた理由を出さない", async ({ page }) => {
+  let release = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } });
+  });
+
+  await page.goto(`${BASEPATH}/`);
+  await addFirstSampleCard(page);
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await page.locator("#deck-cards .card-row button.add").first().click();
+  release();
+  await joined;
+  await expect(page.locator("#join-status")).toContainText("デッキを直して");
+  await expect(page.locator("#deck-status")).not.toContainText("60 枚にしてください");
 });
 
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {

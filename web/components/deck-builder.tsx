@@ -55,6 +55,15 @@ interface OfficialImport {
   errors: string[] | null;
 }
 
+/** 公式のデッキコードで読み込んだカードを、いまのデッキでまだ選んでいる途中か。 */
+export function stillPicking(status: DeckStatus, deck: string | null): boolean {
+  return (
+    "official" in status &&
+    status.official.deck === deck &&
+    status.official.pending.some((group) => group.left > 0)
+  );
+}
+
 export interface DeckMessage {
   messages: string[];
   tone: "ok" | "ng" | "";
