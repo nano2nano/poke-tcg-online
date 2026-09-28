@@ -36,7 +36,7 @@ import {
   type PlayerView,
 } from "../src/engine.js";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
-import { BOT_MATCH_LIVE, Lobby } from "../src/lobby.js";
+import { BOT_MATCH_LIVE, Lobby, MATCH_LIVE } from "../src/lobby.js";
 import type { MatchRecord } from "../src/log.js";
 import {
   botCandidates,
@@ -594,6 +594,53 @@ describe("AI の座席を開く", () => {
     const [match] = arena.registry.live();
     match!.result = { kind: "concede", winner: 1, conceded: 0 };
     expect(join().ok).toBe(true);
+  });
+  it("人との対戦が続いているあいだは AI との対戦を始めず、その席を返す", async () => {
+    ensureCards();
+    const arena = newArena();
+    const { account, secret } = await arena.accounts.create("ひと", 0);
+    const deck = presetDeck("doraparuto")!;
+    arena.lobby.join({ secret, deck, roomCode: "へや" }, account);
+    const other = await arena.accounts.create("あいて", 0);
+    arena.lobby.join({ secret: other.secret, deck, roomCode: "へや" }, other.account);
+    const [match] = arena.registry.live();
+    if (match === undefined) throw new Error("対戦が始まっていない");
+
+    expect(arena.lobby.refuseBot({ secret, deck }, account, presetDeck("fudin")!)).toMatchObject({
+      ok: false,
+      code: MATCH_LIVE,
+      seat: { matchId: match.matchId, seat: 0, seatToken: match.seatTokens[0] },
+    });
+  });
+
+  it("重みを読んでいるあいだは、同じ人の相手さがしも断る", async () => {
+    ensureCards();
+    const arena = newArena();
+    const { account, secret } = await arena.accounts.create("ひと", 0);
+    arena.lobby.holdBotJoin(account.playerId);
+
+    const refused = arena.lobby.join({ secret, deck: presetDeck("doraparuto")! }, account);
+
+    expect(refused).toMatchObject({ ok: false, code: BOT_MATCH_LIVE });
+    expect(arena.lobby.waitingCount()).toBe(0);
+  });
+
+  it("AI との対戦が続いているあいだは、人との対戦も始めずその席を返す", async () => {
+    ensureCards();
+    const arena = newArena();
+    const bot = botFromBytes("g0", generationZero());
+    const { account, secret } = await arena.accounts.create("ひと", 0);
+    const deck = presetDeck("doraparuto")!;
+    const first = arena.lobby.joinBot({ secret, deck }, account, bot, presetDeck("fudin")!);
+    if (!first.ok || !("seat" in first)) throw new Error("AI と対戦できなかった");
+
+    expect(arena.lobby.join({ secret, deck }, account)).toEqual({
+      ok: false,
+      code: BOT_MATCH_LIVE,
+      errors: ["終わっていない AI との対戦がある。"],
+      seat: first.seat,
+    });
+    expect(arena.lobby.waitingCount()).toBe(0);
   });
 });
 

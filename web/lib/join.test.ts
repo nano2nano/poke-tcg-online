@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { claim, shareFor, storedDeck, type Seated } from "./join.js";
+import { claim, liveSeatOf, shareFor, storedDeck, type Seated } from "./join.js";
 import { rememberSeat } from "./seat.js";
 
 let items: Map<string, string>;
@@ -52,18 +52,43 @@ describe("shareFor", () => {
 
   it("覚えている座席が同じなら、そのシェアを使う", () => {
     rememberSeat({ ...seated, seedShare: "覚えていたシェア" });
-    expect(shareFor(seated, null)).toBe("覚えていたシェア");
+    expect(shareFor(seated, [])).toBe("覚えていたシェア");
   });
 
-  it("前に頼んだときのシェアは、この席のコミットに合うときだけ使う", () => {
-    expect(shareFor(seated, { share: "前のシェア", commit: "自分のコミット" })).toBe("前のシェア");
+  it("前に頼んだときのシェアは、この席のコミットに合うものだけ使う", () => {
+    const mine = { share: "前のシェア", commit: "自分のコミット" };
+    const other = { share: "その前のシェア", commit: "別のコミット" };
+    expect(shareFor(seated, [other, mine])).toBe("前のシェア");
     // 相手の席のコミットに合っても、自分のシェアではない。
-    expect(shareFor(seated, { share: "前のシェア", commit: "相手のコミット" })).toBeUndefined();
+    expect(shareFor(seated, [{ share: "前のシェア", commit: "相手のコミット" }])).toBeUndefined();
   });
 
   it("別の座席を覚えていても、そのシェアは使わない", () => {
     rememberSeat({ ...seated, seatToken: "別の座席", seedShare: "別のシェア" });
-    expect(shareFor(seated, null)).toBeUndefined();
+    expect(shareFor(seated, [])).toBeUndefined();
+  });
+});
+
+describe("liveSeatOf", () => {
+  const seat: Seated = {
+    matchId: "対戦",
+    seat: 0,
+    seatToken: "座席",
+    seedCommit: "サーバのコミット",
+    seedShareCommits: [null, null],
+  };
+
+  it("人との対戦でも AI との対戦でも、続いている対戦の席を返す", () => {
+    for (const code of ["match-live", "bot-match-live"]) {
+      expect(liveSeatOf({ ok: false, code, errors: [], seat })).toBe(seat);
+    }
+  });
+
+  it("ほかの理由で断ったときと、席の無い断りは null", () => {
+    expect(liveSeatOf({ ok: false, code: "account-not-found", errors: [], seat })).toBeNull();
+    // AI の重みを読んでいる途中は、まだ席が無い。
+    expect(liveSeatOf({ ok: false, code: "bot-match-live", errors: [] })).toBeNull();
+    expect(liveSeatOf({ ok: true, ticket: "チケット", seat })).toBeNull();
   });
 });
 

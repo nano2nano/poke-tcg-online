@@ -410,7 +410,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const refusal = lobby.refuseBot(joining, known, botDeck);
     if (refusal !== null || known === null) return json(400, refusal);
     if (bots === null) return json(400, { ok: false, errors: ["AI の重みの保存先が無い"] });
-    // 読み込みを待つあいだ、同じ人の次の要求は `refuseBot` が断る。
+    // 読み込みを待つあいだ、同じ人の次の要求はロビーが断る。
     lobby.holdBotJoin(known.playerId);
     let loaded: BotLoad;
     try {

@@ -14,7 +14,7 @@ import { useCardData } from "../lib/cards.js";
 import {
   claim,
   builtDeck,
-  deckToSubmit,
+  liveSeatOf,
   newSeedShare,
   parseDeck,
   shareFor,
@@ -34,6 +34,9 @@ interface DeckStatus {
 }
 
 const NO_DECK_STATUS: DeckStatus = { messages: [], tone: "" };
+
+/** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
+const SHARES_KEPT = 8;
 
 /**
  * 対戦に入る画面。席が決まったら `onSeated` へ渡す。
@@ -100,11 +103,9 @@ export function Lobby({
   /**
    * サーバへリクエストを送っているあいだは、次のリクエストを送らせない。
    *
-   * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
-   * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
-   * 相手さがしの押し直しも同じで、先のリクエストで席が決まると、あとのリクエストがキューに残る。
-   * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすので構わない。
-   * ただし席が決まったチケットは降ろさないので、押し直す前に前のチケットの席を一度取りに行く。
+   * **2 つを重ねない。** 返事は送った順に届くとは限らない。あとのリクエストが前のチケットを降ろしたのに、
+   * 先のリクエストの返事があとに届くと、画面は降りたチケットを待ち、あとのチケットは誰も取りに行かない席になる。
+   * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすか、決まった席を返すので構わない。
    */
   const [requesting, setRequesting] = useState(false);
   /** いま走っているリクエスト。終わったときに外すのは、自分が置いたものだけにする。 */
@@ -117,8 +118,6 @@ export function Lobby({
    * なので、デッキで断られたときなどに先にポーリングをやめると、前のチケットがキューに残ったまま誰も席を取りに行かない。
    */
   const waitingFor = useRef<object | null>(null);
-  /** 待っているチケットと、そのチケットで出したシェア。 */
-  const waitingTicket = useRef<{ ticket: string; share: string | undefined } | null>(null);
   /** 画面を離れたら、相手を待つのをやめる。席はもう別の画面が持っている。 */
   const mounted = useRef(true);
   useEffect(() => {
@@ -128,10 +127,12 @@ export function Lobby({
     };
   }, []);
   /**
-   * AI との対戦を頼んだときのシェア。返事が届かずに押し直したとき、サーバは続いている対戦の席を返すが、
-   * その席のシェアはこの画面が作ったものである。覚えていないと、シェアを開けないまま入り直すことになる。
+   * サーバに届いたかもしれないリクエストのシェア。新しい順。返事が届かずに押し直すと、サーバは続いている対戦の席を
+   * 返すが、その席のシェアはこの画面が作ったものである。覚えていないと、シェアを開けないまま入り直すことになる。
+   *
+   * 最後の 1 つだけでは足りない。待っているチケットの席が決まる前に、次のリクエストが届かずに失敗することがある。
    */
-  const botShare = useRef<SeedShare | null>(null);
+  const sentShares = useRef<SeedShare[]>([]);
 
   const run = (task: (mine: object) => Promise<void>) => {
     const mine = {};
@@ -169,55 +170,62 @@ export function Lobby({
     if (request.displayName !== undefined) refreshAccount(queryClient).catch(() => {});
   };
 
-  /** 送るデッキ。規則に通らなければ、理由を出して null。 */
-  const deckOrExplain = async (): Promise<DeckList | null> => {
-    const outcome = await deckToSubmit();
-    if (!outcome.ok) {
-      setDeckStatus({ messages: outcome.errors, tone: "ng" });
-      setStatus("デッキを直してから、もう一度おしてください。");
-      return null;
-    }
-    setDeckStatus(
-      outcome.sample ? { messages: ["サンプルデッキで対戦します。"], tone: "ok" } : NO_DECK_STATUS,
-    );
-    return outcome.deck;
-  };
-
   const common = async (share: SeedShare | null) => ({
     secret: await secretOf(ensureAccount),
     ...(share === null ? {} : { seedShareCommit: share.commit }),
     ...(typedNow.current === null ? {} : { displayName: nameOrDefault(typedNow.current) }),
   });
 
+  /**
+   * 頼む。終わっていない対戦があればサーバがその席を返すので、この画面が席を失っていても、そこへ戻って null を返す。
+   * 画面を離れていれば、送らずに null を返す。席はもう別の画面が持っている。
+   */
+  const send = async (
+    path: string,
+    request: { displayName?: string; [field: string]: unknown },
+    share: SeedShare | null,
+  ): Promise<JoinOutcome | null> => {
+    if (!mounted.current) return null;
+    if (share !== null) sentShares.current = [share, ...sentShares.current].slice(0, SHARES_KEPT);
+    const outcome = await postJson<JoinOutcome>(path, request);
+    const live = liveSeatOf(outcome);
+    if (live !== null) {
+      if (mounted.current) onSeated(withShare(live, shareFor(live, sentShares.current)));
+      return null;
+    }
+    if (!outcome.ok) {
+      // 断られたリクエストは対戦を作っていない。
+      sentShares.current = sentShares.current.filter((sent) => sent !== share);
+      return outcome;
+    }
+    accepted(request);
+    return outcome;
+  };
+
   const join = async (mine: object) => {
     setStatus("デッキを送っています");
-    const deck = await deckOrExplain();
-    if (deck === null) return;
+    // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
+    const { deck, sample } = await builtDeck();
+    setDeckStatus(
+      sample ? { messages: ["サンプルデッキで対戦します。"], tone: "ok" } : NO_DECK_STATUS,
+    );
     const share = await newSeedShare();
     const request = await common(share);
-    const earlier = waitingTicket.current;
-    const last = earlier === null ? null : await claim(earlier.ticket);
-    // 用意しているあいだに、ポーリングが前のチケットの席を取って座席の画面へ移っていることがある。
-    // ここで送ると、誰も取りに行かないチケットがキューに残る。
-    if (!mounted.current) return;
-    if (earlier !== null && last?.kind === "seated") {
-      waitingFor.current = null;
-      waitingTicket.current = null;
-      return onSeated(withShare(last.seat, earlier.share));
-    }
     const roomCode = roomNow.current.trim();
-    const outcome = await postJson<JoinOutcome>("/api/join", {
-      ...request,
-      deck: { cards: deck.cards },
-      ...(roomCode === "" ? {} : { roomCode }),
-    });
-    if (!outcome.ok) return refused(outcome);
-    accepted(request);
-    /**
-     * 待っているあいだに押し直すと、返事を待つあいだに前のチケットで席が決まって座席の画面へ移っていることがある。
-     * そのときは開いている対戦を残し、このリクエストの答えは使わない。どちらを選んでも 1 局は時間切れになる。
-     */
-    if (!mounted.current) return;
+    const outcome = await send(
+      "/api/join",
+      { ...request, deck: { cards: deck.cards }, ...(roomCode === "" ? {} : { roomCode }) },
+      share,
+    );
+    // 画面を離れていたら、この答えは使わない。キューに残ったチケットは、次に頼んだときにサーバが降ろすか、その席を返す。
+    if (outcome === null || !mounted.current) return;
+    if (!outcome.ok) {
+      if (outcome.code !== undefined) return refused(outcome);
+      // `code` の無い断りは、デッキの違反である。
+      setDeckStatus({ messages: outcome.errors, tone: "ng" });
+      setStatus("デッキを直してから、もう一度おしてください。");
+      return;
+    }
     // 前のチケットはサーバが降ろした。前のポーリングの答えで、このリクエストの表示を上書きさせない。
     waitingFor.current = mine;
     if ("seat" in outcome) return onSeated(withShare(outcome.seat, share?.share));
@@ -241,7 +249,6 @@ export function Lobby({
       if (current()) setStatus(text);
     };
     setWaiting(true);
-    waitingTicket.current = { ticket, share };
     try {
       while (current()) {
         const claimed = await claim(ticket);
@@ -288,7 +295,6 @@ export function Lobby({
     } finally {
       if (waitingFor.current === mine) {
         waitingFor.current = null;
-        waitingTicket.current = null;
         if (mounted.current) setWaiting(false);
       }
     }
@@ -305,27 +311,14 @@ export function Lobby({
       deck = { deckPreset: chosenOwnDeck };
     }
     const share = await newSeedShare();
-    // 頼む前に失敗したら、前に頼んだときのシェアを残す。そちらのリクエストはサーバに届いているかもしれない。
     const request = await common(share);
-    const earlier = botShare.current;
-    botShare.current = share;
-    const outcome = await postJson<JoinOutcome>("/api/join-bot", {
-      ...request,
-      bot: chosenBot,
-      botDeck: chosenBotDeck,
-      ...deck,
-    });
-    // 終わっていない AI との対戦があれば、サーバがその席を返す。この画面が席を失っていても、そこへ戻る。
-    if (!outcome.ok && outcome.code === "bot-match-live" && outcome.seat !== undefined) {
-      if (!mounted.current) return;
-      return onSeated(withShare(outcome.seat, shareFor(outcome.seat, earlier)));
-    }
-    if (!outcome.ok) {
-      // 断られたリクエストは対戦を作っていない。用意している途中の対戦のシェアは、前のものである。
-      botShare.current = earlier;
-      return refused(outcome);
-    }
-    accepted(request);
+    const outcome = await send(
+      "/api/join-bot",
+      { ...request, bot: chosenBot, botDeck: chosenBotDeck, ...deck },
+      share,
+    );
+    if (outcome === null) return;
+    if (!outcome.ok) return refused(outcome);
     // 画面を離れていたら座席を覚えない。AI との対戦は、次に頼んだときにサーバがその席を返す。
     if (mounted.current && "seat" in outcome) onSeated(withShare(outcome.seat, share?.share));
   };

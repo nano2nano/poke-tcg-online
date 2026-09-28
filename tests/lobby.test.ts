@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { D1Database } from "@cloudflare/workers-types/index.ts";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
-import { Lobby, type JoinOutcome, type JoinRequest } from "../src/lobby.js";
+import { Lobby, MATCH_LIVE, type JoinOutcome, type JoinRequest } from "../src/lobby.js";
 import { AccountStore } from "../src/accounts.js";
 import { MatchRegistry } from "../src/registry.js";
 import { SEAT_NOT_FOUND, SEAT_REPLACED, type ServerMessage } from "../src/protocol.js";
@@ -376,6 +376,98 @@ describe("席の引き換え", () => {
     expect(lobby.claim("知らないチケット-0").kind).toBe("unknown");
     // 本物の記録が押し出されていない。
     expect(lobby.claim(mine.ticket).kind).toBe("dropped");
+  });
+});
+
+/**
+ * 席が決まってから引き換えに来るまでのあいだに入り直すと、待っているチケットはもう無いので
+ * 降ろすものが無い。そのまま 2 局目を始めると、1 局目は座る人がいないまま時間切れの負けになり、
+ * 相手はそのあいだ待たされる。
+ */
+describe("続いている対戦", () => {
+  it("引き換える前に入り直しても 2 局目を始めず、その席を返す", async () => {
+    ensureCards();
+    const arena = newArena();
+    const { lobby, registry } = arena;
+    const deck = legalDecks()[0];
+    const { secret } = await arena.accounts.create("まつひと", 0);
+    const first = await join(arena, { secret, deck });
+    await join(arena, await player(arena, "あいて"));
+    if (!first.ok) throw new Error("入れていない");
+
+    const again = await join(arena, { secret, deck });
+
+    expect(again).toEqual({
+      ok: false,
+      code: MATCH_LIVE,
+      errors: ["終わっていない対戦がある。"],
+      seat: seatOf(lobby, first.ticket),
+    });
+    expect(registry.live()).toHaveLength(1);
+    expect(lobby.waitingCount()).toBe(0);
+  });
+
+  it("その場で席を受け取った側も、入り直せばその席を返す", async () => {
+    ensureCards();
+    const arena = newArena();
+    const deck = legalDecks()[0];
+    await join(arena, await player(arena, "さき", "へや"));
+    const { secret } = await arena.accounts.create("あと", 0);
+    const second = await join(arena, { secret, deck, roomCode: "へや" });
+    if (!second.ok || !("seat" in second)) throw new Error("席が取れていない");
+
+    expect(await join(arena, { secret, deck })).toMatchObject({
+      ok: false,
+      code: MATCH_LIVE,
+      seat: second.seat,
+    });
+  });
+
+  it("シェアが開くのを待っている対戦も、続いている対戦として席を返す", async () => {
+    ensureCards();
+    const arena = newArena();
+    const deck = legalDecks()[0];
+    const { secret } = await arena.accounts.create("まつひと", 0);
+    const first = await join(arena, { secret, deck, roomCode: "へや", seedShareCommit: "c" });
+    await join(arena, await player(arena, "あいて", "へや"));
+    if (!first.ok) throw new Error("入れていない");
+    expect(arena.registry.live()).toHaveLength(0);
+
+    expect(await join(arena, { secret, deck })).toMatchObject({
+      ok: false,
+      code: MATCH_LIVE,
+      seat: seatOf(arena.lobby, first.ticket),
+    });
+  });
+
+  it("デッキが通らなくても、表示名を書き換えずに席を返す", async () => {
+    ensureCards();
+    const arena = newArena();
+    const deck = legalDecks()[0];
+    const { secret, account } = await arena.accounts.create("まえ", 0);
+    const first = await join(arena, { secret, deck, roomCode: "へや" });
+    await join(arena, await player(arena, "あいて", "へや"));
+    if (!first.ok) throw new Error("入れていない");
+
+    const again = await join(arena, { secret, deck: { cards: [] }, displayName: "あと" });
+
+    expect(again).toMatchObject({ ok: false, code: MATCH_LIVE });
+    expect(arena.accounts.byPlayerId(account.playerId)?.displayName).toBe("まえ");
+  });
+
+  it("決着の付いた対戦は、レジストリに残っていても数えない", async () => {
+    ensureCards();
+    const arena = newArena();
+    const deck = legalDecks()[0];
+    const { secret } = await arena.accounts.create("まつひと", 0);
+    await join(arena, { secret, deck, roomCode: "へや" });
+    await join(arena, await player(arena, "あいて", "へや"));
+    const [match] = arena.registry.live();
+    if (match === undefined) throw new Error("対戦が始まっていない");
+
+    match.result = { kind: "concede", winner: 1, conceded: 0 };
+
+    expect((await join(arena, { secret, deck })).ok).toBe(true);
   });
 });
 

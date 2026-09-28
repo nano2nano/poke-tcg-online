@@ -36,6 +36,9 @@ export interface JoinRequest {
 /** 終わっていない AI との対戦があるので、次を始めない（7.3 節）。 */
 export const BOT_MATCH_LIVE = "bot-match-live";
 
+/** 終わっていない人との対戦があるので、次を始めない（7.1 節）。 */
+export const MATCH_LIVE = "match-live";
+
 function accountMissing(): JoinOutcome {
   return { ok: false, code: ACCOUNT_NOT_FOUND, errors: ["アカウントが見つからない"] };
 }
@@ -143,9 +146,9 @@ export class Lobby {
   join(request: JoinRequest, known: Account | null): JoinOutcome {
     const nowMs = this.now();
     // シークレットを先に見る。デッキの検査を通しても、誰の対戦か決まらなければ始められない。
-    if (known === null) {
-      return { ok: false, code: ACCOUNT_NOT_FOUND, errors: ["アカウントが見つからない"] };
-    }
+    if (known === null) return accountMissing();
+    const live = this.refuseLive(known.playerId);
+    if (live !== null) return live;
 
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {
@@ -250,18 +253,8 @@ export class Lobby {
    */
   refuseBot(request: BotJoinRequest, known: Account | null, botDeck: DeckList): JoinOutcome | null {
     if (known === null) return accountMissing();
-    // 続いている対戦はデッキより先に見る。いま組んでいるデッキが通らなくても、続いている対戦へは戻れる。
-    // 続いている対戦の席を一緒に返す。シークレットが持ち主を示しているので、渡してよい。
-    // 返さないと、画面を失った人は座席トークンを持たず、その対戦の持ち時間が尽きるまで次を始められない。
-    const live = this.registry.botMatchOf(known.playerId);
-    if (live !== null) {
-      return {
-        ok: false,
-        code: BOT_MATCH_LIVE,
-        errors: ["終わっていない AI との対戦がある。その対戦へ戻る。"],
-        seat: live,
-      };
-    }
+    const live = this.refuseLive(known.playerId);
+    if (live !== null) return live;
     const violations = validateDeck(request.deck);
     if (violations.length > 0) {
       return { ok: false, errors: violations.map(describeViolation) };
@@ -273,12 +266,29 @@ export class Lobby {
         errors: botViolations.map((violation) => `AI のデッキ: ${describeViolation(violation)}`),
       };
     }
-    if (this.botJoining.has(known.playerId)) {
+    return null;
+  }
+
+  /**
+   * 終わっていない対戦があれば断り、その席を返す（7.1 節）。無ければ null。
+   *
+   * 席が決まってから引き換えに来るまでに入り直すと、降ろす待ちのチケットが無いので、断らなければ 2 局目が始まる。
+   * 席を返さないと、画面を失った人は座席トークンを持たず、その対戦の持ち時間が尽きるまで次を始められない。
+   * AI の重みを読んでいる途中もまだ席は無いが断る。読み終えたときに、あとから始まった対戦と重なる。
+   */
+  private refuseLive(playerId: string): JoinOutcome | null {
+    const live = this.registry.liveSeatOf(playerId);
+    if (live !== null) {
+      const { bot, ...seat } = live;
       return {
         ok: false,
-        code: BOT_MATCH_LIVE,
-        errors: ["AI との対戦を用意している途中である。"],
+        code: bot ? BOT_MATCH_LIVE : MATCH_LIVE,
+        errors: [bot ? "終わっていない AI との対戦がある。" : "終わっていない対戦がある。"],
+        seat,
       };
+    }
+    if (this.botJoining.has(playerId)) {
+      return { ok: false, code: BOT_MATCH_LIVE, errors: ["AI との対戦を用意している途中である。"] };
     }
     return null;
   }

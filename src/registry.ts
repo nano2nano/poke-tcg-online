@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { Player } from "./engine.js";
-import { applyTimeout, type Match } from "./match.js";
+import { applyTimeout, type Match, type SeatInfo } from "./match.js";
 import { toRecord, type MatchRecord } from "./log.js";
 import { startPending, type PendingMatch } from "./pending.js";
 import type { SeedShares } from "./fingerprint.js";
@@ -23,17 +23,22 @@ export interface PendingSeatRef {
   seat: Player;
 }
 
-/** AI との対戦の、人の座席。ロビーが席を渡すときの形（`Seated`）と同じ欄を持つ。 */
-export interface BotMatchSeat {
+/** 続いている対戦の、そのプレイヤーの座席。ロビーが席を渡すときの形（`Seated`）と同じ欄を持つ。 */
+export interface LiveSeat {
   matchId: string;
   seat: Player;
   seatToken: string;
   seedCommit: string;
   seedShareCommits: SeedShares;
+  /** 相手が AI の対戦か。断るときの `code` を分けるためだけに持つ。 */
+  bot: boolean;
 }
 
-function humanSeatOf(botSeat: Player): Player {
-  return botSeat === 0 ? 1 : 0;
+/** 同じプレイヤーが両側に座ることは無い（7.1 節）ので、どちらか一方を返せばよい。 */
+function seatOf(seats: readonly [SeatInfo, SeatInfo], playerId: string): Player | null {
+  if (seats[0].playerId === playerId) return 0;
+  if (seats[1].playerId === playerId) return 1;
+  return null;
 }
 
 export function newToken(): string {
@@ -92,35 +97,36 @@ export class MatchRegistry {
   }
 
   /**
-   * そのプレイヤーが人として座っている、終わっていない AI との対戦（7.3 節）。始まる前のものも含む。
-   * 返すのは人の座席で、その人が画面を失っていても、ここから対戦へ戻れる。
+   * そのプレイヤーが座っている、終わっていない対戦（7.1 節、7.3 節）。始まる前のものも含む。
+   * 返すのは座席で、その人が画面を失っていても、ここから対戦へ戻れる。
    *
    * 決着の付いた対戦は数えない。決着のあとの後始末で投げるとレジストリに残ることがあり、
-   * 数えると、その人は二度と AI と指せなくなる。
+   * 数えると、その人は二度と対戦に入れなくなる。
    */
-  botMatchOf(playerId: string): BotMatchSeat | null {
+  liveSeatOf(playerId: string): LiveSeat | null {
     for (const match of this.matches.values()) {
-      if (match.bot === null || match.result !== null) continue;
-      const seat = humanSeatOf(match.bot.seat);
-      if (match.seats[seat].playerId !== playerId) continue;
+      if (match.result !== null) continue;
+      const seat = seatOf(match.seats, playerId);
+      if (seat === null) continue;
       return {
         matchId: match.matchId,
         seat,
         seatToken: match.seatTokens[seat],
         seedCommit: match.seedCommitment.commit,
         seedShareCommits: match.seedShareCommits,
+        bot: match.bot !== null,
       };
     }
     for (const pending of this.pending.values()) {
-      if (pending.bot === null) continue;
-      const seat = humanSeatOf(pending.bot.seat);
-      if (pending.seats[seat].playerId !== playerId) continue;
+      const seat = seatOf(pending.seats, playerId);
+      if (seat === null) continue;
       return {
         matchId: pending.matchId,
         seat,
         seatToken: pending.seatTokens[seat],
         seedCommit: pending.server.commit,
         seedShareCommits: pending.shareCommits,
+        bot: pending.bot !== null,
       };
     }
     return null;

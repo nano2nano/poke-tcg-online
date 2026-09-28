@@ -215,6 +215,39 @@ test("相手を待つあいだに知らない形の答えが届いたら、待�
   expect(claims).toBe(2);
 });
 
+/**
+ * 席が決まってから取りに行く前に押し直すと、待っているチケットはもう無い。サーバが 2 局目を始めると、
+ * 1 局目は座る人がいないまま時間切れの負けになる。
+ */
+test("待っているあいだに席が決まってから押し直すと、その席へ着く", async ({
+  browser,
+  pageErrors,
+}) => {
+  const room = `きまっていた-${Date.now()}`;
+  const [a, b, close] = await openPair(browser, pageErrors);
+  // 待つあいだの取り直しでは席を渡さない。押し直したときに、サーバが返す席だけで着くようにする。
+  await a.route("**/api/claim?**", (route) => route.fulfill({ json: { kind: "waiting" } }));
+  await Promise.all([a.goto("./"), b.goto("./")]);
+  await join(a, room);
+  // 対戦はまだ始まらない。両座席がシェアを開くのを待っている。
+  await join(b, room);
+
+  const opened = a.waitForEvent("websocket");
+  await a.click("#join-button");
+  const seatToken = new URL((await opened).url()).searchParams.get("seatToken");
+  await seated(a);
+  await seated(b);
+  // 相手と同じ対戦の、もう一方の座席である。
+  const [aSide, bSide] = await Promise.all(
+    [a, b].map((page) =>
+      page.evaluate(() => JSON.parse(localStorage.getItem("poke-seat") ?? "null")),
+    ),
+  );
+  expect(aSide).toMatchObject({ seatToken, matchId: bSide.matchId });
+  expect(aSide.seat).not.toBe(bSide.seat);
+  await close();
+});
+
 test("同じルームコードの 2 人が繋がり、手番側にだけ手が並ぶ", async ({ browser, pageErrors }) => {
   const room = `あいことば-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
