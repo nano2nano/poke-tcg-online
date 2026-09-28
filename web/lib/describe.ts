@@ -5,7 +5,13 @@
  * どうぐや効果で最大 HP が変わると、画面だけが嘘をつく。
  */
 
-import type { Player, PlayerEvent, PlayerView, SpectatorView } from "../../src/engine.js";
+import type {
+  GameOutcome,
+  Player,
+  PlayerEvent,
+  PlayerView,
+  SpectatorView,
+} from "../../src/engine.js";
 import type { ClockView, EndedMessage, RejectReason, SpectatorSeat } from "../../src/protocol.js";
 import type { CardBrief, CardTable } from "./cards.js";
 
@@ -144,7 +150,7 @@ export function watchEndText(
   return `${who(result.winner)} の勝ちで終わりました${how[result.kind] ?? ""}`;
 }
 
-const WIN_REASONS: Record<string, string> = {
+const WIN_REASONS: Record<GameOutcome["reason"], string> = {
   "prizes-taken": "サイドを取りきった",
   "no-pokemon": "場のポケモンがいなくなった",
   "deck-out": "山札を引けなかった",
@@ -162,7 +168,7 @@ export function seatEndText(
   if (result.kind === "timeout") return `時間切れにより ${mine}`;
   if (result.winner === null) return "引き分け";
   const reason = ended.outcome?.reason;
-  return `${mine}（${(reason === undefined ? undefined : WIN_REASONS[reason]) ?? reason ?? ""}）`;
+  return `${mine}（${reason === undefined ? "" : WIN_REASONS[reason]}）`;
 }
 
 export function seatEndTone(winner: Player | null, seat: Player): Tone {

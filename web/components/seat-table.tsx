@@ -132,8 +132,8 @@ export function SeatTable({
           <button
             id="concede-button"
             className="danger"
-            // 切れているあいだと決着のあとは、投了が届かない。押せたように見せない。
-            disabled={disabled || ended !== null}
+            // 始まる前、切れているあいだ、決着のあとは、投了が通らない。押せたように見せない。
+            disabled={disabled || view === null || ended !== null}
             onClick={() => {
               if (confirm("投了しますか。")) send({ t: "concede" });
             }}
@@ -317,6 +317,7 @@ function SetupForm({
   if (offer === null) return null;
   const draft = state.setupDraft;
   const full = draft.bench.length >= offer.benchSlots;
+  // 送ったあとは選び直させない。画面の選択が、サーバが預かった答えと食い違う。
   const toggle = (instanceId: string, pressed: boolean, onClick: () => void, off = false) => (
     <button
       key={instanceId}
@@ -335,7 +336,12 @@ function SetupForm({
       <h3>バトル場</h3>
       <div id="setup-active" className="moves">
         {offer.active.map((id) =>
-          toggle(id, draft.active === id, () => choose({ t: "choose-active", instanceId: id })),
+          toggle(
+            id,
+            draft.active === id,
+            () => choose({ t: "choose-active", instanceId: id }),
+            draft.sent,
+          ),
         )}
       </div>
       <h3>ベンチ</h3>
@@ -348,7 +354,7 @@ function SetupForm({
               id,
               chosen,
               () => choose({ t: "toggle-bench", instanceId: id }),
-              !chosen && full,
+              draft.sent || (!chosen && full),
             );
           })}
       </div>
