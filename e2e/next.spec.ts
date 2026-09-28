@@ -877,7 +877,12 @@ test("プレイヤーを用意できなかったら、その理由を一覧の�
   await page.route("**/api/account", (route) =>
     route.fulfill({ status: 503, json: { error: "作れなかった" } }),
   );
+  const failed = page.waitForResponse((response) => response.url().endsWith("/api/account"));
   await page.goto(`${BASEPATH}/`);
+  await failed;
+  // ロビーが開いたときに用意できなかったことは、一覧の欄では言わない。
+  await painted(page);
+  await expect(page.locator("#history-status")).toBeEmpty();
   await page.click("#history-button");
   await expect(page.locator("#history-status")).toContainText("プレイヤーを用意できませんでした");
 });
@@ -905,4 +910,52 @@ test("覚えているプレイヤーを読み直しているあいだに押し�
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   await painted(page);
   expect(listed).toBe(1);
+});
+
+const accountMissing = {
+  status: 404,
+  json: { error: "アカウントが見つからない", code: "account-not-found" },
+};
+
+test("忘れられていたと言われても同じプレイヤーが読めたら、次に押したときに一覧を出す", async ({
+  page,
+}) => {
+  let once = true;
+  await page.route("**/api/matches", async (route) => {
+    if (!once) return route.continue();
+    once = false;
+    return route.fulfill(accountMissing);
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await expect(page.locator("#history-status")).toBeEmpty();
+});
+
+test("プレイヤーを作り直している途中に続けて押しても、作るのは 1 人だけ", async ({ page }) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
+    .not.toBeNull();
+  await page.route("**/api/matches", (route) => route.fulfill(accountMissing));
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
+  const [slow, release] = gate();
+  let created = 0;
+  await page.route("**/api/account", async (route) => {
+    created += 1;
+    await slow;
+    await route.continue();
+  });
+  await page.click("#history-button");
+  await expect.poll(() => created).toBe(1);
+  await page.click("#history-button");
+  await painted(page);
+  release();
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+  expect(created).toBe(1);
 });

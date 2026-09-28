@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MatchSummary } from "../../src/archive.js";
 import type { ReplayFrame } from "../../src/history.js";
-import { accountKey, accountQuery, postAsPlayer } from "../lib/account.js";
+import { accountQuery, postAsPlayer } from "../lib/account.js";
 import { messageOf } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import { describeSummary, readerView } from "../lib/describe.js";
@@ -21,25 +21,12 @@ import { SideBoard, Stadium } from "./board.js";
  * 横に広い画面では、対戦のあいだこの欄を CSS が隠す。卓と同じく `body` の直下に置く。
  */
 export function History() {
-  const queryClient = useQueryClient();
-  // 一覧を頼んだことは、プレイヤーが替わっても覚えておく。プレイヤーを用意してから一覧を取るので、
-  // 押したぶんは、用意したプレイヤーの側で取る。
-  const [requested, setRequested] = useState(false);
-  // 頼まれるまではプレイヤーを読みに行かない。席に着いたまま開き直したときに、作り直させない。
-  const account = useQuery({ ...accountQuery(), enabled: requested });
+  // 読むだけで取りに行かない。席に着いたまま開き直したときに、プレイヤーを作り直させない。
+  const account = useQuery({ ...accountQuery(), enabled: false });
   const playerId = account.data?.playerId ?? null;
-
-  /** 一覧を頼む。プレイヤーが用意できていれば真。できていなければ先に用意し、一覧は用意した側で取る。 */
-  const request = () => {
-    setRequested(true);
-    // 忘れられていたと分かったプレイヤーも、用意し直す。古いシークレットで頼んでも断られる。
-    if (account.data !== undefined && !queryClient.getQueryState(accountKey)?.isInvalidated) {
-      return true;
-    }
-    void account.refetch();
-    return false;
-  };
-
+  // 一覧を頼んだことは、プレイヤーが替わっても覚えておく。押したときにプレイヤーを作ると一覧の部品ごと
+  // 作り直されるので、押したぶんは作り直した側で取る。
+  const [requested, setRequested] = useState(false);
   // サーバがプレイヤーを忘れて作り直したら、一覧も開いているリプレイも前のプレイヤーのもので、
   // 新しいシークレットでは読めない。プレイヤーごとに作り直す。
   return (
@@ -47,12 +34,7 @@ export function History() {
       key={playerId}
       playerId={playerId}
       requested={requested}
-      onRequest={request}
-      accountFailure={
-        account.isError && !account.isFetching
-          ? `プレイヤーを用意できませんでした: ${messageOf(account.error)}`
-          : ""
-      }
+      onRequest={() => setRequested(true)}
     />
   );
 }
@@ -61,12 +43,10 @@ function PlayerHistory({
   playerId,
   requested,
   onRequest,
-  accountFailure,
 }: {
   playerId: string | null;
   requested: boolean;
-  onRequest: () => boolean;
-  accountFailure: string;
+  onRequest: () => void;
 }) {
   const queryClient = useQueryClient();
   const matches = useQuery({
@@ -103,16 +83,27 @@ function PlayerHistory({
           className="secondary"
           onClick={() => {
             setFailure("");
-            // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
-            // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
-            if (onRequest()) void matches.refetch();
+            onRequest();
+            // まだ読んでいないプレイヤーや、忘れられていたと分かったプレイヤーは、ここで用意し直す。
+            // 用意している途中なら、それを待つ。重ねて用意すると 2 人できる。
+            queryClient.fetchQuery(accountQuery()).then(
+              (account) => {
+                // 替わったなら、この部品は作り直され、作り直した側が取る。
+                if (account.playerId !== playerId) return;
+                // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
+                // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
+                void matches.refetch();
+              },
+              (error: unknown) => {
+                setFailure(`プレイヤーを用意できませんでした: ${messageOf(error)}`);
+              },
+            );
           }}
         >
           一覧を出す
         </button>
         <p id="history-status" className="note">
           {failure ||
-            accountFailure ||
             (matches.isError && !matches.isFetching
               ? `一覧を出せませんでした: ${messageOf(matches.error)}`
               : "")}

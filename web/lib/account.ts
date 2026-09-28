@@ -65,16 +65,24 @@ export async function postAsPlayer<T>(
   path: string,
   body: Record<string, unknown>,
 ): Promise<T> {
-  const secret = storedSecret();
-  if (secret === null) throw new Error("プレイヤーを用意できなかった");
   try {
-    return await postJson<T>(path, { ...body, secret });
+    return await postJson<T>(path, { ...body, secret: requireSecret() });
   } catch (error) {
-    if (error instanceof ApiError && error.code === "account-not-found") {
-      void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
-    }
+    if (error instanceof ApiError && error.code === "account-not-found") forgetAccount(queryClient);
     throw error;
   }
+}
+
+/** 用意したはずのシークレット。用意に失敗して消えたままなら、送らずに止める。 */
+export function requireSecret(): string {
+  const secret = storedSecret();
+  if (secret === null) throw new Error("プレイヤーを用意できなかった");
+  return secret;
+}
+
+/** サーバが忘れていたプレイヤーを古いものとする。次に用意するときに作り直す。 */
+export function forgetAccount(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
 }
 
 /**
