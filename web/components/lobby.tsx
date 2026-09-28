@@ -98,23 +98,23 @@ export function Lobby({
   const chosenOwnDeck = ownDeck ?? (hasDeck ? "" : (decks[0]?.label ?? ""));
 
   /**
-   * サーバへ頼みを送っているあいだは、次の頼みを送らせない。
+   * サーバへリクエストを送っているあいだは、次のリクエストを送らせない。
    *
    * **2 つを重ねない。** 相手さがしで席が決まるのと AI との対戦が始まるのが重なると、2 局を抱え、
    * 画面はあとに開いた 1 局しか持たない。開かなかった 1 局は持ち時間が尽きて負けとして残る。
-   * 相手さがしの押し直しも同じで、先の頼みで席が決まると、あとの頼みがキューに残る。
+   * 相手さがしの押し直しも同じで、先のリクエストで席が決まると、あとのリクエストがキューに残る。
    * 相手を待っているあいだの押し直しは、サーバが前のチケットを降ろすので構わない。
    * ただし席が決まったチケットは降ろさないので、押し直す前に前のチケットの席を一度取りに行く。
    */
   const [requesting, setRequesting] = useState(false);
-  /** いま走っている頼み。終わったときに外すのは、自分が置いたものだけにする。 */
+  /** いま走っているリクエスト。終わったときに外すのは、自分が置いたものだけにする。 */
   const running = useRef<object | null>(null);
   const [waiting, setWaiting] = useState(false);
   /**
-   * 相手を待っているチケットの持ち主。押し直した頼みをサーバが受け付けたら替わる。
+   * 相手を待っているチケットの持ち主。押し直したリクエストをサーバが受け付けたら替わる。
    *
-   * **受け付けられるまでは前の待ちを続ける。** サーバが前のチケットを降ろすのは新しい頼みを受け付けたとき
-   * なので、デッキで断られたときなどに先に待ちをやめると、前のチケットがキューに残ったまま誰も席を取りに行かない。
+   * 受け付けられるまでは前のポーリングを続ける。サーバが前のチケットを降ろすのは新しいリクエストを受け付けたとき
+   * なので、デッキで断られたときなどに先にポーリングをやめると、前のチケットがキューに残ったまま誰も席を取りに行かない。
    */
   const waitingFor = useRef<object | null>(null);
   /** 待っているチケットと、そのチケットで出したシェア。 */
@@ -163,7 +163,7 @@ export function Lobby({
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
   };
 
-  /** 受け付けられた頼みは表示名を変えている。戻ってきたときに、前の名前を欄に出さない。 */
+  /** 受け付けられたリクエストは表示名を変えている。戻ってきたときに、前の名前を欄に出さない。 */
   const accepted = (request: { displayName?: string }) => {
     // サーバは見えない文字を落とし、長さを切ってから名前を付ける。付いた名前を読み直す。
     if (request.displayName !== undefined) refreshAccount(queryClient).catch(() => {});
@@ -199,7 +199,7 @@ export function Lobby({
     const earlier = waitingTicket.current;
     if (earlier !== null) {
       const last = await claim(earlier.ticket);
-      // 待ちが先に同じ席を取っていれば、画面はもう座席へ移っている。
+      // ポーリングが先に同じ席を取っていれば、画面はもう座席へ移っている。
       if (!mounted.current) return;
       if (last?.kind === "seated") {
         waitingFor.current = null;
@@ -216,10 +216,10 @@ export function Lobby({
     accepted(request);
     /**
      * 待っているあいだに押し直すと、返事を待つあいだに前のチケットで席が決まって座席の画面へ移っていることがある。
-     * そのときは開いている対戦を残し、この頼みの答えは使わない。どちらを選んでも 1 局は時間切れになる。
+     * そのときは開いている対戦を残し、このリクエストの答えは使わない。どちらを選んでも 1 局は時間切れになる。
      */
     if (!mounted.current) return;
-    // 前のチケットはサーバが降ろした。前の待ちの答えで、この頼みの表示を上書きさせない。
+    // 前のチケットはサーバが降ろした。前のポーリングの答えで、このリクエストの表示を上書きさせない。
     waitingFor.current = mine;
     if ("seat" in outcome) return onSeated(withShare(outcome.seat, share?.share));
     setStatus("相手を待っています");
@@ -229,7 +229,7 @@ export function Lobby({
   const waitForOpponent = async (mine: object, ticket: string, share: string | undefined) => {
     const current = () => mounted.current && waitingFor.current === mine;
     /**
-     * 待っている様子は、変わったときだけ書く。押し直した頼みが断られたとき、
+     * 待っている様子は、変わったときだけ書く。押し直したリクエストが断られたとき、
      * 次に取りに行ったところでその理由を消さない。
      */
     let waitingText = "相手を待っています";
@@ -268,7 +268,7 @@ export function Lobby({
               refreshAccount(queryClient).catch(() => {});
               return;
             case "dropped":
-              // 頼みが走っていれば、降ろしたのはこのタブの押し直しである。表示はその頼みが書く。
+              // リクエストが走っていれば、降ろしたのはこのタブの押し直しである。表示はそのリクエストが書く。
               if (running.current === null) {
                 show("別のタブから入り直したので、このタブは待つのをやめました。");
               }
@@ -306,7 +306,7 @@ export function Lobby({
       deck = { deckPreset: chosenOwnDeck };
     }
     const share = await newSeedShare();
-    // 頼む前に失敗したら、前に頼んだときのシェアを残す。そちらの頼みはサーバに届いているかもしれない。
+    // 頼む前に失敗したら、前に頼んだときのシェアを残す。そちらのリクエストはサーバに届いているかもしれない。
     const request = await common(share);
     const earlier = botShare.current;
     botShare.current = share;
@@ -322,7 +322,7 @@ export function Lobby({
       return onSeated(withShare(outcome.seat, shareFor(outcome.seat, earlier)));
     }
     if (!outcome.ok) {
-      // 断られた頼みは対戦を作っていない。用意している途中の対戦のシェアは、前のものである。
+      // 断られたリクエストは対戦を作っていない。用意している途中の対戦のシェアは、前のものである。
       botShare.current = earlier;
       return refused(outcome);
     }
@@ -345,7 +345,7 @@ export function Lobby({
       {remembered !== null && (
         <p>
           {/* 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。
-              頼みや待ちの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。 */}
+              リクエストやポーリングの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。 */}
           <button
             id="resume-button"
             disabled={requesting || waiting}

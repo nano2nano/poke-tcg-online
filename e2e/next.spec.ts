@@ -34,7 +34,7 @@ test("相手さがしを頼んでいるあいだは、「対戦をさがす」�
   await page.goto(`${BASEPATH}/`);
   await page.fill("#room", `おしなおし-${Date.now()}`);
   await page.click("#join-button");
-  // 先の頼みで席が決まると、あとの頼みがキューに残り、誰も開かない席として組まれる。
+  // 先のリクエストで席が決まると、あとのリクエストがキューに残り、誰も開かない席として組まれる。
   await expect(page.locator("#join-button")).toBeDisabled();
 
   const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
@@ -125,7 +125,7 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   await claimed();
   const waiting = await status.textContent();
 
-  // サーバが前のチケットを降ろすのは、新しい頼みを受け付けたときだけである。
+  // サーバが前のチケットを降ろすのは、新しいリクエストを受け付けたときだけである。
   await page.route("**/api/join", (route) =>
     route.fulfill({ json: { ok: false, errors: ["断った"] } }),
   );
