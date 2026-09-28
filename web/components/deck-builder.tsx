@@ -125,19 +125,23 @@ export function DeckBuilder({
     post({ messages, tone, deck });
 
   const check = async () => {
-    if (entries.length === 0) {
+    if (storedDeck().length === 0) {
       say(["デッキにカードがありません。"], "ng");
       return;
     }
     await validate();
   };
 
+  /** 失敗の文も、確かめたデッキに付ける。選んだカードを置いてから確かめるので、押す前のデッキではない。 */
   const validate = async () => {
     const deck = storedDeckJson();
-    const outcome = await postJson<{ errors?: string[] }>(
-      "/api/deck/validate",
-      deckCards(parseDeck(deck)),
-    );
+    let outcome: { errors?: string[] };
+    try {
+      outcome = await postJson("/api/deck/validate", deckCards(parseDeck(deck)));
+    } catch (error) {
+      say([`確かめられませんでした: ${messageOf(error)}`], "ng", deck);
+      return;
+    }
     showVerdict(outcome.errors ?? [], deck);
   };
 
@@ -343,11 +347,7 @@ export function DeckBuilder({
       </div>
 
       <div className="deck-actions">
-        <button
-          id="check-button"
-          className="secondary"
-          onClick={() => void check().catch(fail("確かめられませんでした", storedDeckJson()))}
-        >
+        <button id="check-button" className="secondary" onClick={() => void check()}>
           デッキを確かめる
         </button>
         <button
@@ -380,11 +380,7 @@ export function DeckBuilder({
                   <button
                     key={choice.defId}
                     type="button"
-                    onClick={() =>
-                      void pick(picking, index, choice.defId).catch(
-                        fail("確かめられませんでした", storedDeckJson()),
-                      )
-                    }
+                    onClick={() => void pick(picking, index, choice.defId)}
                   >
                     {`${group.name}（${describeCard(choice) || choice.defId}）`}
                   </button>

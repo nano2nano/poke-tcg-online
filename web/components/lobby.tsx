@@ -202,7 +202,11 @@ export function Lobby({
     const { deck, sample } = await builtDeck();
     // 組んだデッキなら、欄はいまのデッキについてのものなので残す。確かめている途中の表示も消さない。
     if (sample) {
-      showDeckStatus({ messages: ["サンプルデッキで対戦します。"], tone: "ok", deck: sent });
+      showDeckStatus({
+        messages: ["デッキが空なので、サンプルデッキを使います。"],
+        tone: "",
+        deck: sent,
+      });
     }
     const share = await newSeedShare();
     const request = await common(share);

@@ -468,7 +468,7 @@ test("デッキを確かめた結果は、対戦をさがしても残す", async
   await expect(page.locator("#deck-status")).toContainText("規則を通ります");
 });
 
-test("サンプルデッキで対戦すると出たあとに別のタブでデッキを組んだら、その文を消す", async ({
+test("サンプルデッキを使うと出たあとに別のタブでデッキを組んだら、その文を消す", async ({
   page,
 }) => {
   await page.route("**/api/join", (route) =>
@@ -478,14 +478,32 @@ test("サンプルデッキで対戦すると出たあとに別のタブでデ�
   const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
   await joined;
-  await expect(page.locator("#deck-status")).toContainText("サンプルデッキで対戦します");
+  await expect(page.locator("#deck-status")).toContainText("サンプルデッキを使います");
 
   const other = await page.context().newPage();
   await other.goto(page.url());
   const defId = await addFirstSampleCard(other);
   await other.close();
   await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
-  await expect(page.locator("#deck-status")).not.toContainText("サンプルデッキで対戦します");
+  await expect(page.locator("#deck-status")).not.toContainText("サンプルデッキを使います");
+});
+
+test("最後の 1 枚を選んだあとの確かめに失敗したら、その失敗を出す", async ({ page }) => {
+  const cardId = sharedCardId();
+  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=UTF-8",
+      headers: { "access-control-allow-origin": "*" },
+      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_1_1" /></form>`,
+    }),
+  );
+  await page.route("**/api/deck/validate", (route) => route.abort());
+
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#deck-code", "abc123-DEF456-ghi789");
+  await page.click("#deck-code-button");
+  await page.locator("#deck-status .choices button").first().click();
+  await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
 });
 
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {
