@@ -32,12 +32,11 @@ export interface Seating {
   /** 座席を離れた理由。座席を失ったときと、座席へ繋がらなかったときに入る。 */
   left: string | null;
   /**
-   * 手を送って、返事を待っているあいだ。続けて押すと、2 つ目は古い局面への手として断られ、
-   * 通った 1 つ目まで通らなかったように見える。
+   * 手か準備の答えを送って、返事を待っているあいだ。続けて押すと、2 つ目は古い局面への手として
+   * 断られ、通った 1 つ目まで通らなかったように見える。
    */
   awaiting: boolean;
-  /** 送れたら true。 */
-  send: (message: ClientMessage) => boolean;
+  send: (message: ClientMessage) => void;
   choose: (action: SetupAction) => void;
 }
 
@@ -47,7 +46,7 @@ export interface Seating {
  */
 const CHANNEL = "poke-seat";
 
-const REPLY_WAIT_MS = 5_000;
+const REPLY_WAIT_MS = 10_000;
 
 export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): Seating {
   const [state, setState] = useState(() => initialSeatState(seated.seat));
@@ -255,15 +254,14 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
       const { socket, log } = live.current;
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(message));
-        if (message.t === "move") setAwaiting(true);
-        return true;
+        if (message.t === "move" || message.t === "setup") setAwaiting(true);
+        return;
       }
       // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。
       // できごとの欄は畳んであるので、そこに書くだけでは目に入らない。
       const text = "接続が切れているので送れませんでした。繋がってから、もう一度押してください。";
       log(text);
       notify({ text, tone: "attention" });
-      return false;
     },
     [notify],
   );

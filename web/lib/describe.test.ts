@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Player, PlayerEvent, SpectatorView } from "../../src/engine.js";
 import type { CardTable } from "./cards.js";
-import { describeEvents, rejectText, seatEndText } from "./describe.js";
+import { describeEvents, rejectText, seatClockText, seatEndText } from "./describe.js";
 
 const cards: CardTable = { pikachu: { name: "ピカチュウ", kind: "pokemon", hp: 60 } };
 const who = (player: Player) => ["あ", "い"][player]!;
@@ -89,6 +89,22 @@ describe("seatEndText", () => {
       outcome: null,
     } as const;
     expect(seatEndText(ended, 0)).toBe("投了により 負け");
+  });
+
+  it("エンジンの勝敗が無ければ、空の括弧を付けない", () => {
+    const ended = { matchResult: { kind: "normal", winner: 0 }, outcome: null } as const;
+    expect(seatEndText(ended, 0)).toBe("勝ち");
+  });
+});
+
+describe("seatClockText", () => {
+  it("決着した局面では、相手が考えているとは出さない", () => {
+    const clock = {
+      bankMs: [60_000, 60_000] as [number, number],
+      moveRemainingMs: null,
+      toMove: null,
+    };
+    expect(seatClockText(clock, 0)).not.toContain("相手が考えています");
   });
 });
 

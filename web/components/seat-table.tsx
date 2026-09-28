@@ -254,7 +254,14 @@ function Moves({
       {playing && moves !== null && revealedDeck !== null && (
         <RevealedDeck state={state} table={table} moves={moves} revealedDeck={revealedDeck} />
       )}
-      <SetupForm state={state} send={send} choose={choose} context={context} disabled={disabled} />
+      <SetupForm
+        state={state}
+        send={send}
+        choose={choose}
+        context={context}
+        disabled={disabled}
+        awaiting={awaiting}
+      />
       <div id="moves" className="moves">
         {moves === null
           ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
@@ -306,12 +313,14 @@ function SetupForm({
   choose,
   context,
   disabled,
+  awaiting,
 }: {
   state: SeatState;
   send: Seating["send"];
   choose: Seating["choose"];
   context: MoveContext;
   disabled: boolean;
+  awaiting: boolean;
 }) {
   const offer = setupOffer(state);
   if (offer === null) return null;
@@ -340,7 +349,7 @@ function SetupForm({
             id,
             draft.active === id,
             () => choose({ t: "choose-active", instanceId: id }),
-            draft.sent,
+            awaiting,
           ),
         )}
       </div>
@@ -354,20 +363,16 @@ function SetupForm({
               id,
               chosen,
               () => choose({ t: "toggle-bench", instanceId: id }),
-              draft.sent || (!chosen && full),
+              awaiting || (!chosen && full),
             );
           })}
       </div>
       <button
         id="setup-submit"
         // 切れているあいだは送れない。押せるように見せない。
-        disabled={disabled || draft.active === null || draft.sent}
+        disabled={disabled || awaiting || draft.active === null}
         onClick={() => {
-          if (draft.active === null) return;
-          // 送れなかったのに送った扱いにすると、押し直せなくなる。
-          if (send({ t: "setup", active: draft.active, bench: draft.bench })) {
-            choose({ t: "setup-sent" });
-          }
+          if (draft.active !== null) send({ t: "setup", active: draft.active, bench: draft.bench });
         }}
       >
         準備を終える

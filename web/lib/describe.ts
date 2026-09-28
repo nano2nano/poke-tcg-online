@@ -129,7 +129,9 @@ function moveRemainingText(clock: ClockView): string {
 export function seatClockText(clock: ClockView, seat: Player): string {
   const mine = Math.round(clock.bankMs[seat] / 1000);
   const theirs = Math.round(clock.bankMs[seat === 0 ? 1 : 0] / 1000);
-  const turn = clock.toMove === seat ? "あなたの番です" : "相手が考えています";
+  // 決着した局面では、どちらの番でもない。
+  const turn =
+    clock.toMove === null ? "" : clock.toMove === seat ? "あなたの番です" : "相手が考えています";
   return `${turn}${moveRemainingText(clock)} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
 }
 
@@ -168,7 +170,7 @@ export function seatEndText(
   if (result.kind === "timeout") return `時間切れにより ${mine}`;
   if (result.winner === null) return "引き分け";
   const reason = ended.outcome?.reason;
-  return `${mine}（${reason === undefined ? "" : WIN_REASONS[reason]}）`;
+  return reason === undefined ? mine : `${mine}（${WIN_REASONS[reason]}）`;
 }
 
 export function seatEndTone(winner: Player | null, seat: Player): Tone {
