@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import type { DeckList, Player } from "./engine.js";
 import { describeViolation, validateDeck } from "./deck.js";
-import type { BotSeat, SeatInfo } from "./match.js";
+import { botsOnly, NO_BOTS, type BotSeats, type SeatInfo } from "./match.js";
 import { MatchRegistry, newToken } from "./registry.js";
 import { ACCOUNT_NOT_FOUND, type Account, type AccountStore } from "./accounts.js";
 import { commitSeed, noShares, type SeedShares } from "./fingerprint.js";
@@ -39,8 +39,39 @@ export const BOT_MATCH_LIVE = "bot-match-live";
 /** 終わっていない人との対戦があるので、次を始めない（7.1 節）。 */
 export const MATCH_LIVE = "match-live";
 
-function accountMissing(): JoinOutcome {
+/** 立てた AI どうしの対戦が終わっていないので、次を立てない（7.4 節）。 */
+export const BOT_WATCH_LIVE = "bot-watch-live";
+
+/** AI どうしの対戦がサーバ全体で上限まで動いている（7.4 節）。 */
+export const BOT_WATCH_FULL = "bot-watch-full";
+
+/**
+ * サーバ全体で同時に動かす AI どうしの対戦の数。どの対戦も、誰も指さないまま両座席の手を
+ * サーバが選び続けるので、人の対戦と同じ Durable Object の時間を使う。
+ */
+export const BOT_WATCH_LIMIT = 8;
+
+function accountMissing(): { ok: false; code: string; errors: string[] } {
   return { ok: false, code: ACCOUNT_NOT_FOUND, errors: ["アカウントが見つからない"] };
+}
+
+/** AI の座席（7.3 節）。`playerId` の頭で人と見分け、レーティングは持たない。 */
+function botSeatInfo(bot: Bot, suffix = ""): SeatInfo {
+  return {
+    playerId: `${BOT_PLAYER_PREFIX}${bot.identity.name}`,
+    displayName: `AI ${bot.identity.name}${suffix}`,
+    rating: null,
+    bot: bot.identity,
+  };
+}
+
+function deckRefusal(deck: DeckList, whose: string): { ok: false; errors: string[] } | null {
+  const violations = validateDeck(deck);
+  if (violations.length === 0) return null;
+  return {
+    ok: false,
+    errors: violations.map((violation) => `${whose}: ${describeViolation(violation)}`),
+  };
 }
 
 /** AI と対戦するときの要求（7.3 節）。相手を待たないので、ルームコードは無い。 */
@@ -59,6 +90,12 @@ export type JoinOutcome =
   | { ok: false; errors: string[]; code?: string; seat?: Seated }
   | { ok: true; ticket: string }
   | { ok: true; ticket: string; seat: Seated };
+
+/** AI どうしの対戦を立てた結果（7.4 節）。見るのは観戦トークンで繋いだ画面である。 */
+export type WatchOutcome =
+  | { ok: true; spectatorToken: string }
+  /** 立てた対戦が終わっていなければ、その観戦トークンを返す。画面を失った人もそこへ戻れる。 */
+  | { ok: false; errors: string[]; code?: string; spectatorToken?: string };
 
 export interface Seated {
   matchId: string;
@@ -130,6 +167,10 @@ export class Lobby {
    * ほかの人の読み込みがそのぶん待たされる。
    */
   private readonly botJoining = new Set<string>();
+  /** AI どうしの対戦を立てたプレイヤー → その対戦の観戦トークン。1 人 1 局に絞るためだけに持つ。 */
+  private readonly botWatches = new Map<string, string>();
+  /** AI どうしの対戦の重みを読んでいる途中のプレイヤー。`botJoining` と同じ理由で持つ。 */
+  private readonly watchPreparing = new Set<string>();
 
   constructor(
     private readonly registry: MatchRegistry,
@@ -227,18 +268,15 @@ export class Lobby {
       displayName: account.displayName,
       rating: this.accounts.byPlayerId(account.playerId)?.rating ?? account.rating,
     };
-    const botSeat: SeatInfo = {
-      playerId: `${BOT_PLAYER_PREFIX}${bot.identity.name}`,
-      displayName: `AI ${bot.identity.name}`,
-      rating: null,
-      bot: bot.identity,
-    };
+    const botSeat = botSeatInfo(bot);
     // AI は座席 1 に座る。先攻は seed が決めるので、この順は有利不利を生まない。
-    const [seated] = this.open(
+    const {
+      seated: [seated],
+    } = this.open(
       [request.deck, botDeck],
       [human, botSeat],
       [request.seedShareCommit ?? null, null],
-      { seat: 1, bot },
+      [null, bot],
     );
     const ticket = newToken();
     this.rememberSeated(ticket, seated);
@@ -259,14 +297,7 @@ export class Lobby {
     if (violations.length > 0) {
       return { ok: false, errors: violations.map(describeViolation) };
     }
-    const botViolations = validateDeck(botDeck);
-    if (botViolations.length > 0) {
-      return {
-        ok: false,
-        errors: botViolations.map((violation) => `AI のデッキ: ${describeViolation(violation)}`),
-      };
-    }
-    return null;
+    return deckRefusal(botDeck, "AI のデッキ");
   }
 
   /**
@@ -291,6 +322,70 @@ export class Lobby {
       return { ok: false, code: BOT_MATCH_LIVE, errors: ["AI との対戦を用意している途中である。"] };
     }
     return null;
+  }
+
+  /**
+   * AI どうしの対戦を立てる（7.4 節）。立てた人は座らず、返した観戦トークンで見る。
+   *
+   * 座席はどちらもシェアを出さないので、対戦はここで始まる。AI を動かし始めるのは配信層で、
+   * 見る人が繋ぐのを待つ（`MatchHub.wakeWatch`）。
+   */
+  watchBots(known: Account | null, bots: [Bot, Bot], decks: [DeckList, DeckList]): WatchOutcome {
+    const refusal = this.refuseWatch(known, decks);
+    if (refusal !== null) return refusal;
+    if (known === null) return accountMissing();
+    // 同じ AI どうしでは、名前だけだと卓のどちらがどちらか見分けられない。
+    const same = bots[0].identity.name === bots[1].identity.name;
+    const seats: [SeatInfo, SeatInfo] = [
+      botSeatInfo(bots[0], same ? "（1）" : ""),
+      botSeatInfo(bots[1], same ? "（2）" : ""),
+    ];
+    const { spectatorToken } = this.open(decks, seats, [null, null], bots);
+    this.botWatches.set(known.playerId, spectatorToken);
+    return { ok: true, spectatorToken };
+  }
+
+  /** AI どうしの対戦を断る理由。無ければ null。`refuseBot` と同じく、重みを読む前に一度通す。 */
+  refuseWatch(known: Account | null, decks: [DeckList, DeckList]): WatchOutcome | null {
+    if (known === null) return accountMissing();
+    const live = this.botWatches.get(known.playerId);
+    if (live !== undefined) {
+      if (this.registry.bySpectatorToken(live) !== undefined) {
+        return {
+          ok: false,
+          code: BOT_WATCH_LIVE,
+          errors: ["立てた AI どうしの対戦が終わっていない。"],
+          spectatorToken: live,
+        };
+      }
+      this.botWatches.delete(known.playerId);
+    }
+    if (this.watchPreparing.has(known.playerId)) {
+      return {
+        ok: false,
+        code: BOT_WATCH_LIVE,
+        errors: ["AI どうしの対戦を用意している途中である。"],
+      };
+    }
+    if (this.registry.live().filter(botsOnly).length >= BOT_WATCH_LIMIT) {
+      return {
+        ok: false,
+        code: BOT_WATCH_FULL,
+        errors: ["AI どうしの対戦がほかに多く動いている。しばらくしてから立て直す。"],
+      };
+    }
+    return (
+      deckRefusal(decks[0], "1 人目の AI のデッキ") ?? deckRefusal(decks[1], "2 人目の AI のデッキ")
+    );
+  }
+
+  /** 重みを読むあいだ、同じプレイヤーの次の AI どうしの対戦を断る。`finally` で必ず外すこと。 */
+  holdWatch(playerId: string): void {
+    this.watchPreparing.add(playerId);
+  }
+
+  releaseWatch(playerId: string): void {
+    this.watchPreparing.delete(playerId);
   }
 
   /** 重みを読むあいだ、同じプレイヤーの次の要求を断る。`finally` で必ず外すこと。 */
@@ -472,16 +567,16 @@ export class Lobby {
        */
       [this.seatNow(first), this.seatNow(second)],
       [first.shareCommit, second.shareCommit],
-      null,
-    );
+      NO_BOTS,
+    ).seated;
   }
 
   private open(
     decks: [DeckList, DeckList],
     seats: [SeatInfo, SeatInfo],
     shareCommits: SeedShares,
-    bot: BotSeat | null,
-  ): [Seated, Seated] {
+    bots: BotSeats,
+  ): { seated: [Seated, Seated]; spectatorToken: string } {
     const nowMs = this.now();
     const pending: PendingMatch = {
       matchId: randomUUID(),
@@ -494,7 +589,7 @@ export class Lobby {
       shareCommits,
       shares: noShares(),
       deadlineMs: nowMs + SHARE_REVEAL_DEADLINE_MS,
-      bot,
+      bots,
     };
     if (allRevealed(pending)) this.registry.start(pending, nowMs);
     else this.registry.addPending(pending);
@@ -505,6 +600,6 @@ export class Lobby {
       seedCommit: pending.server.commit,
       seedShareCommits: pending.shareCommits,
     });
-    return [seated(0), seated(1)];
+    return { seated: [seated(0), seated(1)], spectatorToken: pending.spectatorToken };
   }
 }

@@ -14,7 +14,7 @@ import {
   type SeedCommitment,
   type SeedShares,
 } from "./fingerprint.js";
-import { createMatch, type BotSeat, type Match, type SeatInfo } from "./match.js";
+import { createMatch, type BotSeats, type Match, type SeatInfo } from "./match.js";
 
 /**
  * シェアを開くのを待つ長さ。過ぎたら、開かなかった座席のシェアを null として対戦を始める。
@@ -37,8 +37,8 @@ export interface PendingMatch {
   readonly shareCommits: SeedShares;
   readonly shares: SeedShares;
   readonly deadlineMs: number;
-  /** AI の座席（7.3 節）。AI はシェアを出さないので、その座席のコミットは null である。 */
-  readonly bot: BotSeat | null;
+  /** 座席ごとの AI（7.3 節）。AI はシェアを出さないので、その座席のコミットは null である。 */
+  readonly bots: BotSeats;
 }
 
 export type RevealOutcome = "accepted" | "ignored" | "mismatch";
@@ -73,6 +73,6 @@ export function startPending(pending: PendingMatch, nowMs: number): Match {
     startedAt: pending.startedAt,
     seedCommitment: commitSeed(pending.server.nonce, [...pending.shares]),
     seedShareCommits: pending.shareCommits,
-    bot: pending.bot,
+    bots: pending.bots,
   });
 }

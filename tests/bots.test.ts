@@ -200,7 +200,7 @@ describe("AI に見せる候補", () => {
       nowMs: 0,
       startedAt: new Date(0).toISOString(),
       seedCommitment: commitSeed("bot-revisit"),
-      bot: { seat: 1, bot: botFromBytes("g0", generationZero()) },
+      bots: [null, botFromBytes("g0", generationZero())],
     });
     for (;;) {
       const mover = toMove(match);
