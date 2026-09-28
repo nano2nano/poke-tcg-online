@@ -68,7 +68,7 @@ describe("saveDeck", () => {
     stop();
     expect(storedDeck()).toEqual([{ defId: "a", count: 1 }]);
     expect(changed).toHaveBeenCalledTimes(1);
-    // 残せるようになったら、localStorage のものが今のデッキに戻る。
+    // 残せるようになったら、localStorage のものがいまのデッキに戻る。
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => items.get(key) ?? null,
       setItem: (key: string, value: string) => items.set(key, value),

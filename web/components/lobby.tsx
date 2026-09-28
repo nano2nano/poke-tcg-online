@@ -30,8 +30,8 @@ import { DeckBuilder, forCurrentDeck, NO_DECK_STATUS, type DeckMessage } from ".
 
 const SAMPLE_NOTE = {
   messages: ["デッキが空なので、サンプルデッキを使います。"],
-  tone: "" as const,
-};
+  tone: "",
+} satisfies Omit<DeckMessage, "deck">;
 
 /** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
 const SHARES_KEPT = 8;

@@ -27,7 +27,7 @@ const OFFICIAL_DECK_PAGE = "https://www.pokemon-card.com/deck/confirm.html/deckI
 
 /**
  * 残せなかったデッキ。localStorage が使えなくても組むことはできる。投げると、画面と送る中身が食い違う。
- * `undefined` なら localStorage にあるものが今のデッキである。
+ * `undefined` なら localStorage にあるものがいまのデッキである。
  */
 let unsaved: string | null | undefined;
 const listeners = new Set<() => void>();
