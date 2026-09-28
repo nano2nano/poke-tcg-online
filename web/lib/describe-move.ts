@@ -8,7 +8,7 @@
 import type { ChoiceAnswer, Move, PlayerView } from "../../src/engine.js";
 import type { AnswerDestination, DeckPlacementView, SetupView } from "../../src/match.js";
 import type { CardTable } from "./cards.js";
-import { nameOf, sidesOf, type Side } from "./describe.js";
+import { conditionName, nameOf, sidesOf, type Side } from "./describe.js";
 
 type Pokemon = NonNullable<Side["active"]>;
 
@@ -283,6 +283,10 @@ function describeAnswer(
       return answer.placement === "before" ? "先に" : "あとに";
     case "bonusDrawCount":
       return `${answer.count} 枚引く`;
+    case "condition":
+      return conditionName({ kind: answer.condition });
+    case "hpGuess":
+      return `HP ${answer.value}`;
     default:
       return JSON.stringify(answer);
   }

@@ -24,7 +24,13 @@ export interface Seating {
   shuffle: { result: ShuffleCheck; text: string } | null;
   /** 座席を離れた理由。座席を失ったときと、座席へ繋がらなかったときに入る。 */
   left: string | null;
-  send: (message: ClientMessage) => void;
+  /**
+   * 手を送って、返事を待っているあいだ。続けて押すと、2 つ目は古い局面への手として断られ、
+   * 通った 1 つ目まで通らなかったように見える。
+   */
+  awaiting: boolean;
+  /** 送れたら true。 */
+  send: (message: ClientMessage) => boolean;
   choose: (action: SetupAction) => void;
 }
 
@@ -56,6 +62,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
   const [events, setEvents] = useState<LoggedEvent[]>([]);
   const [shuffle, setShuffle] = useState<Seating["shuffle"]>(null);
   const [left, setLeft] = useState<string | null>(null);
+  const [awaiting, setAwaiting] = useState(false);
 
   const { table } = useCardData();
   const cardTable = useEffectEvent(() => table);
@@ -118,6 +125,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     }
 
     function receive(message: ServerMessage) {
+      if (message.t !== "pong") setAwaiting(false);
       // 準備の選びかけは画面の操作でも変わるので、状態は `live` の 1 か所に置く。
       const before = live.current.state;
       const current = seatReducer(before, message);
@@ -203,6 +211,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
       function onLost() {
         if (lost || disposed || replaced) return;
         lost = true;
+        setAwaiting(false);
         if (ended) {
           retry.stop();
           return;
@@ -246,13 +255,15 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
       const { socket, log } = live.current;
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(message));
-        return;
+        if (message.t === "move") setAwaiting(true);
+        return true;
       }
       // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。
       // できごとの欄は畳んであるので、そこに書くだけでは目に入らない。
       const text = "接続が切れているので送れませんでした。繋がってから、もう一度押してください。";
       log(text);
       notify({ text, tone: "attention" });
+      return false;
     },
     [notify],
   );
@@ -263,7 +274,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     setState(next);
   }, []);
 
-  return { state, connection, events, shuffle, left, send, choose };
+  return { state, connection, events, shuffle, left, awaiting, send, choose };
 }
 
 function describeEnd(message: Extract<ServerMessage, { t: "ended" }>, seat: Player): string {

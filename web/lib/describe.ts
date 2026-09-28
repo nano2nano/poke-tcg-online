@@ -105,7 +105,7 @@ export function describeCard(card: CardBrief | undefined): string {
   return parts.filter(Boolean).join(" / ");
 }
 
-export function conditionName(condition: SpecialCondition): string {
+export function conditionName(condition: Pick<SpecialCondition, "kind">): string {
   return CONDITIONS[condition.kind] ?? condition.kind;
 }
 

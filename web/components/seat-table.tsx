@@ -126,7 +126,7 @@ export function SeatTable({
             seating={seating}
             context={context}
             listed={listed}
-            disabled={disabled}
+            disabled={disabled || seating.awaiting}
             onAim={onAim}
           />
           <button
@@ -350,12 +350,14 @@ function SetupForm({
       </div>
       <button
         id="setup-submit"
-        // 切れているあいだに押すと、送れないまま送った扱いになり、次の局面が届くまで押せなくなる。
+        // 切れているあいだは送れない。押せるように見せない。
         disabled={disabled || draft.active === null || draft.sent}
         onClick={() => {
-          if (disabled || draft.active === null || draft.sent) return;
-          choose({ t: "setup-sent" });
-          send({ t: "setup", active: draft.active, bench: draft.bench });
+          if (draft.active === null) return;
+          // 送れなかったのに送った扱いにすると、押し直せなくなる。
+          if (send({ t: "setup", active: draft.active, bench: draft.bench })) {
+            choose({ t: "setup-sent" });
+          }
         }}
       >
         準備を終える
