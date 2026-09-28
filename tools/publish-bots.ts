@@ -28,13 +28,21 @@ import { constants, setPriority, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { BOT_NAME_PATTERN, BOT_PREFIX, botFromBytes, type Bot } from "../src/bots.js";
+import {
+  BOT_NAME_PATTERN,
+  BOT_PREFIX,
+  BOT_TRAINING_DECKS,
+  botFromBytes,
+  deckPresets,
+  presetDeck,
+  trainedDeckLabels,
+  type Bot,
+} from "../src/bots.js";
 import {
   createGame,
   derivedView,
   GameKnowledge,
   legalMoves,
-  metaDecks,
   playerView,
   registerPoolCards,
 } from "../src/engine.js";
@@ -52,12 +60,14 @@ export interface RunPointers {
   current: string;
   /** 凍結した世代（走りの状態の `anchors`）。 */
   anchors: { generation: number; weights: string }[];
+  /** 学習の `--decks` の値。 */
+  decks: string;
 }
 
 export function readRunPointers(run: string): RunPointers {
   const path = join(run, RUN_STATE);
   const state = JSON.parse(readFileSync(path, "utf8")) as {
-    config?: { gate?: unknown };
+    config?: { gate?: unknown; decks?: unknown };
     current?: { weights?: unknown };
     anchors?: { generation?: unknown; weights?: unknown }[];
   };
@@ -73,7 +83,29 @@ export function readRunPointers(run: string): RunPointers {
     }
     return { generation: one.generation, weights: one.weights };
   });
-  return { gate, current, anchors };
+  const decks = state.config?.decks;
+  if (typeof decks !== "string") throw new Error(`${path} に学習のデッキ（config.decks）が無い`);
+  return { gate, current, anchors, decks };
+}
+
+/**
+ * 走りが学習で握った本が、AI の座席が握る本とちょうど同じか確かめ、違えば投げる。違う本で学んだ方策を置くと、
+ * 画面で選べるデッキの一部を方策は学習で見ていないのに、何も知らせずに指し始める。
+ */
+export function checkRunDecks(decks: string): void {
+  const wanted = trainedDeckLabels(BOT_TRAINING_DECKS);
+  let trained: Set<string>;
+  try {
+    trained = trainedDeckLabels(decks);
+  } catch {
+    trained = new Set();
+  }
+  const same = trained.size === wanted.size && [...trained].every((label) => wanted.has(label));
+  if (!same) {
+    throw new Error(
+      `走りは --decks=${decks} で学んだ。AI の座席が握るのは ${BOT_TRAINING_DECKS} の本なので上げない（src/bots.ts の BOT_TRAINING_DECKS）`,
+    );
+  }
 }
 
 export interface Upload {
@@ -110,9 +142,9 @@ export function plan(
  */
 export function checkLoads(name: string, bytes: Uint8Array): Bot {
   const bot = botFromBytes(name, bytes);
-  const [first, second] = metaDecks;
-  if (first === undefined || second === undefined) throw new Error("デッキの表が 2 本に満たない");
-  const decks = [first.deck(), second.deck()] as const;
+  const [first, second] = deckPresets().map((preset) => presetDeck(preset.label));
+  if (first == null || second == null) throw new Error("デッキの表が 2 本に満たない");
+  const decks = [first, second] as const;
   const created = createGame({ seed: "0".repeat(32), decks: [decks[0], decks[1]] });
   const state = created.state;
   const seat = state.choices.at(-1)?.owner ?? state.turnPlayer;
@@ -258,6 +290,7 @@ function publishOnce(
     retry("走りの状態を読めない", error);
     return;
   }
+  checkRunDecks(pointers.decks);
   if (seenGate.value !== pointers.gate) {
     seenGate.value = pointers.gate;
     console.log(

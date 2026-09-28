@@ -6,10 +6,12 @@ import { AccountStore, INITIAL_RATING } from "../src/accounts.js";
 import { MatchArchive } from "../src/archive.js";
 import {
   BOT_PREFIX,
+  BOT_TRAINING_DECKS,
   botFromBytes,
   BotStore,
   deckPresets,
   presetDeck,
+  trainedDeckLabels,
   type Bot,
 } from "../src/bots.js";
 import { validateDeck } from "../src/deck.js";
@@ -242,6 +244,16 @@ describe("AI が握るデッキ", () => {
     }
   });
 
+  it("表は学習の --decks が握らせた本とちょうど同じで、取り置いた本は入らない", () => {
+    const labels = deckPresets().map((preset) => preset.label);
+    expect(new Set(labels)).toEqual(trainedDeckLabels(BOT_TRAINING_DECKS));
+    expect(labels).not.toContain("dragapult-blaziken-28732");
+  });
+
+  it("大会の表の組でない --decks からは本を引かない", () => {
+    expect(() => trainedDeckLabels("meta")).toThrow(/大会の表の組のラベルではない/);
+  });
+
   it("表に無い名前はデッキにしない", () => {
     expect(presetDeck("そんなデッキは無い")).toBeNull();
   });
@@ -300,10 +312,10 @@ async function playAgainst(arena: Arena, bot: Bot): Promise<MatchRecord> {
   ensureCards();
   const { account, secret } = await arena.accounts.create("ひと", 0);
   const outcome = arena.lobby.joinBot(
-    { secret, deck: presetDeck("doraparuto")! },
+    { secret, deck: presetDeck("dragapult-28731")! },
     account,
     bot,
-    presetDeck("fudin")!,
+    presetDeck("alakazam-dudunsparce-72073")!,
   );
   if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
   await new Promise<void>((resolve) => {
@@ -476,10 +488,10 @@ describe("AI の座席", () => {
     };
     const { account, secret } = await arena.accounts.create("ひと", 0);
     const outcome = arena.lobby.joinBot(
-      { secret, deck: presetDeck("doraparuto")! },
+      { secret, deck: presetDeck("dragapult-28731")! },
       account,
       bot,
-      presetDeck("fudin")!,
+      presetDeck("alakazam-dudunsparce-72073")!,
     );
     if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
     const socket: SeatSocket = { send() {}, close() {} };
@@ -518,10 +530,10 @@ describe("AI の座席を開く", () => {
     for (let attempt = 0; attempt < 40 && started === undefined; attempt++) {
       const { account, secret } = await arena.accounts.create("ひと", 0);
       const outcome = arena.lobby.joinBot(
-        { secret, deck: presetDeck("doraparuto")! },
+        { secret, deck: presetDeck("dragapult-28731")! },
         account,
         bot,
-        presetDeck("fudin")!,
+        presetDeck("alakazam-dudunsparce-72073")!,
       );
       if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
       const match = arena.registry.bySeatToken(outcome.seat.seatToken)?.match;
@@ -546,13 +558,20 @@ describe("AI の座席を開く", () => {
     const { account, secret } = await arena.accounts.create("ひと", 0);
     const request = {
       secret,
-      deck: presetDeck("doraparuto")!,
+      deck: presetDeck("dragapult-28731")!,
       seedShareCommit: commitShare("c".repeat(64)),
     };
-    const first = arena.lobby.joinBot(request, account, bot, presetDeck("fudin")!);
+    const first = arena.lobby.joinBot(
+      request,
+      account,
+      bot,
+      presetDeck("alakazam-dudunsparce-72073")!,
+    );
     if (!first.ok || !("seat" in first)) throw new Error("AI と対戦できなかった");
     expect(arena.registry.live()).toHaveLength(0);
-    expect(arena.lobby.refuseBot(request, account, presetDeck("fudin")!)).toMatchObject({
+    expect(
+      arena.lobby.refuseBot(request, account, presetDeck("alakazam-dudunsparce-72073")!),
+    ).toMatchObject({
       ok: false,
       code: BOT_MATCH_LIVE,
       seat: first.seat,
@@ -563,13 +582,19 @@ describe("AI の座席を開く", () => {
     ensureCards();
     const arena = newArena();
     const { account, secret } = await arena.accounts.create("ひと", 0);
-    const request = { secret, deck: presetDeck("doraparuto")! };
+    const request = { secret, deck: presetDeck("dragapult-28731")! };
     arena.lobby.holdBotJoin(account.playerId);
-    const refused = arena.lobby.refuseBot(request, account, presetDeck("fudin")!);
+    const refused = arena.lobby.refuseBot(
+      request,
+      account,
+      presetDeck("alakazam-dudunsparce-72073")!,
+    );
     expect(refused).toMatchObject({ ok: false, code: BOT_MATCH_LIVE });
     expect(refused?.ok === false && refused.seat).toBeUndefined();
     arena.lobby.releaseBotJoin(account.playerId);
-    expect(arena.lobby.refuseBot(request, account, presetDeck("fudin")!)).toBeNull();
+    expect(
+      arena.lobby.refuseBot(request, account, presetDeck("alakazam-dudunsparce-72073")!),
+    ).toBeNull();
   });
 
   it("AI との対戦が続いているあいだは、同じ人の次の対戦を断る", async () => {
@@ -579,10 +604,10 @@ describe("AI の座席を開く", () => {
     const { account, secret } = await arena.accounts.create("ひと", 0);
     const join = () =>
       arena.lobby.joinBot(
-        { secret, deck: presetDeck("doraparuto")! },
+        { secret, deck: presetDeck("dragapult-28731")! },
         account,
         bot,
-        presetDeck("fudin")!,
+        presetDeck("alakazam-dudunsparce-72073")!,
       );
     const first = join();
     if (!first.ok || !("seat" in first)) throw new Error("AI と対戦できなかった");
@@ -599,14 +624,16 @@ describe("AI の座席を開く", () => {
     ensureCards();
     const arena = newArena();
     const { account, secret } = await arena.accounts.create("ひと", 0);
-    const deck = presetDeck("doraparuto")!;
+    const deck = presetDeck("dragapult-28731")!;
     arena.lobby.join({ secret, deck, roomCode: "へや" }, account);
     const other = await arena.accounts.create("あいて", 0);
     arena.lobby.join({ secret: other.secret, deck, roomCode: "へや" }, other.account);
     const [match] = arena.registry.live();
     if (match === undefined) throw new Error("対戦が始まっていない");
 
-    expect(arena.lobby.refuseBot({ secret, deck }, account, presetDeck("fudin")!)).toMatchObject({
+    expect(
+      arena.lobby.refuseBot({ secret, deck }, account, presetDeck("alakazam-dudunsparce-72073")!),
+    ).toMatchObject({
       ok: false,
       code: MATCH_LIVE,
       seat: { matchId: match.matchId, seat: 0, seatToken: match.seatTokens[0] },
@@ -619,7 +646,7 @@ describe("AI の座席を開く", () => {
     const { account, secret } = await arena.accounts.create("ひと", 0);
     arena.lobby.holdBotJoin(account.playerId);
 
-    const refused = arena.lobby.join({ secret, deck: presetDeck("doraparuto")! }, account);
+    const refused = arena.lobby.join({ secret, deck: presetDeck("dragapult-28731")! }, account);
 
     expect(refused).toMatchObject({ ok: false, code: BOT_MATCH_LIVE });
     expect(arena.lobby.waitingCount()).toBe(0);
@@ -630,8 +657,13 @@ describe("AI の座席を開く", () => {
     const arena = newArena();
     const bot = botFromBytes("g0", generationZero());
     const { account, secret } = await arena.accounts.create("ひと", 0);
-    const deck = presetDeck("doraparuto")!;
-    const first = arena.lobby.joinBot({ secret, deck }, account, bot, presetDeck("fudin")!);
+    const deck = presetDeck("dragapult-28731")!;
+    const first = arena.lobby.joinBot(
+      { secret, deck },
+      account,
+      bot,
+      presetDeck("alakazam-dudunsparce-72073")!,
+    );
     if (!first.ok || !("seat" in first)) throw new Error("AI と対戦できなかった");
 
     expect(arena.lobby.join({ secret, deck }, account)).toEqual({

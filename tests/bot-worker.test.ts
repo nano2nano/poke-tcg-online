@@ -50,10 +50,13 @@ describe("AI と対戦する", () => {
     const { decks } = (await (await fetch(`http://${worker.host}/api/bots`)).json()) as JsonBody;
     const cards = (await (await fetch(`http://${worker.host}/api/cards`)).json()) as JsonBody;
     for (const deck of decks as JsonBody[]) {
-      expect(cards[deck.ace]?.name, deck.label).toEqual(expect.any(String));
+      expect(deck.aces.length, deck.label).toBeGreaterThan(0);
+      for (const ace of deck.aces) expect(cards[ace]?.name, deck.label).toEqual(expect.any(String));
     }
     // 名前が重なると、選択肢のどれがどのデッキか画面で見分けられない。
-    const names = (decks as JsonBody[]).map((deck) => cards[deck.ace].name);
+    const names = (decks as JsonBody[]).map((deck) =>
+      deck.aces.map((ace: string) => cards[ace].name).join("・"),
+    );
     expect(new Set(names).size).toBe(names.length);
   });
 
@@ -62,8 +65,8 @@ describe("AI と対戦する", () => {
     const outcome = await postJson("/api/join-bot", {
       secret,
       bot: "not-there",
-      botDeck: "fudin",
-      deckPreset: "doraparuto",
+      botDeck: "alakazam-dudunsparce-72073",
+      deckPreset: "dragapult-28731",
     });
     expect(outcome.status).toBe(400);
     expect(outcome.body.ok).toBe(false);
@@ -74,8 +77,8 @@ describe("AI と対戦する", () => {
     const joined = await postJson("/api/join-bot", {
       secret,
       bot: "g0",
-      botDeck: "fudin",
-      deckPreset: "doraparuto",
+      botDeck: "alakazam-dudunsparce-72073",
+      deckPreset: "dragapult-28731",
     });
     expect(joined.body.ok).toBe(true);
 
@@ -116,16 +119,16 @@ describe("AI と対戦する", () => {
     const next = await postJson("/api/join-bot", {
       secret,
       bot: "g0",
-      botDeck: "fudin",
-      deckPreset: "doraparuto",
+      botDeck: "alakazam-dudunsparce-72073",
+      deckPreset: "dragapult-28731",
     });
     expect(next.body.ok).toBe(true);
     // 続いているあいだは断り、その席を返す。
     const refused = await postJson("/api/join-bot", {
       secret,
       bot: "g0",
-      botDeck: "fudin",
-      deckPreset: "doraparuto",
+      botDeck: "alakazam-dudunsparce-72073",
+      deckPreset: "dragapult-28731",
     });
     expect(refused.status).toBe(400);
     expect(refused.body).toMatchObject({ ok: false, code: "bot-match-live", seat: next.body.seat });
@@ -142,8 +145,8 @@ describe("AI と対戦する", () => {
       const joined = await postJson("/api/join-bot", {
         secret,
         bot: "g0",
-        botDeck: "fudin",
-        deckPreset: "doraparuto",
+        botDeck: "alakazam-dudunsparce-72073",
+        deckPreset: "dragapult-28731",
       });
       expect(joined.body.ok).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 200));

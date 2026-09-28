@@ -84,7 +84,12 @@ export function Lobby({
   });
   const botNames = bots.data?.bots ?? [];
   const decks = bots.data?.decks ?? [];
-  const deckName = (deck: DeckPreset) => table[deck.ace]?.name ?? deck.label;
+  const deckName = (deck: DeckPreset) => {
+    const names = deck.aces.map((ace) => table[ace]?.name);
+    return names.length > 0 && names.every((one) => one !== undefined)
+      ? names.join("・")
+      : deck.label;
+  };
   const [bot, setBot] = useState<string | null>(null);
   const [botDeck, setBotDeck] = useState<string | null>(null);
   /**
