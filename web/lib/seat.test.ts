@@ -37,9 +37,19 @@ describe("checkShuffle", () => {
   });
 
   it("自分のシェアのコミットがすり替えられていたら合わない", async () => {
+    // サーバが自分のコミットを選んだ値のものにすり替え、その値を自分のシェアとして開く。
+    // コミットと開いた値と seed は互いに合うので、見分けるには送ったシェアと突き合わせるしかない。
+    const { seated, ended } = opened(["サーバの値", "相手"]);
+    expect((await checkShuffle({ ...seated, seedShare: "自分" }, ended))[0]).toBe("mismatch");
+  });
+
+  it("自分のシェアが開かれなければ、シェアを覚えていない画面でもそう分ける", async () => {
     const { seated, ended } = opened(["自分", "相手"]);
-    const forged = { ...seated, seedShare: "送ったつもりの値" };
-    expect((await checkShuffle(forged, ended))[0]).toBe("mismatch");
+    const seed = sha(`seed:${ended.seedNonce}::相手`).slice(0, 32);
+    const dropped = { ...ended, seed, seedShares: [null, "相手"] as [null, string] };
+    expect((await checkShuffle(seated, dropped))[0]).toBe("share-unused");
+    const { seedShare: _, ...reentered } = seated;
+    expect((await checkShuffle(reentered, dropped))[0]).toBe("share-unused");
   });
 
   it("相手のシェアが開かれなければ、そう分ける", async () => {
