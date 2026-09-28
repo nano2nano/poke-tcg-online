@@ -8,7 +8,14 @@ import type { Player } from "../../src/engine.js";
 import type { ClientMessage, ServerMessage } from "../../src/protocol.js";
 import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl, type Reconnector } from "./connection.js";
-import { describeEvents, eventLines, type Notice, type Tone } from "./describe.js";
+import {
+  describeEvents,
+  eventLines,
+  rejectText,
+  seatEndText,
+  seatEndTone,
+  type Notice,
+} from "./describe.js";
 import { initialSeatState, seatReducer, type SeatState, type SetupAction } from "./match-state.js";
 import { checkShuffle, forgetSeat, type ShuffleCheck, type StoredSeat } from "./seat.js";
 import type { LoggedEvent } from "./use-watch.js";
@@ -34,27 +41,13 @@ export interface Seating {
   choose: (action: SetupAction) => void;
 }
 
-const WIN_REASONS: Record<string, string> = {
-  "prizes-taken": "サイドを取りきった",
-  "no-pokemon": "場のポケモンがいなくなった",
-  "deck-out": "山札を引けなかった",
-  "effect-declared": "カードの効果",
-  "turn-limit": "手数の上限",
-};
-
-/** 手を断った理由（仕様 2.2 節）。 */
-const REJECT_REASONS: Record<string, string> = {
-  "not-your-turn": "あなたの番ではありません",
-  "stale-version": "盤面が先に進んでいました",
-  "illegal-move": "いまは指せない手です",
-  "match-over": "対戦は終わっています",
-};
-
 /**
  * 同じ座席を開いたタブどうしで、繋がったことを知らせ合う。繋ぎ直しを待っているタブが
  * あとから繋ぐと、いま指しているタブがサーバに閉じられる（3.3 節）。
  */
 const CHANNEL = "poke-seat";
+
+const REPLY_WAIT_MS = 5_000;
 
 export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): Seating {
   const [state, setState] = useState(() => initialSeatState(seated.seat));
@@ -125,9 +118,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     }
 
     function receive(message: ServerMessage) {
-      // pong でも待ちを解く。サーバは処理できなかった手に何も返さないので、局面か断りだけを待つと、
-      // ボタンが戻らないまま時間が切れる。
-      setAwaiting(false);
+      if (message.t !== "pong") setAwaiting(false);
       // 準備の選びかけは画面の操作でも変わるので、状態は `live` の 1 か所に置く。
       const before = live.current.state;
       const current = seatReducer(before, message);
@@ -156,9 +147,9 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         case "ended": {
           // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
           forgetSeat(seated.seatToken);
-          const text = describeEnd(message, seated.seat);
+          const text = seatEndText(message, seated.seat);
           log([text]);
-          show({ text, tone: endTone(message.matchResult.winner, seated.seat) });
+          show({ text, tone: seatEndTone(message.matchResult.winner, seated.seat) });
           void checkShuffle(seated, message).then(([result, shown]) => {
             if (!disposed) setShuffle({ result, text: shown });
           });
@@ -166,7 +157,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         }
         case "reject": {
           // 古い画面から押したときは、サーバが正しい局面を送り直してくる。
-          const text = `手が通りませんでした（${REJECT_REASONS[message.reason] ?? message.reason}）`;
+          const text = rejectText(message.reason);
           log([text]);
           show({ text, tone: "attention" });
           return;
@@ -252,6 +243,13 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     };
   }, [seated]);
 
+  // サーバは、処理の途中で投げた手には何も返さず、接続は保つ。返事だけを待つと、ボタンが戻らない。
+  useEffect(() => {
+    if (!awaiting) return;
+    const timer = setTimeout(() => setAwaiting(false), REPLY_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [awaiting]);
+
   const send = useCallback(
     (message: ClientMessage) => {
       const { socket, log } = live.current;
@@ -277,19 +275,4 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
   }, []);
 
   return { state, connection, events, shuffle, left, awaiting, send, choose };
-}
-
-function describeEnd(message: Extract<ServerMessage, { t: "ended" }>, seat: Player): string {
-  const result = message.matchResult;
-  const mine = result.winner === seat ? "勝ち" : "負け";
-  if (result.kind === "concede") return `投了により ${mine}`;
-  if (result.kind === "timeout") return `時間切れにより ${mine}`;
-  if (result.winner === null) return "引き分け";
-  const reason = message.outcome?.reason;
-  return `${mine}（${(reason === undefined ? undefined : WIN_REASONS[reason]) ?? reason ?? ""}）`;
-}
-
-function endTone(winner: Player | null, seat: Player): Tone {
-  if (winner === null) return "neutral";
-  return winner === seat ? "positive" : "negative";
 }

@@ -6,7 +6,7 @@
  */
 
 import type { Player, PlayerEvent, PlayerView, SpectatorView } from "../../src/engine.js";
-import type { ClockView, SpectatorSeat } from "../../src/protocol.js";
+import type { ClockView, EndedMessage, RejectReason, SpectatorSeat } from "../../src/protocol.js";
 import type { CardBrief, CardTable } from "./cards.js";
 
 /** 1 人ぶんの場。手札の中身が見えるのは自分の座席だけで、ほかは枚数だけが届く。 */
@@ -142,6 +142,44 @@ export function watchEndText(
   if (result.winner === null) return "引き分けで終わりました";
   const how: Record<string, string> = { concede: "（投了）", timeout: "（時間切れ）" };
   return `${who(result.winner)} の勝ちで終わりました${how[result.kind] ?? ""}`;
+}
+
+const WIN_REASONS: Record<string, string> = {
+  "prizes-taken": "サイドを取りきった",
+  "no-pokemon": "場のポケモンがいなくなった",
+  "deck-out": "山札を引けなかった",
+  "effect-declared": "カードの効果",
+  "turn-limit": "手数の上限",
+};
+
+export function seatEndText(
+  ended: Pick<EndedMessage, "matchResult" | "outcome">,
+  seat: Player,
+): string {
+  const result = ended.matchResult;
+  const mine = result.winner === seat ? "勝ち" : "負け";
+  if (result.kind === "concede") return `投了により ${mine}`;
+  if (result.kind === "timeout") return `時間切れにより ${mine}`;
+  if (result.winner === null) return "引き分け";
+  const reason = ended.outcome?.reason;
+  return `${mine}（${(reason === undefined ? undefined : WIN_REASONS[reason]) ?? reason ?? ""}）`;
+}
+
+export function seatEndTone(winner: Player | null, seat: Player): Tone {
+  if (winner === null) return "neutral";
+  return winner === seat ? "positive" : "negative";
+}
+
+/** 手を断った理由（仕様 2.2 節）。 */
+const REJECT_REASONS: Record<RejectReason, string> = {
+  "not-your-turn": "あなたの番ではありません",
+  "stale-version": "盤面が先に進んでいました",
+  "illegal-move": "いまは指せない手です",
+  "match-over": "対戦は終わっています",
+};
+
+export function rejectText(reason: RejectReason): string {
+  return `手が通りませんでした（${REJECT_REASONS[reason]}）`;
 }
 
 export type Tone = "neutral" | "turn" | "attention" | "positive" | "negative";

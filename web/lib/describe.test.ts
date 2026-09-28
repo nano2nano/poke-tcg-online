@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Player, PlayerEvent, SpectatorView } from "../../src/engine.js";
 import type { CardTable } from "./cards.js";
-import { describeEvents } from "./describe.js";
+import { describeEvents, rejectText, seatEndText } from "./describe.js";
 
 const cards: CardTable = { pikachu: { name: "ピカチュウ", kind: "pokemon", hp: 60 } };
 const who = (player: Player) => ["あ", "い"][player]!;
@@ -70,5 +70,30 @@ describe("describeEvents", () => {
     expect(describeEvents([event({ kind: "pokemon-check-started" })], [null], who, cards)).toEqual([
       null,
     ]);
+  });
+});
+
+describe("seatEndText", () => {
+  it("エンジンが決めた勝敗は、決まった理由を添える", () => {
+    const ended = {
+      matchResult: { kind: "normal", winner: 0 },
+      outcome: { winner: 0, reason: "prizes-taken" },
+    } as const;
+    expect(seatEndText(ended, 0)).toBe("勝ち（サイドを取りきった）");
+    expect(seatEndText(ended, 1)).toBe("負け（サイドを取りきった）");
+  });
+
+  it("投了は、どちらが投了したかではなく自分の勝ち負けで出す", () => {
+    const ended = {
+      matchResult: { kind: "concede", winner: 1, conceded: 0 },
+      outcome: null,
+    } as const;
+    expect(seatEndText(ended, 0)).toBe("投了により 負け");
+  });
+});
+
+describe("rejectText", () => {
+  it("断った理由を言葉で出す", () => {
+    expect(rejectText("stale-version")).toBe("手が通りませんでした（盤面が先に進んでいました）");
   });
 });
