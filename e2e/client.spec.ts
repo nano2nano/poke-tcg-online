@@ -155,7 +155,7 @@ test("読み込みの返事が遅れても、打ち込んだ名前を書き戻�
   await expect(page.locator("#name")).toHaveValue("ぼくのなまえ");
 });
 
-test("押してから送るまでのあいだに打ち足した名前も送る", async ({ page }) => {
+test("押してから送るまでのあいだに直した名前とルームコードも送る", async ({ page }) => {
   let release = (): void => {};
   const held = new Promise<void>((resolve) => {
     release = resolve;
@@ -166,14 +166,16 @@ test("押してから送るまでのあいだに打ち足した名前も送る",
   });
 
   await page.goto("./");
+  const room = `うちたし-${Date.now()}`;
   await page.fill("#name", "たろ");
-  await page.fill("#room", `うちたし-${Date.now()}`);
+  await page.fill("#room", `${room}-まちがい`);
   const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
   await page.click("#join-button");
   await page.fill("#name", "たろう");
+  await page.fill("#room", room);
   release();
 
-  expect((await sent).postDataJSON()).toMatchObject({ displayName: "たろう" });
+  expect((await sent).postDataJSON()).toMatchObject({ displayName: "たろう", roomCode: room });
 });
 
 test("相手を待つあいだに知らない形の答えが届いたら、待つのをやめる", async ({ page }) => {

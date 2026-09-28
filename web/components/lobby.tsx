@@ -57,6 +57,8 @@ export function Lobby({
   const [status, setStatus] = useState(initialStatus);
   const [deckStatus, setDeckStatus] = useState(NO_DECK_STATUS);
   const [room, setRoom] = useState("");
+  /** 送る時点のルームコード。名前と同じく、押してから送るまでに直した分も送る。 */
+  const roomNow = useRef("");
 
   /**
    * 人が打った表示名。打つまでは null で、欄にはプレイヤーの表示名を出す。
@@ -193,7 +195,7 @@ export function Lobby({
     const deck = await deckOrExplain();
     if (deck === null) return;
     const share = await newSeedShare();
-    const roomCode = room.trim();
+    const roomCode = roomNow.current.trim();
     const request = await common(share);
     const earlier = waitingTicket.current;
     if (earlier !== null) {
@@ -294,6 +296,7 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
+    setDeckStatus(NO_DECK_STATUS);
     let deck: { deckPreset: string } | { deck: DeckList };
     if (chosenOwnDeck === "") {
       // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
@@ -375,7 +378,10 @@ export function Lobby({
           id="room"
           placeholder="空ならマッチングキューへ"
           value={room}
-          onChange={(event) => setRoom(event.target.value)}
+          onChange={(event) => {
+            roomNow.current = event.target.value;
+            setRoom(event.target.value);
+          }}
         />
       </label>
 

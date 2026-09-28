@@ -107,14 +107,16 @@ export interface BotList {
   decks: DeckPreset[];
 }
 
-/** サーバが答えたのに読めなかった。入れ替えのあとの古いタブが、新しいサーバに尋ねたときに起きる。 */
+/** 成功を返したのに読めない答え。入れ替えのあとの古いタブが、新しいサーバに尋ねたときに起きる。 */
 export interface Unreadable {
   kind: "unreadable";
 }
 
 /**
- * 席を取りに行く。届かなかったときと、サーバが一時的な失敗を返したときは null で、取り直せばよい。
- * それ以外で読めない答えは `unreadable` にする。取り直しても同じ答えが返るので、待つのをやめる。
+ * 席を取りに行く。届かなかったときと、サーバが失敗を返したときは null で、取り直せばよい。
+ * 失敗の番号だけでは、サーバの答えか間の中継の答えか見分けられない。待つのをやめると、
+ * そのあいだに決まった席に誰も座らず時間切れで負ける。
+ * 成功を返したのに読めない答えは `unreadable` にする。取り直しても同じ答えが返るので、待つのをやめる。
  */
 export async function claim(ticket: string): Promise<ClaimOutcome | Unreadable | null> {
   let response: Response;
@@ -123,10 +125,7 @@ export async function claim(ticket: string): Promise<ClaimOutcome | Unreadable |
   } catch {
     return null;
   }
-  // 混んでいる、間に合わなかった、という答えは、取り直せば通る。
-  if (response.status >= 500 || response.status === 408 || response.status === 429) return null;
-  const answer = response.ok
-    ? ((await response.json().catch(() => null)) as ClaimOutcome | null)
-    : null;
+  if (!response.ok) return null;
+  const answer = (await response.json().catch(() => null)) as ClaimOutcome | null;
   return answer ?? { kind: "unreadable" };
 }
