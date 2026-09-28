@@ -506,6 +506,14 @@ test("最後の 1 枚を選んだあとの確かめに失敗したら、その�
   await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
 });
 
+test("デッキを確かめるのに失敗したら、その失敗を出す", async ({ page }) => {
+  await page.route("**/api/deck/validate", (route) => route.abort());
+  await page.goto(`${BASEPATH}/`);
+  await addFirstSampleCard(page);
+  await page.click("#check-button");
+  await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
+});
+
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {
   await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
   await page.route("**/api/card-image/*", (route) => route.fulfill({ status: 502, body: "" }));

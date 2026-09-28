@@ -28,6 +28,11 @@ import { parseDeck, storedDeckJson, subscribeDeck } from "../lib/deck.js";
 import type { StoredSeat } from "../lib/seat.js";
 import { DeckBuilder, forCurrentDeck, NO_DECK_STATUS, type DeckMessage } from "./deck-builder.js";
 
+const SAMPLE_NOTE = {
+  messages: ["デッキが空なので、サンプルデッキを使います。"],
+  tone: "" as const,
+};
+
 /** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
 const SHARES_KEPT = 8;
 
@@ -201,13 +206,7 @@ export function Lobby({
     const sent = storedDeckJson();
     const { deck, sample } = await builtDeck();
     // 組んだデッキなら、欄はいまのデッキについてのものなので残す。確かめている途中の表示も消さない。
-    if (sample) {
-      showDeckStatus({
-        messages: ["デッキが空なので、サンプルデッキを使います。"],
-        tone: "",
-        deck: sent,
-      });
-    }
+    if (sample) showDeckStatus({ ...SAMPLE_NOTE, deck: sent });
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
@@ -309,7 +308,10 @@ export function Lobby({
     let deck: { deckPreset: string } | { deck: DeckList };
     if (chosenOwnDeck === "") {
       // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
-      deck = { deck: { cards: (await builtDeck()).deck.cards } };
+      const sent = storedDeckJson();
+      const built = await builtDeck();
+      if (built.sample) showDeckStatus({ ...SAMPLE_NOTE, deck: sent });
+      deck = { deck: { cards: built.deck.cards } };
     } else {
       deck = { deckPreset: chosenOwnDeck };
     }

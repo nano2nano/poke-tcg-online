@@ -125,21 +125,21 @@ export function DeckBuilder({
     post({ messages, tone, deck });
 
   const check = async () => {
-    if (storedDeck().length === 0) {
-      say(["デッキにカードがありません。"], "ng");
+    const deck = storedDeckJson();
+    if (parseDeck(deck).length === 0) {
+      say(["デッキにカードがありません。"], "ng", deck);
       return;
     }
-    await validate();
+    await validate(deck);
   };
 
   /** 失敗の文も、確かめたデッキに付ける。選んだカードを置いてから確かめるので、押す前のデッキではない。 */
-  const validate = async () => {
-    const deck = storedDeckJson();
+  const validate = async (deck: string | null) => {
     let outcome: { errors?: string[] };
     try {
       outcome = await postJson("/api/deck/validate", deckCards(parseDeck(deck)));
     } catch (error) {
-      say([`確かめられませんでした: ${messageOf(error)}`], "ng", deck);
+      fail("確かめられませんでした", deck)(error);
       return;
     }
     showVerdict(outcome.errors ?? [], deck);
@@ -230,11 +230,11 @@ export function DeckBuilder({
     const deck = storedDeckJson();
     setOfficial({ ...current, deck, pending });
     if (pending.some((each) => each.left > 0)) return;
-    say(["デッキを確かめています。"], "");
-    await validate();
+    say(["デッキを確かめています。"], "", deck);
+    await validate(deck);
   };
 
-  /** `deck` は、失敗した操作を始めたときのデッキ。 */
+  /** `deck` は、失敗した操作が扱っていたデッキ。 */
   const fail = (lead: string, deck: string | null) => (error: unknown) =>
     say([`${lead}: ${messageOf(error)}`], "ng", deck);
 
