@@ -437,6 +437,26 @@ test("デッキを確かめた結果は、対戦をさがしても残す", async
   await expect(page.locator("#deck-status")).toContainText("規則を通ります");
 });
 
+test("サンプルデッキで対戦すると出たあとに別のタブでデッキを組んだら、その文を消す", async ({
+  page,
+}) => {
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
+  );
+  await page.goto(`${BASEPATH}/`);
+  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await joined;
+  await expect(page.locator("#deck-status")).toContainText("サンプルデッキで対戦します");
+
+  const other = await page.context().newPage();
+  await other.goto(page.url());
+  const defId = await addFirstSampleCard(other);
+  await other.close();
+  await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
+  await expect(page.locator("#deck-status")).not.toContainText("サンプルデッキで対戦します");
+});
+
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {
   await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
   await page.route("**/api/card-image/*", (route) => route.fulfill({ status: 502, body: "" }));

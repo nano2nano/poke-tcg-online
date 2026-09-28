@@ -51,13 +51,13 @@ export interface DeckMessage {
   messages: string[];
   tone: "ok" | "ng" | "";
   /**
-   * 検査の結果なら、確かめたデッキ。組み替わったら出さない。別のタブで組み替えることもあり、
+   * 何についての文か。このデッキから組み替わったら出さない。別のタブで組み替えることもあり、
    * 返事を待つあいだに組み替えることもある。
    */
-  deck?: string | null;
+  deck: string | null;
 }
 
-export const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "" };
+export const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "", deck: null };
 
 /**
  * デッキを組む。組んだデッキはこのブラウザに残り、対戦に入るときはそれを出す。
@@ -108,9 +108,13 @@ export function DeckBuilder({
     onStatus(NO_DECK_STATUS);
   };
 
+  /** いまのデッキについての文を出す。 */
+  const say = (messages: string[], tone: DeckMessage["tone"]) =>
+    onStatus({ messages, tone, deck: storedDeckJson() });
+
   const check = async () => {
     if (entries.length === 0) {
-      onStatus({ messages: ["デッキにカードがありません。"], tone: "ng", deck: null });
+      say(["デッキにカードがありません。"], "ng");
       return;
     }
     await validate(entries);
@@ -148,21 +152,15 @@ export function DeckBuilder({
   const importCode = async () => {
     const parsed = deckCodeOf(code);
     if (parsed === null) {
-      onStatus({
-        messages: ["デッキコードか、公式サイトのデッキのページの URL を入れてください。"],
-        tone: "ng",
-      });
+      say(["デッキコードか、公式サイトのデッキのページの URL を入れてください。"], "ng");
       return;
     }
     const before = storedDeckJson();
     setOfficial(null);
-    onStatus({ messages: ["公式サイトからデッキを読んでいます。"], tone: "" });
+    say(["公式サイトからデッキを読んでいます。"], "");
     const page = await fetchOfficialDeck(parsed);
     if (page === null) {
-      onStatus({
-        messages: [`デッキコード ${parsed} のデッキは公式サイトにありません。`],
-        tone: "ng",
-      });
+      say([`デッキコード ${parsed} のデッキは公式サイトにありません。`], "ng");
       return;
     }
     const outcome = await postJson<{
@@ -171,15 +169,12 @@ export function DeckBuilder({
       errors?: string[];
     }>("/api/deck/official", { cards: page.cards });
     if (outcome.entries === undefined) {
-      onStatus({ messages: outcome.errors ?? ["読み込めませんでした。"], tone: "ng" });
+      say(outcome.errors ?? ["読み込めませんでした。"], "ng");
       return;
     }
     // 待つあいだに組み替えられていたら、置き換えると組み替えたぶんが黙って消える。
     if (storedDeckJson() !== before) {
-      onStatus({
-        messages: ["読み込むあいだにデッキが変わったので、置き換えませんでした。"],
-        tone: "ng",
-      });
+      say(["読み込むあいだにデッキが変わったので、置き換えませんでした。"], "ng");
       return;
     }
     const officialName = (cardId: string) => page.names[cardId] ?? `カード ID ${cardId}`;
@@ -200,7 +195,7 @@ export function DeckBuilder({
     }
     // 1 枚も決まらず選ぶものも無ければ、組んでいるデッキを空にしてまで置き換えない。
     if (outcome.entries.length === 0 && pending.length === 0) {
-      onStatus({ messages: missing, tone: "ng" });
+      say(missing, "ng");
       return;
     }
     saveDeck(outcome.entries);
@@ -218,10 +213,7 @@ export function DeckBuilder({
   const pick = async (current: OfficialImport, group: number, defId: string) => {
     if (current.pending[group]?.left === 0) return;
     if (current.deck !== storedDeckJson()) {
-      onStatus({
-        messages: ["デッキが変わっています。もう一度デッキコードを読み込んでください。"],
-        tone: "ng",
-      });
+      say(["デッキが変わっています。もう一度デッキコードを読み込んでください。"], "ng");
       return;
     }
     const next = withCount(storedDeck(), defId, 1);
@@ -236,8 +228,7 @@ export function DeckBuilder({
     await validate(next);
   };
 
-  const fail = (lead: string) => (error: unknown) =>
-    onStatus({ messages: [`${lead}: ${messageOf(error)}`], tone: "ng" });
+  const fail = (lead: string) => (error: unknown) => say([`${lead}: ${messageOf(error)}`], "ng");
 
   const startImport = () => {
     if (importing) return;
@@ -454,15 +445,15 @@ function groupByKind(
 }
 
 /**
- * 欄に出すもの。読み込んだデッキの残りを先に、検査の結果をあとに並べる。
- * 検査の結果は、確かめたデッキがいまのデッキのときだけ出す。
+ * 欄に出すもの。読み込んだデッキの残りを先に、ほかの文をあとに並べる。
+ * どちらも、いまのデッキについてのものだけ出す。
  */
 function shownStatus(
   picking: OfficialImport | null,
   status: DeckMessage,
   deck: string | null,
 ): DeckMessage {
-  const current = status.deck === undefined || status.deck === deck;
+  const current = status.deck === deck;
   const messages = [
     ...(picking?.missing ?? []),
     ...(picking?.pending ?? [])
@@ -474,5 +465,5 @@ function shownStatus(
     ...(current ? status.messages : []),
   ];
   const tone = (picking?.missing.length ?? 0) > 0 ? "ng" : current ? status.tone : "";
-  return { messages, tone };
+  return { messages, tone, deck };
 }

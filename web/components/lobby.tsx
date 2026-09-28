@@ -200,7 +200,8 @@ export function Lobby({
     const sent = storedDeckJson();
     const { deck, sample } = await builtDeck();
     // 組んだデッキなら、欄はいまのデッキについてのものなので残す。確かめている途中の表示も消さない。
-    if (sample) setDeckStatus({ messages: ["サンプルデッキで対戦します。"], tone: "ok" });
+    if (sample)
+      setDeckStatus({ messages: ["サンプルデッキで対戦します。"], tone: "ok", deck: sent });
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
