@@ -1,7 +1,3 @@
-/**
- * サーバの API を呼ぶ。
- */
-
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
   if (!response.ok) throw new Error(`${path} が ${response.status} を返した`);
@@ -9,7 +5,7 @@ export async function getJson<T>(path: string): Promise<T> {
 }
 
 /**
- * 応答の可否を見る。見ないと、誤りの本文をそのまま中身として読み、`undefined` を触った先で分かりにくい誤りになる。
+ * 応答の可否を見る。見ないと、エラーの本文をそのまま中身として読み、`undefined` を触った先で分かりにくいエラーになる。
  *
  * ただし **`ok: false` は投げない。** 「デッキのここが規則に通らない」のような、呼び手が人に見せるための応答である。
  * 投げると理由が落ちて、「400 が返った」しか出せなくなる。

@@ -1,6 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import { accountKey, accountQuery, accountText, storedSecret } from "../lib/account.js";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  accountKey,
+  accountQuery,
+  accountText,
+  refreshAccount,
+  storedSecret,
+} from "../lib/account.js";
 import { getJson, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import {
@@ -60,11 +66,12 @@ export function Lobby({
    * 送るのも打ったときだけにする。
    */
   const [typedName, setTypedName] = useState<string | null>(null);
-  // 作るのはプレイヤーがまだいないときなので、付ける名前は打った名前か既定の名前である。
-  const account = useQuery(accountQuery(() => typedName?.trim() || "ななし"));
+  /** 打った名前か既定の名前。プレイヤーを作るときと、名前を変えるときに送る。 */
+  const nameToSend = () => typedName?.trim() || "ななし";
+  const accountOptions = accountQuery(nameToSend);
+  const account = useQuery(accountOptions);
   const name = typedName ?? account.data?.displayName ?? "ななし";
-  const ensureAccount = () =>
-    queryClient.fetchQuery(accountQuery(() => typedName?.trim() || "ななし"));
+  const ensureAccount = () => queryClient.fetchQuery(accountOptions);
 
   const bots = useQuery({
     queryKey: ["bots"],
@@ -82,7 +89,8 @@ export function Lobby({
    * 空のまま押すとサンプルデッキになり、AI が学んだことの無い相手になる。
    */
   const [ownDeck, setOwnDeck] = useState<string | null>(null);
-  const [hasDeck] = useState(() => storedDeck().length > 0);
+  // デッキはいまの画面の別のタブで組むこともあるので、組んだかどうかは読み直す。
+  const hasDeck = useSyncExternalStore(subscribeStorage, () => storedDeck().length > 0);
   const chosenBot = bot ?? botNames[0]?.name ?? "";
   const chosenBotDeck = botDeck ?? decks[0]?.label ?? "";
   const chosenOwnDeck = ownDeck ?? (hasDeck ? "" : (decks[0]?.label ?? ""));
@@ -119,10 +127,13 @@ export function Lobby({
       });
   };
 
-  /** 断られた。アカウントが見つからないときは、覚えているプレイヤーを読み直させる。 */
+  /**
+   * 断られた。アカウントが見つからないときは、覚えているプレイヤーを古いものとする。
+   * すぐには取り直さない。取り直すとプレイヤーを作り直すので、それは次に押したときにする。
+   */
   const refused = (outcome: { errors: string[]; code?: string }) => {
     if (outcome.code === "account-not-found") {
-      void queryClient.invalidateQueries({ queryKey: accountKey });
+      void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
     }
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
   };
@@ -144,7 +155,7 @@ export function Lobby({
   const common = async (share: SeedShare | null) => ({
     secret: await secretOf(ensureAccount),
     ...(share === null ? {} : { seedShareCommit: share.commit }),
-    ...(typedName === null ? {} : { displayName: typedName.trim() || "ななし" }),
+    ...(typedName === null ? {} : { displayName: nameToSend() }),
   });
 
   const join = async (mine: object) => {
@@ -180,27 +191,29 @@ export function Lobby({
         if (current()) setStatus("相手を待っています（つながりが悪いので取り直しています）");
       }
       if (!current()) return;
-      switch (claimed?.kind) {
-        case "seated":
-          return onSeated(withShare(claimed.seat, share));
-        case "finished":
-          // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
-          setStatus("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
-          void queryClient.invalidateQueries({ queryKey: accountKey });
-          return;
-        case "dropped":
-          setStatus("別のタブから入り直したので、このタブは待つのをやめました。");
-          return;
-        case "waiting":
-        case undefined:
-          break;
-        default:
-          /**
-           * **知らない答えで待ち続けない。** 入れ替えのあとに古いタブが新しい答えを受け取ることがあり、
-           * 待ち続けると永久に問い合わせ続ける。
-           */
-          setStatus("受付の記録が無くなりました。もう一度「対戦をさがす」を押してください。");
-          return;
+      // 取りに行けなかったときは、答えが無いまま待ち直す。
+      if (claimed !== null) {
+        switch (claimed.kind) {
+          case "seated":
+            return onSeated(withShare(claimed.seat, share));
+          case "finished":
+            // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
+            setStatus("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
+            refreshAccount(queryClient).catch(() => {});
+            return;
+          case "dropped":
+            setStatus("別のタブから入り直したので、このタブは待つのをやめました。");
+            return;
+          case "waiting":
+            break;
+          default:
+            /**
+             * **知らない答えで待ち続けない。** 入れ替えのあとに古いタブが新しい答えを受け取ることがあり、
+             * 待ち続けると永久にポーリングし続ける。
+             */
+            setStatus("受付の記録が無くなりました。もう一度「対戦をさがす」を押してください。");
+            return;
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
@@ -217,10 +230,12 @@ export function Lobby({
       deck = { deckPreset: chosenOwnDeck };
     }
     const share = await newSeedShare();
+    // 頼む前に失敗したら、前に頼んだときのシェアを残す。そちらの頼みはサーバに届いているかもしれない。
+    const request = await common(share);
     const earlier = botShare.current;
     botShare.current = share;
     const outcome = await postJson<JoinOutcome>("/api/join-bot", {
-      ...(await common(share)),
+      ...request,
       bot: chosenBot,
       botDeck: chosenBotDeck,
       ...deck,
@@ -277,8 +292,10 @@ export function Lobby({
         </button>
       </div>
       <div id="deck-status" className={`deck-status ${deckStatus.tone}`}>
-        {deckStatus.messages.map((message) => (
-          <p key={message}>{message}</p>
+        {deckStatus.messages.map((message, index) => (
+          // 同じ文言の違反が並ぶことがある。並びは届いた答えのまま変わらない。
+          // oxlint-disable-next-line react/no-array-index-key
+          <p key={index}>{message}</p>
         ))}
       </div>
 
@@ -350,6 +367,11 @@ async function secretOf(ensureAccount: () => Promise<unknown>): Promise<string> 
   const secret = storedSecret();
   if (secret === null) throw new Error("プレイヤーを用意できなかった");
   return secret;
+}
+
+function subscribeStorage(onChange: () => void): () => void {
+  addEventListener("storage", onChange);
+  return () => removeEventListener("storage", onChange);
 }
 
 function messageOf(error: unknown): string {

@@ -7,7 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { Player } from "../../src/engine.js";
 import type { ClientMessage, ServerMessage } from "../../src/protocol.js";
-import { accountKey } from "./account.js";
+import { refreshAccount } from "./account.js";
 import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl, type Reconnector } from "./connection.js";
 import {
@@ -152,8 +152,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
           const text = seatEndText(message, seated.seat);
           log([text]);
           show({ text, tone: seatEndTone(message.matchResult.winner, seated.seat) });
-          // ロビーは閉じていても、読み直しておけば戻ったときに決着後の値が出る。
-          void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "all" });
+          refreshAccount(queryClient).catch(() => {});
           void checkShuffle(seated, message).then(([result, shown]) => {
             if (!disposed) setShuffle({ result, text: shown });
           });

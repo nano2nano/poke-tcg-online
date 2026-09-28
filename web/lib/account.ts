@@ -3,7 +3,7 @@
  * 失うと、そのレーティングと戦績とリプレイには戻れない。
  */
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { Account } from "../../src/accounts.js";
 import { postJson } from "./api.js";
 
@@ -12,7 +12,6 @@ export type { Account };
 /** いまの画面と同じキー。入れ替えのあとも同じプレイヤーで指せる。 */
 const SECRET_KEY = "poke-account-secret";
 
-/** 決着でレーティングが動くので、対戦を終えた画面はこのキーを読み直させる。 */
 export const accountKey = ["account"] as const;
 
 export function storedSecret(): string | null {
@@ -20,7 +19,7 @@ export function storedSecret(): string | null {
 }
 
 /**
- * プレイヤーを 1 人だけ用意する。画面を開いたときの読み込みと「対戦をさがす」は同じ問い合わせを待ち合わせる。
+ * プレイヤーを 1 人だけ用意する。画面を開いたときの読み込みと「対戦をさがす」は同じクエリの結果を待つ。
  * 重なって 2 人できると、画面に出ているレーティングと実際に指すプレイヤーが食い違う。
  *
  * `displayName` は、作るときに付ける表示名。読み直すときには使わない。
@@ -39,11 +38,7 @@ export function accountQuery(displayName: () => string) {
 export async function loadAccount(displayName: string): Promise<Account> {
   const secret = storedSecret();
   if (secret !== null) {
-    const response = await fetch("/api/account/me", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ secret }),
-    });
+    const response = await readAccount(secret);
     if (response.ok) return (await response.json()) as Account;
     /**
      * **消すのは、サーバが「そのアカウントはいない」と言ったときだけである。**
@@ -65,6 +60,25 @@ export async function loadAccount(displayName: string): Promise<Account> {
   if (typeof created.secret !== "string") throw new Error("プレイヤーを作れなかった");
   localStorage.setItem(SECRET_KEY, created.secret);
   return created.account;
+}
+
+/**
+ * 決着でレーティングが動いたので読み直す。読み直すだけで、プレイヤーは作らない。
+ * 席に着いているあいだはロビーを閉じているので、クエリを取り直させる代わりに値を置き換える。
+ */
+export async function refreshAccount(queryClient: QueryClient): Promise<void> {
+  const secret = storedSecret();
+  if (secret === null) return;
+  const response = await readAccount(secret);
+  if (response.ok) queryClient.setQueryData(accountKey, (await response.json()) as Account);
+}
+
+function readAccount(secret: string): Promise<Response> {
+  return fetch("/api/account/me", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secret }),
+  });
 }
 
 /** レーティングと戦績の 1 行。 */

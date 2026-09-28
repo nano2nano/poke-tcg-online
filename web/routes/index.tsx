@@ -41,7 +41,7 @@ function Seat() {
   if (seated !== null) return <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />;
   return (
     <>
-      <header>
+      <header id="next-home">
         <h1>ポケカ オンライン対戦</h1>
         <p className="note">
           新しい画面を作っているところです。デッキを組む画面と、リプレイと戦績は{" "}

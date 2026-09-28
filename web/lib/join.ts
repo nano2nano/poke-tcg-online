@@ -5,11 +5,10 @@
 import type { BotEntry, DeckPreset } from "../../src/bots.js";
 import type { ClaimOutcome, JoinOutcome, Seated } from "../../src/lobby.js";
 import { getJson, postJson } from "./api.js";
-import { storedSeat, type StoredSeat } from "./seat.js";
+import { sha256Hex, storedSeat, toHex, type StoredSeat } from "./seat.js";
 
 export type { BotEntry, DeckPreset };
 
-/** デッキの 1 行。 */
 export interface DeckEntry {
   defId: string;
   count: number;
@@ -66,12 +65,7 @@ export interface SeedShare {
 export async function newSeedShare(): Promise<SeedShare | null> {
   if (globalThis.crypto?.subtle === undefined) return null;
   const share = toHex(crypto.getRandomValues(new Uint8Array(32)));
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`share:${share}`));
-  return { share, commit: toHex(new Uint8Array(digest)) };
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return { share, commit: await sha256Hex(`share:${share}`) };
 }
 
 /**

@@ -1,6 +1,6 @@
 /**
  * 新しい画面（`web/`）が、いまの画面と同じ Worker から配られていることを見る。
- * 画面の中身はまだ無いので、入口が描けることと、いまの画面を置き換えていないことだけを確かめる。
+ * 中身は client.spec.ts を `/next/` へ向けて確かめる。ここでは入口が描けることと、いまの画面を置き換えていないことだけを見る。
  */
 
 import { expect, test } from "@playwright/test";
@@ -12,6 +12,7 @@ test("新しい画面は /next/ で描け、いまの画面は / に残る", asy
 
   await page.goto(`${BASEPATH}/`);
   await expect(page.locator("#next-home")).toBeVisible();
+  await expect(page.locator("#join")).toBeVisible();
 
   await page.goto("/");
   await expect(page.locator("#join")).toBeVisible();

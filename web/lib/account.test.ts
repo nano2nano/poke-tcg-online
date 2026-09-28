@@ -18,7 +18,7 @@ afterEach(() => {
 
 /** `/api/account/me` には `me` を返し、`/api/account` にはプレイヤーを作った答えを返す。 */
 function answer(me: Response) {
-  const fetch = vi.fn(async (url: string) =>
+  const fetch = vi.fn<(url: string) => Promise<Response>>(async (url) =>
     url === "/api/account/me" ? me : Response.json(created),
   );
   vi.stubGlobal("fetch", fetch);
@@ -34,7 +34,7 @@ describe("loadAccount", () => {
 
   it("合図の無い 404 では、シークレットを消さずに投げる", async () => {
     const fetch = answer(new Response("Not Found", { status: 404 }));
-    await expect(loadAccount("ななし")).rejects.toThrow();
+    await expect(loadAccount("ななし")).rejects.toThrow("シークレットはそのまま残してある");
     expect(items.get("poke-account-secret")).toBe("覚えていたシークレット");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
