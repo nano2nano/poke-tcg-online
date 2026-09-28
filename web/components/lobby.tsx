@@ -13,6 +13,7 @@ import { getJson, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import {
   claim,
+  builtDeck,
   deckToSubmit,
   newSeedShare,
   parseDeck,
@@ -138,7 +139,9 @@ export function Lobby({
     task(mine)
       .catch((error: unknown) => {
         if (mounted.current && running.current === mine) {
-          setStatus(`つながらなかった: ${messageOf(error)}`);
+          // fetch が届かなかったときは TypeError になる。ほかは、サーバが答えた理由である。
+          const lead = error instanceof TypeError ? "つながらなかった" : "対戦に入れませんでした";
+          setStatus(`${lead}: ${messageOf(error)}`);
         }
       })
       .finally(() => {
@@ -197,6 +200,7 @@ export function Lobby({
       const last = await claim(earlier.ticket);
       if (last?.kind === "seated") {
         waitingFor.current = null;
+        waitingTicket.current = null;
         return onSeated(withShare(last.seat, earlier.share));
       }
     }
@@ -292,9 +296,8 @@ export function Lobby({
     setStatus("AI との対戦を用意しています");
     let deck: { deckPreset: string } | { deck: DeckList };
     if (chosenOwnDeck === "") {
-      const built = await deckOrExplain();
-      if (built === null) return;
-      deck = { deck: { cards: built.cards } };
+      // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
+      deck = { deck: { cards: (await builtDeck()).deck.cards } };
     } else {
       deck = { deckPreset: chosenOwnDeck };
     }
@@ -328,7 +331,9 @@ export function Lobby({
     ? `AI の一覧を読めませんでした: ${messageOf(bots.error)}`
     : bots.isSuccess && botNames.length === 0
       ? "サーバに AI が置かれていません（README の「AI と対戦する」）。"
-      : "";
+      : bots.isSuccess && decks.length === 0
+        ? "AI が握れるデッキがサーバにありません。"
+        : "";
 
   return (
     <section id="join">
@@ -439,7 +444,7 @@ export function Lobby({
         </label>
         <button
           id="bot-button"
-          disabled={requesting || waiting || botNames.length === 0}
+          disabled={requesting || waiting || botNames.length === 0 || decks.length === 0}
           onClick={() => run(joinBot)}
         >
           AI と対戦する

@@ -45,17 +45,26 @@ export function parseDeck(json: string | null): DeckEntry[] {
     .map((entry) => ({ defId: entry.defId, count: Math.min(entry.count, DECK_SIZE) }));
 }
 
-/** 出すデッキ。組んでいなければサンプルデッキ。規則に通らなければ、その理由を返す。 */
+/** 組んだデッキ。組んでいなければサンプルデッキ。規則には照らさない。 */
+export async function builtDeck(): Promise<{ deck: DeckList; sample: boolean }> {
+  const entries = storedDeck();
+  if (entries.length === 0) {
+    return { deck: await getJson<DeckList>("/api/sample-deck"), sample: true };
+  }
+  return {
+    deck: { cards: entries.flatMap(({ defId, count }) => Array<string>(count).fill(defId)) },
+    sample: false,
+  };
+}
+
+/** 出すデッキ。規則に通らなければ、その理由を返す。 */
 export async function deckToSubmit(): Promise<
   { ok: true; deck: DeckList; sample: boolean } | { ok: false; errors: string[] }
 > {
-  const entries = storedDeck();
-  if (entries.length === 0) {
-    return { ok: true, deck: await getJson<DeckList>("/api/sample-deck"), sample: true };
-  }
-  const deck = { cards: entries.flatMap(({ defId, count }) => Array<string>(count).fill(defId)) };
+  const { deck, sample } = await builtDeck();
+  if (sample) return { ok: true, deck, sample };
   const outcome = await postJson<{ ok: boolean; errors?: string[] }>("/api/deck/validate", deck);
-  if (outcome.ok) return { ok: true, deck, sample: false };
+  if (outcome.ok) return { ok: true, deck, sample };
   return { ok: false, errors: outcome.errors ?? ["デッキが通りませんでした。"] };
 }
 
