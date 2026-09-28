@@ -68,7 +68,9 @@ export async function postAsPlayer<T>(
   try {
     return await postJson<T>(path, { ...body, secret: requireSecret() });
   } catch (error) {
-    if (error instanceof ApiError && error.code === "account-not-found") forgetAccount(queryClient);
+    // シークレットが無いのは、別のタブが作り直そうとして消したときで、覚えているプレイヤーはもう使えない。
+    const forgotten = error instanceof ApiError && error.code === "account-not-found";
+    if (forgotten || storedSecret() === null) forgetAccount(queryClient);
     throw error;
   }
 }

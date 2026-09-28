@@ -240,7 +240,6 @@ export function initialReplayState({
   return { matchId, seat, ply: 0, wanted: 0, moveCount, asked: 0, frame: null };
 }
 
-/** 辿れる範囲に収めた手数。 */
 export function clampPly(state: ReplayState, ply: number): number {
   return Math.max(0, Math.min(ply, state.moveCount));
 }

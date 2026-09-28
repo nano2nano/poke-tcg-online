@@ -52,6 +52,11 @@ function PlayerHistory({
   const matches = useQuery({
     queryKey: ["matches", playerId],
     queryFn: async () => {
+      // まだ読んでいないプレイヤーや、忘れられていたと分かったプレイヤーは、ここで用意し直す。
+      // 用意している途中なら、それを待つ。重ねて用意すると 2 人できる。
+      const account = await queryClient.fetchQuery(accountQuery());
+      // 替わったなら、この部品は作り直され、作り直した側が取り直す。ここで返すものは誰も読まない。
+      if (account.playerId !== playerId) return [];
       const { matches: list } = await postAsPlayer<{ matches: MatchSummary[] }>(
         queryClient,
         "/api/matches",
@@ -84,20 +89,9 @@ function PlayerHistory({
           onClick={() => {
             setFailure("");
             onRequest();
-            // まだ読んでいないプレイヤーや、忘れられていたと分かったプレイヤーは、ここで用意し直す。
-            // 用意している途中なら、それを待つ。重ねて用意すると 2 人できる。
-            queryClient.fetchQuery(accountQuery()).then(
-              (account) => {
-                // 替わったなら、この部品は作り直され、作り直した側が取る。
-                if (account.playerId !== playerId) return;
-                // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
-                // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
-                void matches.refetch();
-              },
-              (error: unknown) => {
-                setFailure(`プレイヤーを用意できませんでした: ${messageOf(error)}`);
-              },
-            );
+            // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
+            // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
+            void matches.refetch();
           }}
         >
           一覧を出す
@@ -188,10 +182,11 @@ function Replay({
       update(replayReducer(latest.current, { t: "failed", asked }));
       throw error;
     }
-    if (frame.divergedAt !== null) setDivergedAt(frame.divergedAt);
     const drawn = replayReducer(latest.current, { t: "frame", asked, frame });
     if (drawn === latest.current) return;
     update(drawn);
+    // 辿れる上限を下げたのと同じ局面で覚える。追い越された局面で覚えると、上限と食い違う。
+    if (frame.divergedAt !== null) setDivergedAt(frame.divergedAt);
     setFailure("");
   };
 

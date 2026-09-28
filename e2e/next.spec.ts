@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { expect, test, type Page, type WebSocket } from "@playwright/test";
-import { loadGeneratedCards } from "../src/engine.js";
+import { loadGeneratedCards, type PlayerView } from "../src/engine.js";
 import type { Seated } from "../src/lobby.js";
 import { viewFor } from "../src/match.js";
 import { ensureCards, newMatch } from "../tests/helpers.js";
@@ -525,6 +525,24 @@ test("画像を読めなかったカードは、候補の行に小さな面を�
   await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
 });
 
+/** サーバがプレイヤーを忘れていたときの答え。 */
+const accountMissing = {
+  status: 404,
+  json: { error: "アカウントが見つからない", code: "account-not-found" },
+};
+
+let openingViews: PlayerView[] | null = null;
+
+/** リプレイの答えに載せる盤面。どのテストでも開始局面で足りるので、1 度だけ作る。 */
+function opening(): PlayerView[] {
+  if (openingViews === null) {
+    ensureCards();
+    const match = newMatch("next-history");
+    openingViews = [viewFor(match, 0), viewFor(match, 1)];
+  }
+  return openingViews;
+}
+
 /** 一覧とリプレイの答えを差し替える。盤面は開始局面のまま、手数だけを返す。 */
 async function mockHistory(
   page: Page,
@@ -532,9 +550,7 @@ async function mockHistory(
   /** 再現できない地点。サーバと同じく、その先を頼まれたときだけ知らせる。 */
   diverged: number | null = null,
 ): Promise<void> {
-  ensureCards();
-  const match = newMatch("next-history");
-  const views = [viewFor(match, 0), viewFor(match, 1)];
+  const views = opening();
   const summary = (matchId: string, opponentName: string) => ({
     matchId,
     startedAt: "2026-09-28T00:00:00Z",
@@ -749,12 +765,8 @@ test("サーバがプレイヤーを忘れていたら、次に一覧を出す�
 }) => {
   await page.goto(`${BASEPATH}/`);
   await expect(page.locator("#history-button")).toBeEnabled();
-  const missing = {
-    status: 404,
-    json: { error: "アカウントが見つからない", code: "account-not-found" },
-  };
-  await page.route("**/api/matches", (route) => route.fulfill(missing));
-  await page.route("**/api/account/me", (route) => route.fulfill(missing));
+  await page.route("**/api/matches", (route) => route.fulfill(accountMissing));
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
   await page.click("#history-button");
   await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
 
@@ -792,12 +804,8 @@ test("リプレイでサーバがプレイヤーを忘れていたと分かっ�
   await page.goto(`${BASEPATH}/`);
   await page.click("#history-button");
   await expect(page.locator("#history-list button")).toHaveCount(2);
-  const missing = {
-    status: 404,
-    json: { error: "アカウントが見つからない", code: "account-not-found" },
-  };
-  await page.route("**/api/replay", (route) => route.fulfill(missing));
-  await page.route("**/api/account/me", (route) => route.fulfill(missing));
+  await page.route("**/api/replay", (route) => route.fulfill(accountMissing));
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#history-status")).toContainText("開けませんでした");
 
@@ -884,7 +892,7 @@ test("プレイヤーを用意できなかったら、その理由を一覧の�
   await painted(page);
   await expect(page.locator("#history-status")).toBeEmpty();
   await page.click("#history-button");
-  await expect(page.locator("#history-status")).toContainText("プレイヤーを用意できませんでした");
+  await expect(page.locator("#history-status")).toContainText("作れなかった");
 });
 
 test("覚えているプレイヤーを読み直しているあいだに押しても、一覧は 1 度だけ頼む", async ({
@@ -911,11 +919,6 @@ test("覚えているプレイヤーを読み直しているあいだに押し�
   await painted(page);
   expect(listed).toBe(1);
 });
-
-const accountMissing = {
-  status: 404,
-  json: { error: "アカウントが見つからない", code: "account-not-found" },
-};
 
 test("忘れられていたと言われても同じプレイヤーが読めたら、次に押したときに一覧を出す", async ({
   page,
@@ -958,4 +961,72 @@ test("プレイヤーを作り直している途中に続けて押しても、�
   release();
   await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
   expect(created).toBe(1);
+});
+
+test("ロビーでプレイヤーが忘れられていたと分かったら、一覧は作り直したプレイヤーで頼む", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
+    .not.toBeNull();
+  const old = await page.evaluate(() => localStorage.getItem("poke-account-secret"));
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
+  );
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
+  await page.click("#join-button");
+  await expect(page.locator("#join-status")).toContainText("断った");
+
+  const sent: unknown[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/matches")) sent.push(request.postDataJSON());
+  });
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  expect(sent).not.toContainEqual({ secret: old });
+});
+
+test("別のタブがシークレットを消していたら、次に一覧を出すときにプレイヤーを作り直す", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
+    .not.toBeNull();
+  await page.evaluate(() => localStorage.removeItem("poke-account-secret"));
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("プレイヤーを用意できなかった");
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+});
+
+test("追い越された局面の再現できない地点は、見出しに出さない", async ({ page }) => {
+  const [slow, release] = gate();
+  await mockHistory(
+    page,
+    async (_matchId, ply) => {
+      if (ply === 10) await slow;
+      return "ok";
+    },
+    4,
+  );
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText(atPly(1));
+  const last = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/replay") &&
+      (response.request().postDataJSON() as { ply: number }).ply === 10,
+  );
+  await page.click("#replay-last");
+  await page.click("#replay-first");
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  release();
+  await last;
+  await painted(page);
+  await expect(page.locator("#replay-status")).not.toContainText("手目から先は");
 });
