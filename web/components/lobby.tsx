@@ -194,19 +194,18 @@ export function Lobby({
     const deck = await deckOrExplain();
     if (deck === null) return;
     const share = await newSeedShare();
-    const roomCode = roomNow.current.trim();
     const request = await common(share);
     const earlier = waitingTicket.current;
-    if (earlier !== null) {
-      const last = await claim(earlier.ticket);
-      // ポーリングが先に同じ席を取っていれば、画面はもう座席へ移っている。
-      if (!mounted.current) return;
-      if (last?.kind === "seated") {
-        waitingFor.current = null;
-        waitingTicket.current = null;
-        return onSeated(withShare(last.seat, earlier.share));
-      }
+    const last = earlier === null ? null : await claim(earlier.ticket);
+    // 用意しているあいだに、ポーリングが前のチケットの席を取って座席の画面へ移っていることがある。
+    // ここで送ると、誰も取りに行かないチケットがキューに残る。
+    if (!mounted.current) return;
+    if (earlier !== null && last?.kind === "seated") {
+      waitingFor.current = null;
+      waitingTicket.current = null;
+      return onSeated(withShare(last.seat, earlier.share));
     }
+    const roomCode = roomNow.current.trim();
     const outcome = await postJson<JoinOutcome>("/api/join", {
       ...request,
       deck: { cards: deck.cards },
