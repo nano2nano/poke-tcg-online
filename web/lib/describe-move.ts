@@ -416,6 +416,7 @@ const CARD_FIELDS = new Set(["cardInstanceId", "right", "left", "card"]);
 
 /**
  * 自分の手札の同じカードを選ぶ手を 1 つに畳み、残した手と `legalMoves` での位置を返す。
+ * `key` は畳んだ形で、手札のどの 1 枚を代わりに残したかでは変わらない。
  *
  * エンジンは番の中の手では手札の同じカードを畳むが、選択の候補（手札からトラッシュするカードなど）は
  * 1 枚ずつ並べる。畳むのはエンジンと同じく手札だけにする。場やトラッシュのカードは、
@@ -424,9 +425,9 @@ const CARD_FIELDS = new Set(["cardInstanceId", "right", "left", "card"]);
 export function foldMoves(
   moves: readonly Move[],
   context: MoveContext,
-): { move: Move; index: number }[] {
+): { move: Move; index: number; key: string }[] {
   const seen = new Set<string>();
-  const shown: { move: Move; index: number }[] = [];
+  const shown: { move: Move; index: number; key: string }[] = [];
   for (const [index, move] of moves.entries()) {
     const key = JSON.stringify(move, (field, value: unknown) => {
       if (!CARD_FIELDS.has(field) || typeof value !== "string") return value;
@@ -435,7 +436,7 @@ export function foldMoves(
     });
     if (seen.has(key)) continue;
     seen.add(key);
-    shown.push({ move, index });
+    shown.push({ move, index, key });
   }
   return shown;
 }

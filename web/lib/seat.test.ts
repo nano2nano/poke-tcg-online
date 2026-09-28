@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
-import { checkShuffle, type StoredSeat } from "./seat.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { checkShuffle, forgetSeat, rememberSeat, storedSeat, type StoredSeat } from "./seat.js";
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -52,5 +52,31 @@ describe("checkShuffle", () => {
   it("開始時の値を覚えていなければ検算しない", async () => {
     const { ended } = opened(["自分", "相手"]);
     expect((await checkShuffle({ seat: 0, seatToken: "座席" }, ended))[0]).toBe("unavailable");
+  });
+});
+
+describe("forgetSeat", () => {
+  beforeEach(() => {
+    const items = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => items.set(key, value),
+      removeItem: (key: string) => items.delete(key),
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("覚えている座席がこの座席なら忘れる", () => {
+    rememberSeat({ seat: 0, seatToken: "終わった対戦" });
+    forgetSeat("終わった対戦");
+    expect(storedSeat()).toBeNull();
+  });
+
+  it("別のタブが置いた新しい座席は残す", () => {
+    rememberSeat({ seat: 1, seatToken: "新しい対戦" });
+    forgetSeat("終わった対戦");
+    expect(storedSeat()?.seatToken).toBe("新しい対戦");
   });
 });

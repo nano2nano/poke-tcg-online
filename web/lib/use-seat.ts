@@ -10,13 +10,7 @@ import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl, type Reconnector } from "./connection.js";
 import { describeEvents, eventLines, type Notice, type Tone } from "./describe.js";
 import { initialSeatState, seatReducer, type SeatState, type SetupAction } from "./match-state.js";
-import {
-  checkShuffle,
-  forgetSeat,
-  storedSeat,
-  type ShuffleCheck,
-  type StoredSeat,
-} from "./seat.js";
+import { checkShuffle, forgetSeat, type ShuffleCheck, type StoredSeat } from "./seat.js";
 import type { LoggedEvent } from "./use-watch.js";
 
 /** 繋がっていないあいだの様子。繋がっていれば null。 */
@@ -151,8 +145,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         }
         case "ended": {
           // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
-          // 別のタブが新しい対戦の座席を置いていれば、それは消さない。
-          if (storedSeat()?.seatToken === seated.seatToken) forgetSeat();
+          forgetSeat(seated.seatToken);
           const text = describeEnd(message, seated.seat);
           log([text]);
           show({ text, tone: endTone(message.matchResult.winner, seated.seat) });
@@ -217,8 +210,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
          * 何も届かずに閉じた接続は、回線が切れただけのこともある。
          */
         if (code === "seat-not-found") {
-          // 別のタブが新しい対戦の座席を置いていれば、それは消さない。
-          if (storedSeat()?.seatToken === seated.seatToken) forgetSeat();
+          forgetSeat(seated.seatToken);
           leave("指していた対戦は、もう終わっています。");
           return;
         }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Move, Player } from "../../src/engine.js";
-import { useCardData, type CardTable } from "../lib/cards.js";
+import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
 import {
   describeMove,
@@ -36,19 +36,27 @@ export function SeatTable({
   const seating = useSeat(seated, feed.show);
   const { state, connection, events, shuffle, left, send } = seating;
   const { table } = useCardData();
-  const listed = useMemo(() => listMoves(state, table), [state, table]);
+  const context = useMemo<MoveContext>(() => ({ view: state.view, cards: table }), [state, table]);
+  const listed = useMemo(() => listMoves(state, context), [state, context]);
   // 載っているボタンと選んだボタンを分けて持つ。同じポケモンを狙うボタンが 2 つあっても消し合わない。
-  // 覚えるのは手そのもので、狙う先はいまの手の一覧から引き直す。ボタンが消えたら囲みも消える。
-  const [aim, setAim] = useState<Aim>({ hovered: null, focused: null });
+  // 狙いはそのときの手の一覧に紐づける。局面が変わってボタンを描き直したら、載せ直すまで囲まない。
+  const [aim, setAim] = useState<Aim>({ listed: null, hovered: null, focused: null });
   const aimed = useMemo(
     () =>
       new Set(
-        listed
-          .filter(({ key }) => key === aim.hovered || key === aim.focused)
-          .flatMap(({ targets }) => targets),
+        aim.listed !== listed
+          ? []
+          : listed
+              .filter(({ key }) => key === aim.hovered || key === aim.focused)
+              .flatMap(({ targets }) => targets),
       ),
     [listed, aim],
   );
+  const onAim = (kind: "hovered" | "focused", key: string | null) =>
+    setAim((current) => {
+      const base = current.listed === listed ? current : { listed, hovered: null, focused: null };
+      return base[kind] === key && base === current ? current : { ...base, [kind]: key };
+    });
 
   useEffect(() => {
     if (left !== null) onLeave(left);
@@ -110,11 +118,10 @@ export function SeatTable({
           <h2>指せる手</h2>
           <Moves
             seating={seating}
+            context={context}
             listed={listed}
             disabled={connection !== null}
-            onAim={(kind, key) =>
-              setAim((current) => (current[kind] === key ? current : { ...current, [kind]: key }))
-            }
+            onAim={onAim}
           />
           <button
             id="concede-button"
@@ -150,6 +157,8 @@ export function SeatTable({
 }
 
 interface Aim {
+  /** 狙いを覚えたときの手の一覧。 */
+  listed: ListedMove[] | null;
   hovered: string | null;
   focused: string | null;
 }
@@ -158,23 +167,25 @@ interface ListedMove {
   move: Move;
   /** `legalMoves` での位置。 */
   index: number;
-  /** 手そのものから作る。局面が変わって別の手になったボタンは、別の要素として描き直す。 */
+  /** 手から作る。局面が変わって別の手になったボタンは、別の要素として描き直し、フォーカスを残さない。 */
   key: string;
   label: string;
   targets: string[];
 }
 
-/** 並べる手。手札の同じカードを選ぶ手は 1 つに畳む。 */
-function listMoves(state: SeatState, table: CardTable): ListedMove[] {
-  const { view, legalMoves: moves, deckPlacement, answerDestinations } = state;
-  if (moves === null) return [];
-  const context: MoveContext = { view, cards: table };
-  return foldMoves(moves, context).map(({ move, index }) => ({
+/**
+ * 並べる手。手札の同じカードを選ぶ手は 1 つに畳む。
+ * 準備のあいだと決着のあとはボタンを並べないので、空にする。
+ */
+function listMoves(state: SeatState, context: MoveContext): ListedMove[] {
+  const { legalMoves: moves, setup, ended, deckPlacement, answerDestinations } = state;
+  if (moves === null || setup !== null || ended !== null) return [];
+  return foldMoves(moves, context).map(({ move, index, key }) => ({
     move,
-    key: JSON.stringify(move),
+    index,
+    key,
     label: describeMove(move, context, deckPlacement, answerDestinations?.[index] ?? null),
     targets: moveTargets(move),
-    index,
   }));
 }
 
@@ -184,18 +195,19 @@ function listMoves(state: SeatState, table: CardTable): ListedMove[] {
  */
 function Moves({
   seating: { state, send, choose },
+  context,
   listed,
   disabled,
   onAim,
 }: {
   seating: Seating;
+  context: MoveContext;
   listed: ListedMove[];
   disabled: boolean;
-  onAim: (kind: keyof Aim, key: string | null) => void;
+  onAim: (kind: "hovered" | "focused", key: string | null) => void;
 }) {
-  const { table } = useCardData();
   const { view, legalMoves: moves, setup, deckPlacement: placement, revealedDeck } = state;
-  const context: MoveContext = { view, cards: table };
+  const table = context.cards;
   const playing = state.ended === null;
   const prompt = !playing
     ? ""

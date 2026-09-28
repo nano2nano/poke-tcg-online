@@ -29,8 +29,9 @@ export function rememberSeat(seated: StoredSeat): void {
   localStorage.setItem(SEAT_KEY, JSON.stringify(seated));
 }
 
-export function forgetSeat(): void {
-  localStorage.removeItem(SEAT_KEY);
+/** 覚えている座席がこの座席のときだけ忘れる。別のタブが新しい対戦の座席を置いていれば、それは消さない。 */
+export function forgetSeat(seatToken: string): void {
+  if (storedSeat()?.seatToken === seatToken) localStorage.removeItem(SEAT_KEY);
 }
 
 /** 覚えている座席。読めない値が入っていたら捨てる。 */
@@ -41,13 +42,13 @@ export function storedSeat(): StoredSeat | null {
   try {
     seated = JSON.parse(raw);
   } catch {
-    forgetSeat();
+    localStorage.removeItem(SEAT_KEY);
     return null;
   }
   // 座席トークンが無ければ繋ぎようがない。座席の番号は時計と手札の向きに使う。
   const { seatToken, seat } = (seated ?? {}) as Partial<StoredSeat>;
   if (typeof seatToken !== "string" || (seat !== 0 && seat !== 1)) {
-    forgetSeat();
+    localStorage.removeItem(SEAT_KEY);
     return null;
   }
   return seated as StoredSeat;
