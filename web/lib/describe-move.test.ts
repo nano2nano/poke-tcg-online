@@ -69,10 +69,11 @@ describe("済んだ対戦を読み返す盤面", () => {
         beforeViews: null,
         events: [[], []],
         engineCommitDiffers: true,
-        divergedAt: 4,
+        divergedAt: null,
       },
       0,
       {},
+      4,
     );
     expect(text).toContain("0 / 4 手　直前の手: 対戦の開始時");
     expect(text).toContain("エンジンの版が違います");

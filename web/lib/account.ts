@@ -5,7 +5,7 @@
 
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { Account } from "../../src/accounts.js";
-import { post, postJson } from "./api.js";
+import { ApiError, post, postJson } from "./api.js";
 
 export type { Account };
 
@@ -54,6 +54,27 @@ export async function loadAccount(displayName: string): Promise<Account> {
   if (typeof created.secret !== "string") throw new Error("プレイヤーを作れなかった");
   localStorage.setItem(SECRET_KEY, created.secret);
   return created.account;
+}
+
+/**
+ * シークレットを添えて頼む。サーバがプレイヤーを忘れていたら、覚えているプレイヤーを古いものとする。
+ * すぐには取り直さない。取り直すとプレイヤーを作るので、それは人が次に頼んだときにする。
+ */
+export async function postAsPlayer<T>(
+  queryClient: QueryClient,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const secret = storedSecret();
+  if (secret === null) throw new Error("プレイヤーを用意できなかった");
+  try {
+    return await postJson<T>(path, { ...body, secret });
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "account-not-found") {
+      void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
+    }
+    throw error;
+  }
 }
 
 /**

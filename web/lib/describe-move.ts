@@ -463,7 +463,12 @@ export function moveTargets(move: Move): string[] {
 }
 
 /** リプレイの 1 枚の見出し。何手目か、その直前の手、辿れるかどうかの注意。 */
-export function replayStatusText(frame: ReplayFrame, seat: Player, cards: CardTable): string {
+export function replayStatusText(
+  frame: ReplayFrame,
+  seat: Player,
+  cards: CardTable,
+  divergedAt: number | null,
+): string {
   // 出したカードは指したあとの手札にもう無いので、名前は指す前の盤面から引く。
   const before = frame.beforeViews === null ? null : readerView(frame.beforeViews, seat);
   const move =
@@ -475,8 +480,8 @@ export function replayStatusText(frame: ReplayFrame, seat: Player, cards: CardTa
     ? "　※ この対戦を指したときとエンジンの版が違います"
     : "";
   const diverged =
-    frame.divergedAt === null
+    divergedAt === null
       ? ""
-      : `　※ ${frame.divergedAt + 1} 手目から先は、いまのエンジンでは再現できません`;
+      : `　※ ${divergedAt + 1} 手目から先は、いまのエンジンでは再現できません`;
   return `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}${diverged}`;
 }

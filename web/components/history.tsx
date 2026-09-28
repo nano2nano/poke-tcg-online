@@ -1,9 +1,9 @@
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { MatchSummary } from "../../src/archive.js";
 import type { ReplayFrame } from "../../src/history.js";
-import { accountKey, accountQuery, storedSecret } from "../lib/account.js";
-import { ApiError, messageOf, postJson } from "../lib/api.js";
+import { accountKey, accountQuery, postAsPlayer } from "../lib/account.js";
+import { messageOf } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
 import { describeSummary, readerView } from "../lib/describe.js";
 import { replayStatusText } from "../lib/describe-move.js";
@@ -21,12 +21,25 @@ import { SideBoard, Stadium } from "./board.js";
  * 横に広い画面では、対戦のあいだこの欄を CSS が隠す。卓と同じく `body` の直下に置く。
  */
 export function History() {
-  // 読むだけで取りに行かない。席に着いているときに開き直しても、プレイヤーを作り直させない。
-  const account = useQuery({ ...accountQuery(), enabled: false });
-  const playerId = account.data?.playerId ?? null;
-  // 一覧を頼んだことは、プレイヤーが替わっても覚えておく。一覧を取りに行く途中でプレイヤーを
-  // 作ることがあり、そのときに押したぶんが消えないよう、作り直した側で取り直す。
+  const queryClient = useQueryClient();
+  // 一覧を頼んだことは、プレイヤーが替わっても覚えておく。プレイヤーを用意してから一覧を取るので、
+  // 押したぶんは、用意したプレイヤーの側で取る。
   const [requested, setRequested] = useState(false);
+  // 頼まれるまではプレイヤーを読みに行かない。席に着いたまま開き直したときに、作り直させない。
+  const account = useQuery({ ...accountQuery(), enabled: requested });
+  const playerId = account.data?.playerId ?? null;
+
+  /** 一覧を頼む。プレイヤーが用意できていれば真。できていなければ先に用意し、一覧は用意した側で取る。 */
+  const request = () => {
+    setRequested(true);
+    // 忘れられていたと分かったプレイヤーも、用意し直す。古いシークレットで頼んでも断られる。
+    if (account.data !== undefined && !queryClient.getQueryState(accountKey)?.isInvalidated) {
+      return true;
+    }
+    void account.refetch();
+    return false;
+  };
+
   // サーバがプレイヤーを忘れて作り直したら、一覧も開いているリプレイも前のプレイヤーのもので、
   // 新しいシークレットでは読めない。プレイヤーごとに作り直す。
   return (
@@ -34,48 +47,31 @@ export function History() {
       key={playerId}
       playerId={playerId}
       requested={requested}
-      onRequest={() => setRequested(true)}
+      onRequest={request}
+      accountFailure={
+        account.isError && !account.isFetching
+          ? `プレイヤーを用意できませんでした: ${messageOf(account.error)}`
+          : ""
+      }
     />
   );
-}
-
-/**
- * シークレットを添えて頼む。サーバがプレイヤーを忘れていたら、ロビーと同じく覚えているプレイヤーを
- * 古いものとし、次に一覧を出すときに作り直す。
- */
-async function postAsPlayer<T>(
-  queryClient: QueryClient,
-  path: string,
-  body: Record<string, unknown>,
-): Promise<T> {
-  try {
-    return await postJson<T>(path, { ...body, secret: storedSecret() });
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "account-not-found") {
-      void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
-    }
-    throw error;
-  }
 }
 
 function PlayerHistory({
   playerId,
   requested,
   onRequest,
+  accountFailure,
 }: {
   playerId: string | null;
   requested: boolean;
-  onRequest: () => void;
+  onRequest: () => boolean;
+  accountFailure: string;
 }) {
   const queryClient = useQueryClient();
   const matches = useQuery({
     queryKey: ["matches", playerId],
     queryFn: async () => {
-      // 初めて来た人はシークレットをまだ持たない。待たずに送ると、アカウントが見つからないと断られる。
-      const account = await queryClient.fetchQuery(accountQuery());
-      // 待つあいだにプレイヤーが替わったら、この部品ごと作り直され、作り直した側が取り直す。
-      // ここで頼むと同じ一覧を 2 度頼み、前のプレイヤーの控えに新しいプレイヤーの一覧を置く。
-      if (account.playerId !== playerId) return [];
       const { matches: list } = await postAsPlayer<{ matches: MatchSummary[] }>(
         queryClient,
         "/api/matches",
@@ -83,14 +79,15 @@ function PlayerHistory({
       );
       return list;
     },
-    // 頼まれるまでは取りに行かない。決着した対戦は、押し直せば一覧に加わる。
-    enabled: requested,
+    // 頼まれて、プレイヤーを用意できてから取りに行く。決着した対戦は、押し直せば一覧に加わる。
+    enabled: requested && playerId !== null,
     staleTime: Infinity,
     retry: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  const [opened, setOpened] = useState<MatchSummary | null>(null);
+  /** 開いているリプレイ。押すたびに `serial` を進め、同じ対戦でも作り直して頼み直す。 */
+  const [opened, setOpened] = useState<{ summary: MatchSummary; serial: number } | null>(null);
   const [failure, setFailure] = useState("");
 
   return (
@@ -106,16 +103,16 @@ function PlayerHistory({
           className="secondary"
           onClick={() => {
             setFailure("");
-            onRequest();
             // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
             // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
-            void matches.refetch();
+            if (onRequest()) void matches.refetch();
           }}
         >
           一覧を出す
         </button>
         <p id="history-status" className="note">
           {failure ||
+            accountFailure ||
             (matches.isError && !matches.isFetching
               ? `一覧を出せませんでした: ${messageOf(matches.error)}`
               : "")}
@@ -128,7 +125,8 @@ function PlayerHistory({
               type="button"
               onClick={() => {
                 setFailure("");
-                setOpened(summary);
+                // 最初の局面が返ってこないときも、同じ行を押し直せば開き直せる。
+                setOpened((previous) => ({ summary, serial: (previous?.serial ?? 0) + 1 }));
               }}
             >
               {describeSummary(summary)}
@@ -138,9 +136,9 @@ function PlayerHistory({
       </section>
       {opened !== null && (
         <Replay
-          // 別の対戦を開いたら、前の対戦の局面や問い合わせを持ち越さない。
-          key={opened.matchId}
-          summary={opened}
+          // 開き直したら、前の局面や問い合わせを持ち越さない。
+          key={opened.serial}
+          summary={opened.summary}
           onClose={() => setOpened(null)}
           onOpenFailed={(error) => {
             // 開けないものを空の欄で見せない。
@@ -172,6 +170,11 @@ function Replay({
   /** 問い合わせの番号を、描き直しを待たずに進める。続けて押したぶんを、それぞれ別の手数として頼む。 */
   const latest = useRef<ReplayState>(state);
   const [failure, setFailure] = useState("");
+  /**
+   * 再現できない地点。サーバはその先を頼まれたときにしか知らせないので、分かったら覚えておく。
+   * 手前へ戻ると知らせが消え、辿れる上限だけが下がったまま、進めない理由が見えなくなる。
+   */
+  const [divergedAt, setDivergedAt] = useState<number | null>(null);
 
   const update = (next: ReplayState) => {
     latest.current = next;
@@ -194,6 +197,7 @@ function Replay({
       update(replayReducer(latest.current, { t: "failed", asked }));
       throw error;
     }
+    if (frame.divergedAt !== null) setDivergedAt(frame.divergedAt);
     const drawn = replayReducer(latest.current, { t: "frame", asked, frame });
     if (drawn === latest.current) return;
     update(drawn);
@@ -268,7 +272,7 @@ function Replay({
         </button>
       </div>
       <p id="replay-status" className="note">
-        {[frame === null ? "" : replayStatusText(frame, seat, table), failure]
+        {[frame === null ? "" : replayStatusText(frame, seat, table, divergedAt), failure]
           .filter((line) => line !== "")
           .join("　")}
       </p>
