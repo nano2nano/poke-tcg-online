@@ -44,7 +44,7 @@ export function SeatTable({
   );
   // 載っているボタンと選んだボタンを分けて持つ。同じポケモンを狙うボタンが 2 つあっても消し合わない。
   const [aim, setAim] = useState<Aim>({ hovered: null, focused: null });
-  // 一覧が変わったら、消えたボタンの狙いを捨てる。ボタンが消えるときは離れた知らせが来ないので、
+  // 一覧が変わったら、消えたボタンの狙いを捨てる。消えたボタンからはマウスが離れた知らせが来ないので、
   // 残すと、同じ手があとでまた並んだときに、載せていないのに囲む。残ったボタンの狙いはそのまま囲む。
   const [aimFor, setAimFor] = useState(listed);
   if (aimFor !== listed) {

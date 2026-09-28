@@ -1,5 +1,5 @@
 /**
- * 座席の画面で、指せる手と選択の答えを人に読める見出しにする。
+ * 座席の画面で、指せる手と選択の答えを人に読めるボタンのラベルにする。
  *
  * 名前を引くのは **その手を指す直前の盤面** からである。指したあとの盤面では、
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
@@ -12,7 +12,7 @@ import { conditionName, nameOf, sidesOf, type Side } from "./describe.js";
 
 type Pokemon = NonNullable<Side["active"]>;
 
-/** 見出しを作るのに要るもの。盤面は座席から見たもの。 */
+/** ラベルを作るのに要るもの。盤面は座席から見たもの。 */
 export interface MoveContext {
   view: PlayerView | null;
   cards: CardTable;
@@ -142,7 +142,7 @@ function ownCardName(instanceId: string, context: MoveContext): string {
 }
 
 /**
- * 手の見出し。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
+ * 手のラベル。`Move` は判別可能ユニオンなので、型ごとに 1 行で書ける。
  * ここが知らない型が来ても、型の名前だけは出す。
  *
  * エネルギーやどうぐは、つける先の数だけ手が並ぶ。何をどこへ、まで書かないと見分けられない。
@@ -225,7 +225,7 @@ function attackName(
 }
 
 /**
- * 対戦準備の選択への答えの見出し。答えはカードか「はい」「いいえ」だけなので、
+ * 対戦準備の選択への答えのラベル。答えはカードか「はい」「いいえ」だけなので、
  * そのままではバトル場とベンチのどちらに出すのか、「いいえ」で何が起きるのかが読めない。
  */
 const SETUP_ANSWERS: Record<string, { card?: string; decline?: string }> = {
@@ -235,8 +235,8 @@ const SETUP_ANSWERS: Record<string, { card?: string; decline?: string }> = {
 };
 
 /**
- * 選択の見出し。`ChoiceAnswer` も判別可能ユニオンで、運ぶ値は
- * カード、場の個体、位置、番号のいずれかである。
+ * 選択の答えのラベル。`ChoiceAnswer` も判別可能ユニオンで、運ぶ値は
+ * カード、場のポケモン、位置、番号のいずれかである。
  * どの選択肢かはサーバが出した順で決まるので、ここでは値そのものを読める形にする。
  */
 function describeAnswer(
@@ -318,7 +318,7 @@ const DESTINATION_PHRASES: Record<string, (whose: string) => string> = {
 };
 
 /**
- * 選んだものの行き先を添えた見出し。書けない組み合わせなら null。
+ * 選んだものの行き先を添えたラベル。書けない組み合わせなら null。
  *
  * 同じ候補から「手札に加える 1 枚」と「ポケモンにつける 1 枚」を続けて選ぶ効果では、
  * カードの名前だけのボタンが 2 回並び、どちらを選んでいるのか分からない。
@@ -424,7 +424,7 @@ const CARD_FIELDS = new Set(["cardInstanceId", "right", "left", "card"]);
  *
  * エンジンは番の中の手では手札の同じカードを畳むが、選択の候補（手札からトラッシュするカードなど）は
  * 1 枚ずつ並べる。畳むのはエンジンと同じく手札だけにする。場やトラッシュのカードは、
- * 同じ `defId` でも個体ごとの記録（どうぐの使用済み、ワザでトラッシュしたエネルギーなど）を持ちうる。
+ * 同じ `defId` でも 1 枚ごとの記録（どうぐの使用済み、ワザでトラッシュしたエネルギーなど）を持ちうる。
  */
 export function foldMoves(
   moves: readonly Move[],
