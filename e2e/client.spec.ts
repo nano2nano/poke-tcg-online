@@ -645,6 +645,8 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
   // 負荷の高い実行では、`seenA` が対戦の始まった局面を見たときに、`held.last` がまだ準備の局面のことがあった。
   await expect.poll(() => held.last?.stateVersion === seenA()?.stateVersion).toBe(true);
 
+  // 結果を溢れさせて確かめるので、1 つずつ待たせずに一度に出す。
+  await a.uncheck("#motion-toggle");
   const view = held.last!.view;
   const target = view.self.active.inPlayId as string;
   const header = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };

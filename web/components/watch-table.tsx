@@ -14,6 +14,7 @@ import {
 import type { WatchState } from "../lib/match-state.js";
 import { Board, NOTHING_AIMED, SideBoard, Stadium, type AimedSet } from "./board.js";
 import { EventLog } from "./event-log.js";
+import { MotionToggle } from "./motion-setting.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
 /**
@@ -174,6 +175,7 @@ function Controls({
           ))}
         </select>
       </label>
+      <MotionToggle id="watch-motion-toggle" />
       <p
         id="watch-position"
         className="note"
