@@ -12,7 +12,7 @@ import {
   type WatchFrame,
 } from "../lib/watch-frames.js";
 import type { WatchState } from "../lib/match-state.js";
-import { NOTHING_AIMED, SideBoard, Stadium, type AimedSet } from "./board.js";
+import { Board, NOTHING_AIMED, SideBoard, Stadium, type AimedSet } from "./board.js";
 import { EventLog } from "./event-log.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
@@ -100,13 +100,13 @@ export function WatchTable({ token }: { token: string }) {
             </p>
           )}
         </div>
-        <div className="board">
+        <Board name="watch">
           <SeatSide state={state} frame={frame} player={1} aimed={aimed} />
           <div id="watch-stadium" className="board-center">
             {frame !== null && <Stadium stadium={frame.stadium} />}
           </div>
           <SeatSide state={state} frame={frame} player={0} aimed={aimed} />
-        </div>
+        </Board>
         <div className="table-panel">
           <EventLog id="watch-event-log" listId="watch-events" events={events} />
         </div>

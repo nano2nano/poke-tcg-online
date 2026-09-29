@@ -14,7 +14,7 @@ import {
 import { setupOffer, type SeatState } from "../lib/match-state.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
-import { CardFace, NOTHING_AIMED, SideBoard, Stadium } from "./board.js";
+import { Board, CardFace, NOTHING_AIMED, SideBoard, Stadium } from "./board.js";
 import { EventLog } from "./event-log.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
@@ -102,7 +102,7 @@ export function SeatTable({
             </p>
           )}
         </div>
-        <div className="board">
+        <Board name="seat">
           <div className="board-side">
             <h2>相手</h2>
             <div id="opponent">
@@ -118,7 +118,7 @@ export function SeatTable({
               {view !== null && <SideBoard side={view.self} mirrored={false} aimed={aimed} />}
             </div>
           </div>
-        </div>
+        </Board>
 
         <div className="table-panel">
           <Mulligans state={state} />

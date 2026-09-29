@@ -14,6 +14,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { LayoutGroup, motion } from "motion/react";
 import type { CardInstance, SpectatorView } from "../../src/engine.js";
 import { imageUrl, releaseImage, takeImage } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
@@ -25,8 +26,12 @@ type Pokemon = NonNullable<Side["active"]>;
 export type AimedSet = ReadonlySet<string>;
 export const NOTHING_AIMED: AimedSet = new Set();
 
-/** ねむり・マヒ・こんらんは、卓で向きを変えて示すのに合わせてカードを傾ける。 */
-const POSTURES = new Set(["asleep", "paralyzed", "confused"]);
+/** 卓では、ねむりは左へ、マヒは右へ倒し、こんらんは逆さにして示す。それに合わせてカードを傾ける。 */
+const POSTURE_ANGLES: Readonly<Record<string, number>> = {
+  asleep: -90,
+  paralyzed: 90,
+  confused: 180,
+};
 
 /**
  * カード 1 枚。名前と種類の面を敷き、画像を出すときはその上に重ねる。
@@ -34,6 +39,7 @@ const POSTURES = new Set(["asleep", "paralyzed", "confused"]);
  */
 export function CardFace({
   defId,
+  instanceId,
   posture,
   pickable,
   thumb,
@@ -41,6 +47,8 @@ export function CardFace({
   onImageFailed,
 }: {
   defId: string;
+  /** 卓に出ているカードの ID。同じ ID のカードが別の場所に描かれたら、前の場所から動かして見せる。 */
+  instanceId?: string;
   posture?: string | undefined;
   /** 山札から選ぶ効果で並べたカードが、いま選べるか。 */
   pickable?: boolean;
@@ -72,8 +80,11 @@ export function CardFace({
   if (thumb === true && src === null) return null;
   const classes = ["card", thumb === true && "thumb", zoom !== undefined && "zoomable"];
   return (
-    <div
+    <motion.div
       ref={face}
+      {...(instanceId === undefined ? {} : { layoutId: instanceId })}
+      initial={false}
+      animate={{ rotate: posture === undefined ? 0 : (POSTURE_ANGLES[posture] ?? 0) }}
       className={classes.filter(Boolean).join(" ")}
       {...zoomable}
       data-def-id={defId}
@@ -88,7 +99,7 @@ export function CardFace({
       {/* 読み上げでは、同じ名前の別のカードを見分けられるよう、種類と収録まで読む。 */}
       {card !== undefined && <span className="visually-hidden">{describeCard(card)}</span>}
       {pickable === false && <span className="visually-hidden">（選べません）</span>}
-    </div>
+    </motion.div>
   );
 }
 
@@ -149,7 +160,11 @@ function PileZone({ name, label, pile }: { name: string; label: string; pile: Ca
       : { title: label, defIds: pile.map((card) => card.defId).reverse() };
   return (
     <Zone name={name} label={label} count={pile.length} zoom={zoom}>
-      {top === undefined ? <EmptySlot /> : <CardFace defId={top.defId} />}
+      {top === undefined ? (
+        <EmptySlot />
+      ) : (
+        <CardFace key={top.instanceId} defId={top.defId} instanceId={top.instanceId} />
+      )}
     </Zone>
   );
 }
@@ -170,7 +185,9 @@ function ShownPokemon({
 }) {
   const { table } = useCardData();
   const top = pokemon.stack[pokemon.stack.length - 1]!;
-  const posture = pokemon.conditions.find((condition) => POSTURES.has(condition.kind))?.kind;
+  const posture = pokemon.conditions.find((condition) =>
+    Object.hasOwn(POSTURE_ANGLES, condition.kind),
+  )?.kind;
   const zoomable = useZoomable({
     title: nameOf(table, top.defId),
     defIds: [
@@ -185,7 +202,13 @@ function ShownPokemon({
       data-in-play-id={pokemon.inPlayId}
       data-damage={pokemon.damage}
     >
-      <CardFace defId={top.defId} posture={posture} />
+      {/* 進化したら、上に重ねたカードを手札から動かして見せる。 */}
+      <CardFace
+        key={top.instanceId}
+        defId={top.defId}
+        instanceId={top.instanceId}
+        posture={posture}
+      />
       <div className="marks">
         {pokemon.damage > 0 && <span className="damage">{pokemon.damage}</span>}
         {pokemon.conditions.map((condition) => (
@@ -197,11 +220,23 @@ function ShownPokemon({
       {pokemon.attached.length > 0 && (
         <div className="attached">
           {pokemon.attached.map((card) => (
-            <CardFace key={card.instanceId} defId={card.defId} />
+            <CardFace key={card.instanceId} defId={card.defId} instanceId={card.instanceId} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 卓の両側とスタジアムを並べる枠。カードを動かして見せるのは同じ枠の中だけにする。対戦とそのリプレイを
+ * 同時に開くと、同じカードが 2 つの盤面に出る。
+ */
+export function Board({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <LayoutGroup id={name}>
+      <div className="board">{children}</div>
+    </LayoutGroup>
   );
 }
 
@@ -286,6 +321,7 @@ export const SideBoard = memo(function SideBoard({
             <CardFace
               key={card.instanceId}
               defId={card.defId}
+              instanceId={card.instanceId}
               zoom={{ title: "手札", defIds: [card.defId] }}
             />
           ))
@@ -312,12 +348,18 @@ export const Stadium = memo(function Stadium({ stadium }: { stadium: SpectatorVi
       {stadium === null ? (
         <EmptySlot />
       ) : "instanceId" in stadium ? (
-        <CardFace defId={stadium.defId} zoom={{ title: "スタジアム", defIds: [stadium.defId] }} />
+        <CardFace
+          key={stadium.instanceId}
+          defId={stadium.defId}
+          instanceId={stadium.instanceId}
+          zoom={{ title: "スタジアム", defIds: [stadium.defId] }}
+        />
       ) : (
         [stadium.left, stadium.right].map((card) => (
           <CardFace
             key={card.instanceId}
             defId={card.defId}
+            instanceId={card.instanceId}
             zoom={{ title: "スタジアム", defIds: [card.defId] }}
           />
         ))

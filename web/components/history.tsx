@@ -13,7 +13,7 @@ import {
   replayReducer,
   type ReplayState,
 } from "../lib/match-state.js";
-import { SideBoard, Stadium } from "./board.js";
+import { Board, SideBoard, Stadium } from "./board.js";
 
 /**
  * 指した対戦の一覧と、開いた対戦のリプレイ。
@@ -262,7 +262,7 @@ function Replay({
           .filter((line) => line !== "")
           .join("　")}
       </p>
-      <div className="board">
+      <Board name="replay">
         <div className="board-side">
           <h2>相手</h2>
           <div id="replay-opponent">
@@ -278,7 +278,7 @@ function Replay({
             {board !== null && <SideBoard side={board.self} mirrored={false} />}
           </div>
         </div>
-      </div>
+      </Board>
     </section>
   );
 }
