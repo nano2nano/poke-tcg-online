@@ -690,7 +690,7 @@ test("載せているあいだに画面が低くなっても、プレビュー�
     .toBeLessThanOrEqual(height);
 });
 
-test("拡大の中で押し始めて背景で離しても、閉じない", async ({ page }) => {
+test("拡大の中と背景にまたがって押しても、閉じない", async ({ page }) => {
   const hand = await replayHand(page);
   const zoom = page.locator("#card-zoom");
   await hand.first().click();
@@ -704,9 +704,23 @@ test("拡大の中で押し始めて背景で離しても、閉じない", async
   await page.mouse.move(2, 2);
   await page.mouse.up();
   await expect(zoom).toBeVisible();
+  // 逆に、背景で押し始めて中で離しても閉じない。
+  await page.mouse.down();
+  await page.mouse.move(title.x + 2, title.y + title.height / 2);
+  await page.mouse.up();
+  await expect(zoom).toBeVisible();
 
   await page.mouse.click(2, 2);
   await expect(zoom).toBeHidden();
+});
+
+test("キーボードで開いたキーを押し続けても、拡大を開いたままにする", async ({ page }) => {
+  const hand = await replayHand(page);
+  await hand.first().focus();
+  // 押したままのあいだ、くり返しの keydown が届く。
+  for (let i = 0; i < 3; i++) await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+  await expect(page.locator("#card-zoom")).toBeVisible();
 });
 
 test.describe("タッチ端末", () => {

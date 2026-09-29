@@ -64,7 +64,7 @@ export function CardFace({
   // `useEffect` では、名前の面が一瞬見える。
   useLayoutEffect(() => {
     if (src === null || face.current === null) return;
-    const image = takeImage(src, failed);
+    const image = takeImage(src, () => failed());
     face.current.append(image);
     return () => releaseImage(image);
   }, [src]);

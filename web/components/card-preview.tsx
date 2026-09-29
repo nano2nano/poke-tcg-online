@@ -115,8 +115,11 @@ export function CardPreview() {
     };
     const up = (event: PointerEvent) => {
       if (longPress?.pointerId !== event.pointerId) return;
-      if (event.type === "pointercancel") swallowClick = false;
       endLongPress();
+      // 離したときのクリックは、この直後に届く。長押しのメニューを止めた端末などで届かなかったら、
+      // キーボードで押したボタンのクリックを止めないよう、残さない。
+      if (event.type === "pointercancel") swallowClick = false;
+      else window.setTimeout(() => (swallowClick = false));
     };
     const click = (event: MouseEvent) => {
       if (!swallowClick) return;

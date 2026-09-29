@@ -6,8 +6,9 @@ import { CardCaption, CardFace } from "./board.js";
 export function CardZoom({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<ZoomTarget | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  // 中で押し始めて背景で離したクリック（文字を選ぶときなど）も、dialog そのものに届く。
+  // 押し始めと離したところが中と背景に分かれたクリック（文字を選ぶときなど）も、dialog そのものに届く。
   const pressedBackdrop = useRef(false);
+  const releasedBackdrop = useRef(false);
 
   useLayoutEffect(() => {
     const shown = dialog.current;
@@ -27,10 +28,16 @@ export function CardZoom({ children }: { children: ReactNode }) {
         onPointerDown={(event) => {
           pressedBackdrop.current = event.target === event.currentTarget;
         }}
+        onPointerUp={(event) => {
+          releasedBackdrop.current = event.target === event.currentTarget;
+        }}
         onClick={(event) => {
-          if (event.target === event.currentTarget && pressedBackdrop.current) {
-            event.currentTarget.close();
-          }
+          const backdrop = pressedBackdrop.current && releasedBackdrop.current;
+          if (event.target === event.currentTarget && backdrop) event.currentTarget.close();
+        }}
+        // 開いたキーを押し続けると、くり返しが「閉じる」を押してしまう。
+        onKeyDown={(event) => {
+          if (event.repeat && event.key === "Enter") event.preventDefault();
         }}
       >
         <div className="card-zoom-body">
