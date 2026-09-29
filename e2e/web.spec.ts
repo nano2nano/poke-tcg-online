@@ -856,10 +856,32 @@ test("OS で動きを減らす設定にしていたら、カードを動かさ�
   await page.emulateMedia({ reducedMotion: "reduce" });
   const [before, after] = placingActive();
   const { card, inZone } = await openPlacing(page, before, after);
+  await expect(page.locator("#replay-motion-toggle")).not.toBeChecked();
   await page.click("#replay-next");
   await expect(card).toBeVisible();
   await page.clock.runFor(20);
   expect(await inZone()).toBe(true);
+});
+
+test("OS で動きを減らす設定にしていても、画面で演出を出すとカードを動かす", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const [before, after] = placingActive();
+  const { card, inZone } = await openPlacing(page, before, after);
+  await page.check("#replay-motion-toggle");
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
+  await page.clock.runFor(20);
+  expect(await inZone()).toBe(false);
+  expect(await page.evaluate(() => localStorage.getItem("poke-motion"))).toBe("on");
+});
+
+test("開いているあいだに OS で動きを減らす設定にしたら、演出を止める", async ({ page }) => {
+  const [before, after] = placingActive();
+  await openPlacing(page, before, after);
+  const toggle = page.locator("#replay-motion-toggle");
+  await expect(toggle).toBeChecked();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(toggle).not.toBeChecked();
 });
 
 test("画面で演出を切っていたら、カードを動かさずに場に置く", async ({ page }) => {
@@ -1094,6 +1116,12 @@ test("OS で動きを減らす設定にしていたら、結果と数字を待�
   ]);
   await expect(page.locator("#results .result")).toHaveCount(3);
   await expect(page.locator(".hit")).toBeVisible();
+  expect(
+    await page
+      .locator("#results .result")
+      .first()
+      .evaluate((node) => getComputedStyle(node).animationName),
+  ).toBe("none");
 });
 
 test("画面で演出を切ると、結果を待たせずに出し、切ったことを覚えておく", async ({ page }) => {
@@ -1314,6 +1342,8 @@ test("画面で演出を切っていたら、引いたカードを動かさず�
   // あとで演出を戻しても、前に入ったカードを動かし直さない。
   await page.check("#motion-toggle");
   expect(await animationsOf(card)).toBe(0);
+  // OS の設定と同じほうへ戻したので、選んだことは忘れて OS の設定に従う。
+  expect(await page.evaluate(() => localStorage.getItem("poke-motion"))).toBeNull();
 });
 
 /** 準備を終え、最初の番の手を持つ座席から見た盤面と、その手。 */
