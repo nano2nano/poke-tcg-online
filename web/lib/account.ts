@@ -9,7 +9,7 @@ import { ApiError, post, postJson } from "./api.js";
 
 export type { Account };
 
-/** いまの画面と同じキー。入れ替えのあとも同じプレイヤーで指せる。 */
+/** 作り直す前の画面と同じキー。作り直す前に作ったプレイヤーで、そのまま指せる。 */
 const SECRET_KEY = "poke-account-secret";
 
 export const accountKey = ["account"] as const;

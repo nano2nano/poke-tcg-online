@@ -1,7 +1,4 @@
-/**
- * 新しい画面（`web/`）が、いまの画面と同じ Worker から配られていることを見る。
- * 中身は client.spec.ts を `/next/` へ向けて確かめる。ここでは入口が描けることと、いまの画面を置き換えていないことだけを見る。
- */
+/** 画面（`web/`）のテストの続き。1 つのファイルが長くなりすぎないよう、`client.spec.ts` から分けている。 */
 
 import { createHash } from "node:crypto";
 import { expect, test, type Page, type WebSocket } from "@playwright/test";
@@ -12,19 +9,19 @@ import type { Seated } from "../src/lobby.js";
 import { concede, createMatch, viewFor } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
 import { ensureCards, legalDecks, newMatch } from "../tests/helpers.js";
-import { BASEPATH } from "../web/basepath.js";
 
-test("新しい画面は /next/ で描け、いまの画面は / に残る", async ({ page }) => {
+test("画面を開くとロビーが描け、アセットに無いパスでも画面の骨組みが返る", async ({ page }) => {
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
 
-  await page.goto(`${BASEPATH}/`);
-  await expect(page.locator("#next-home")).toBeVisible();
+  await page.goto("/");
+  await expect(page.locator("#home")).toBeVisible();
   await expect(page.locator("#join")).toBeVisible();
 
-  await page.goto("/");
-  await expect(page.locator("#join")).toBeVisible();
-  await expect(page.locator("#next-home")).toHaveCount(0);
+  // アセットに無いパスにも、画面の骨組みを返す（`wrangler.jsonc` の `not_found_handling`）。
+  const response = await page.request.get("/no-such-page");
+  expect(response.status()).toBe(200);
+  expect(await response.text()).toContain("<title>");
 
   expect(errors).toEqual([]);
 });
@@ -39,7 +36,7 @@ test("相手さがしを頼んでいるあいだは、「対戦をさがす」�
     await route.continue();
   });
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#room", `おしなおし-${Date.now()}`);
   await page.click("#join-button");
   // 先のリクエストで席が決まると、あとのリクエストがキューに残り、誰も開かない席として組まれる。
@@ -65,7 +62,7 @@ test("繋がらずにロビーへ戻っても、覚えている座席へ戻れ�
     localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "つながらない座席" }));
   });
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   // 新しく対戦に入ると、この座席を置き換える。
   await expect(page.locator("#resume-button")).toBeVisible();
   expect(opened).toBe(1);
@@ -112,7 +109,7 @@ test("離れるあいだに別のタブが座席を置いていても、戻る�
     }
   });
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#resume-button");
   // 別のタブの座席へ繋ぐと、そのタブの接続を追い出す。
   await expect.poll(() => tokens).toEqual(["つながらない座席", "つながらない座席"]);
@@ -124,7 +121,7 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   const claimed = () => page.waitForResponse((response) => response.url().includes("/api/claim?"));
   const status = page.locator("#join-status");
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#room", `まちつづける-${Date.now()}`);
   const first = claimed();
   await page.click("#join-button");
@@ -167,7 +164,7 @@ test("待っているあいだに席が決まってから押し直すと、あ�
   // 待つあいだの取り直しでは席を渡さない。押し直したときに、サーバが返す席だけで着くようにする。
   await page.route("**/api/claim?**", (route) => route.fulfill({ json: { kind: "waiting" } }));
   const room = `きまっていた-${Date.now()}`;
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#room", room);
   const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
@@ -176,7 +173,7 @@ test("待っているあいだに席が決まってから押し直すと、あ�
   const other = await browser.newContext();
   try {
     const opponent = await other.newPage();
-    await opponent.goto(`${BASEPATH}/`);
+    await opponent.goto("/");
     await opponent.fill("#room", room);
     const seated = opponent.waitForResponse((response) => response.url().endsWith("/api/join"));
     await opponent.click("#join-button");
@@ -213,7 +210,7 @@ test("返事の届かなかったリクエストで席が決まっていたら�
     await route.fetch();
     await route.abort();
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#room", room);
   await page.click("#join-button");
   await expect(page.locator("#join-status")).toContainText("つながらなかった");
@@ -221,7 +218,7 @@ test("返事の届かなかったリクエストで席が決まっていたら�
   const other = await browser.newContext();
   try {
     const opponent = await other.newPage();
-    await opponent.goto(`${BASEPATH}/`);
+    await opponent.goto("/");
     await opponent.fill("#room", room);
     const seated = opponent.waitForResponse((response) => response.url().endsWith("/api/join"));
     await opponent.click("#join-button");
@@ -257,7 +254,7 @@ async function addFirstSampleCard(page: Page): Promise<string> {
 }
 
 test("確かめる返事を待つあいだに組み替えたら、その返事の結果を出さない", async ({ page }) => {
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   const defId = await addFirstSampleCard(page);
   await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
   let release = (): void => {};
@@ -284,7 +281,7 @@ test("確かめる返事を待つあいだに組み替えたら、その返事�
 test("組み替える前に確かめた返事があとから届いても、組み替えてから確かめた結果を消さない", async ({
   page,
 }) => {
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   const defId = await addFirstSampleCard(page);
   let release = (): void => {};
   const held = new Promise<void>((resolve) => {
@@ -337,7 +334,7 @@ test("公式のデッキコードで選んでいる途中に対戦をさがし�
     route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
   );
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#deck-code", "abc123-DEF456-ghi789");
   await page.click("#deck-code-button");
   const choices = page.locator("#deck-status .choices button");
@@ -367,7 +364,7 @@ test("公式のデッキコードで選んでいる途中でも、別のタブ�
     route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
   );
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   const defId = await addFirstSampleCard(page);
   await page.fill("#deck-code", "abc123-DEF456-ghi789");
   page.once("dialog", (dialog) => void dialog.accept());
@@ -410,7 +407,7 @@ test("対戦をさがす返事を待つあいだに最後の 1 枚を選んだ�
     await route.fulfill({ json: { ok: false, errors: ["選ぶ前のデッキの理由"] } });
   });
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#deck-code", "abc123-DEF456-ghi789");
   await page.click("#deck-code-button");
   const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
@@ -435,7 +432,7 @@ test("対戦をさがす返事を待つあいだに組み替えたら、断ら�
     await route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } });
   });
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await addFirstSampleCard(page);
   const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
@@ -460,7 +457,7 @@ test("デッキを確かめた結果は、対戦をさがしても残す", async
     route.fulfill({ json: { ok: true, errors: [] } }),
   );
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await addFirstSampleCard(page);
   await page.click("#check-button");
   await expect(page.locator("#deck-status")).toContainText("規則を通ります");
@@ -479,7 +476,7 @@ test("サンプルデッキを使うと出たあとに別のタブでデッキ�
   await page.route("**/api/join", (route) =>
     route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
   );
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
   await joined;
@@ -504,7 +501,7 @@ test("最後の 1 枚を選んだあとの確かめに失敗したら、その�
   );
   await page.route("**/api/deck/validate", (route) => route.abort());
 
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#deck-code", "abc123-DEF456-ghi789");
   await page.click("#deck-code-button");
   await page.locator("#deck-status .choices button").first().click();
@@ -513,7 +510,7 @@ test("最後の 1 枚を選んだあとの確かめに失敗したら、その�
 
 test("デッキを確かめるのに失敗したら、その失敗を出す", async ({ page }) => {
   await page.route("**/api/deck/validate", (route) => route.abort());
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await addFirstSampleCard(page);
   await page.click("#check-button");
   await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
@@ -522,7 +519,7 @@ test("デッキを確かめるのに失敗したら、その失敗を出す", as
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {
   await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
   await page.route("**/api/card-image/*", (route) => route.fulfill({ status: 502, body: "" }));
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
@@ -612,7 +609,7 @@ function gate(): [Promise<void>, () => void] {
 /** リプレイを開いて、盤面の手札のカードを返す。 */
 async function replayHand(page: Page) {
   await mockHistory(page, async () => "ok");
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   const hand = page.locator('#replay [data-zone="hand"] .card[data-def-id]');
@@ -666,7 +663,7 @@ test("載せているあいだに画面が低くなっても、プレビュー�
   await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
   // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
   await page.route("**/api/card-image/*", () => {});
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.fill("#card-search", "エネルギー");
   const add = page.locator("#card-results .card-row button.add");
   for (let i = 0; i < 3; i++) await add.nth(i).click();
@@ -752,7 +749,7 @@ test.describe("タッチ端末", () => {
     await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
     // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
     await page.route("**/api/card-image/*", () => {});
-    await page.goto(`${BASEPATH}/`);
+    await page.goto("/");
     await page.fill("#card-search", "エネルギー");
     const thumb = page.locator("#card-results .card-row .card").first();
     await expect(thumb).toBeVisible();
@@ -805,7 +802,7 @@ test("閉じて別の対戦を開いたあとに、閉じた対戦を開けな�
     await slow;
     return "fail";
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   const rows = page.locator("#history-list button");
   await rows.nth(0).click();
@@ -828,7 +825,7 @@ test("追い越された問い合わせの失敗は、描けた局面の見出�
     await slow;
     return "fail";
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
@@ -849,7 +846,7 @@ test("最初の局面が描けるまでは、辿るボタンを押せない", as
     await slow;
     return "ok";
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-next")).toBeDisabled();
@@ -860,7 +857,7 @@ test("最初の局面が描けるまでは、辿るボタンを押せない", as
 
 test("辿れなかったときも、描けている局面の手数を出したままにする", async ({ page }) => {
   await mockHistory(page, async (_matchId, ply) => (ply === 1 ? "fail" : "ok"));
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
@@ -873,7 +870,7 @@ test("サーバがプレイヤーを忘れて作り直したら、前のプレ�
   page,
 }) => {
   await mockHistory(page, async () => "ok");
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
@@ -899,7 +896,7 @@ test("サーバがプレイヤーを忘れて作り直したら、前のプレ�
 
 test("一覧を取り直せなかったあとに開けなかったら、開けなかった理由を出す", async ({ page }) => {
   await mockHistory(page, async () => "fail");
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await expect(page.locator("#history-list button")).toHaveCount(2);
   await page.route("**/api/matches", (route) =>
@@ -917,7 +914,7 @@ test("端でさらに押しても、同じ局面を取りに行かない", async
     asked.push(ply);
     return "ok";
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
@@ -938,7 +935,7 @@ test("一覧を取りに行けなかった理由は、取り直しているあ�
     await slow;
     return route.fulfill({ json: { matches: [] } });
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   // 一覧を持っている取り直しの失敗は、次の取り直しのあいだも失敗のまま残る。
@@ -953,7 +950,7 @@ test("一覧を取りに行けなかった理由は、取り直しているあ�
 test("サーバがプレイヤーを忘れていたら、次に一覧を出すときにプレイヤーを作り直す", async ({
   page,
 }) => {
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await expect(page.locator("#history-button")).toBeEnabled();
   await page.route("**/api/matches", (route) => route.fulfill(accountMissing));
   await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
@@ -979,7 +976,7 @@ test("プレイヤーを作っているあいだに押しても、作り終え�
   page.on("request", (request) => {
     if (request.url().endsWith("/api/matches")) listed += 1;
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   release();
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
@@ -991,7 +988,7 @@ test("リプレイでサーバがプレイヤーを忘れていたと分かっ�
   page,
 }) => {
   await mockHistory(page, async () => "ok");
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await expect(page.locator("#history-list button")).toHaveCount(2);
   await page.route("**/api/replay", (route) => route.fulfill(accountMissing));
@@ -1019,7 +1016,7 @@ test("席に着いたまま開き直しても、一覧の欄はプレイヤー�
       JSON.stringify({ seat: 0, seatToken: "つながったままの座席" }),
     );
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await expect(page.locator("#table")).toBeVisible();
   await expect(page.locator("#history")).toBeAttached();
   await painted(page);
@@ -1033,7 +1030,7 @@ test("返ってこない問い合わせは、同じ手数を押し直せば頼�
     if (ply === 10 && lastAsked++ === 0) await never;
     return "ok";
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
@@ -1044,7 +1041,7 @@ test("返ってこない問い合わせは、同じ手数を押し直せば頼�
 
 test("再現できない地点は、手前へ戻っても出したままにする", async ({ page }) => {
   await mockHistory(page, async () => "ok", 4);
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
@@ -1062,7 +1059,7 @@ test("最初の局面が返ってこなくても、同じ対戦を押し直せ�
     if (opened++ === 0) await never;
     return "ok";
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   const row = page.locator("#history-list button").first();
   await row.click();
@@ -1076,7 +1073,7 @@ test("プレイヤーを用意できなかったら、その理由を一覧の�
     route.fulfill({ status: 503, json: { error: "作れなかった" } }),
   );
   const failed = page.waitForResponse((response) => response.url().endsWith("/api/account"));
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await failed;
   // ロビーが開いたときに用意できなかったことは、一覧の欄では言わない。
   await painted(page);
@@ -1088,7 +1085,7 @@ test("プレイヤーを用意できなかったら、その理由を一覧の�
 test("覚えているプレイヤーを読み直しているあいだに押しても、一覧は 1 度だけ頼む", async ({
   page,
 }) => {
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
     .not.toBeNull();
@@ -1119,7 +1116,7 @@ test("忘れられていたと言われても同じプレイヤーが読めた�
     once = false;
     return route.fulfill(accountMissing);
   });
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
   await page.click("#history-button");
@@ -1128,7 +1125,7 @@ test("忘れられていたと言われても同じプレイヤーが読めた�
 });
 
 test("プレイヤーを作り直している途中に続けて押しても、作るのは 1 人だけ", async ({ page }) => {
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
     .not.toBeNull();
@@ -1156,7 +1153,7 @@ test("プレイヤーを作り直している途中に続けて押しても、�
 test("ロビーでプレイヤーが忘れられていたと分かったら、一覧は作り直したプレイヤーで頼む", async ({
   page,
 }) => {
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
     .not.toBeNull();
@@ -1180,7 +1177,7 @@ test("ロビーでプレイヤーが忘れられていたと分かったら、�
 test("別のタブがシークレットを消していたら、次に一覧を出すときにプレイヤーを作り直す", async ({
   page,
 }) => {
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
     .not.toBeNull();
@@ -1201,7 +1198,7 @@ test("追い越された局面の再現できない地点は、見出しに出�
     },
     4,
   );
-  await page.goto(`${BASEPATH}/`);
+  await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
@@ -1263,7 +1260,7 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     for (const message of messages) ws.send(message);
   });
-  await page.goto(`${BASEPATH}/?watch=e2e-bot-watch`);
+  await page.goto("/?watch=e2e-bot-watch");
 
   const position = page.locator("#watch-position");
   await expect(position).toHaveAttribute("data-latest", "5");

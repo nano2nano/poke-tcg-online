@@ -24,8 +24,6 @@ import type {
 export interface SetupDraft {
   active: string | null;
   bench: string[];
-  /** 送って返事を待っている。2 度目はサーバが断り、通った答えまで失敗に見える。 */
-  sent: boolean;
 }
 
 export interface SeatState {
@@ -50,8 +48,7 @@ export interface SeatState {
 /** 画面の中で起きる操作。サーバへ送る手そのものは状態を変えず、返ってきた局面で変わる。 */
 export type SetupAction =
   | { t: "choose-active"; instanceId: string }
-  | { t: "toggle-bench"; instanceId: string }
-  | { t: "setup-sent" };
+  | { t: "toggle-bench"; instanceId: string };
 
 export type SeatAction = ServerMessage | SetupAction;
 
@@ -105,8 +102,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
             }
           : {}),
       };
-      // 準備の答えへの返事は、預かっても断っても局面で届く。ここで戻さないと、断られたあとに出し直せない。
-      return withDraft(next, { ...state.setupDraft, sent: false });
+      return withDraft(next, state.setupDraft);
     }
     case "ended": {
       const { t: _t, view, ...ended } = action;
@@ -143,18 +139,13 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
       if (bench.length >= offer.benchSlots) return state;
       return withDraft(state, { ...state.setupDraft, bench: [...bench, action.instanceId] });
     }
-    // 新しい画面は返事待ちを `useSeat` で手と一緒に持つので、これを使わない。いまの画面の
-    // `public/match-state.js` と同じテストで確かめるあいだは、同じ形に揃えておく。
-    case "setup-sent":
-      if (state.setupDraft.active === null || state.setupDraft.sent) return state;
-      return { ...state, setupDraft: { ...state.setupDraft, sent: true } };
     default:
       return state;
   }
 }
 
 function emptyDraft(): SetupDraft {
-  return { active: null, bench: [], sent: false };
+  return { active: null, bench: [] };
 }
 
 /** 選びかけを、いま出せる候補に合わせて置く。バトル場に選んだカードはベンチから外す。 */
@@ -165,7 +156,7 @@ function withDraft(state: SeatState, draft: SetupDraft): SeatState {
   const bench = draft.bench
     .filter((id) => offer.bench.includes(id) && id !== active)
     .slice(0, offer.benchSlots);
-  return { ...state, setupDraft: { active, bench, sent: draft.sent } };
+  return { ...state, setupDraft: { active, bench } };
 }
 
 export interface WatchState {

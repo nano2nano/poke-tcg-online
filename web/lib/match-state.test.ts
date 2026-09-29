@@ -1,7 +1,4 @@
-/**
- * 画面が持つ対戦の状態（`web/lib/match-state.ts`）。いまの画面が持つ同じものの JS
- * （`public/match-state.js`）も、入れ替えで消えるまで同じテストで確かめる。
- */
+/** 画面が持つ対戦の状態（`web/lib/match-state.ts`）。 */
 
 import { describe, expect, it } from "vitest";
 import type { Player } from "../../src/engine.js";
@@ -23,8 +20,15 @@ import type {
   SpectatorSyncMessage,
   SyncMessage,
 } from "../../src/protocol.js";
-import * as legacy from "../../public/match-state.js";
-import * as current from "./match-state.js";
+import {
+  initialReplayState,
+  initialSeatState,
+  initialWatchState,
+  replayReducer,
+  seatReducer,
+  setupOffer,
+  watchReducer,
+} from "./match-state.js";
 import { ensureCards, newMatch } from "../../tests/helpers.js";
 
 /**
@@ -97,20 +101,7 @@ function chooseOffer(sync: SyncMessage) {
   return sync.setup;
 }
 
-describe.each([
-  { name: "web/lib/match-state.ts", module: current },
-  { name: "public/match-state.js", module: legacy },
-])("$name", ({ module }) => {
-  const {
-    initialReplayState,
-    initialSeatState,
-    initialWatchState,
-    replayReducer,
-    seatReducer,
-    setupOffer,
-    watchReducer,
-  } = module;
-
+describe("画面の状態", () => {
   describe("座席の状態", () => {
     const match = matchInSetup();
     const sync = syncOf(match, 0);
@@ -130,18 +121,8 @@ describe.each([
     it("準備の選びかけは、同じ候補の局面が届き直しても残る", () => {
       let state = seatReducer(seated, { t: "toggle-bench", instanceId: first });
       state = seatReducer(state, { t: "choose-active", instanceId: active });
-      state = seatReducer(state, { t: "setup-sent" });
-      expect(state.setupDraft.sent).toBe(true);
       state = seatReducer(state, syncOf(match, 0));
-      expect(state.setupDraft).toEqual({ active, bench: [first], sent: false });
-    });
-
-    it("送って返事を待つあいだは、もう一度送らない", () => {
-      const chosen = seatReducer(seated, { t: "choose-active", instanceId: active });
-      const sent = seatReducer(chosen, { t: "setup-sent" });
-      expect(seatReducer(sent, { t: "setup-sent" })).toBe(sent);
-      // バトル場を選ぶまでは送れない。
-      expect(seatReducer(seated, { t: "setup-sent" })).toBe(seated);
+      expect(state.setupDraft).toEqual({ active, bench: [first] });
     });
 
     it("バトル場に選んだカードは、ベンチの選びかけから外す", () => {
@@ -190,7 +171,7 @@ describe.each([
       expect(ended.legalMoves).toBeNull();
       expect(ended.spectatorToken).toBeNull();
       expect(setupOffer(ended)).toBeNull();
-      expect(ended.setupDraft).toEqual({ active: null, bench: [], sent: false });
+      expect(ended.setupDraft).toEqual({ active: null, bench: [] });
       expect(seatReducer(ended, { t: "toggle-bench", instanceId: first })).toBe(ended);
     });
 

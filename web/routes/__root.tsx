@@ -14,7 +14,7 @@ export const Route = createRootRoute({
     ],
     links: [{ rel: "stylesheet", href: styles }],
   }),
-  // SSR をしないルートでも、文書の骨組みとスクリプトの読み込みはサーバが返す。
+  // SSR はしないが、文書の骨組みとスクリプトの読み込みはビルドが `index.html` へ書き出す。
   shellComponent: Document,
   component: Root,
 });

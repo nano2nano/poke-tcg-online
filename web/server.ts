@@ -1,20 +1,19 @@
 /**
- * Worker の入口。新しい画面のパスだけを TanStack Start に渡し、ほかはこれまでどおり対戦サーバへ渡す。
+ * Worker の入口。API と WebSocket は対戦サーバへ渡し、ほかのパスは TanStack Start に渡す。
  *
- * 画面は静的アセットとして返るので（`wrangler.jsonc` の `assets`）、API と WebSocket のほかにここへ来るのは、
- * アセットに無いパスだけである。
+ * 画面は静的アセットで返り（`wrangler.jsonc` の `assets`）、本番の Worker には API と WebSocket しか来ない。
+ * Start へ渡すのは、ビルドで画面の骨組みを `index.html` へ書き出すときのためである。
  */
 
 import server, { Server, type Env } from "../src/worker.js";
-import { BASEPATH } from "./basepath.js";
 
 export { Server };
 
 export default {
   fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
-    if (pathname === BASEPATH || pathname.startsWith(`${BASEPATH}/`)) return renderPage(request);
-    return server.fetch(request, env);
+    if (pathname === "/ws" || pathname.startsWith("/api/")) return server.fetch(request, env);
+    return renderPage(request);
   },
 };
 

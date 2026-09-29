@@ -177,7 +177,7 @@ describe("決着", () => {
 });
 
 /**
- * 画面の案内（`public/app.js` の `promptText`）は、この順を前提に書いてある。
+ * 画面の案内（`web/lib/describe-move.ts` の `setupPrompt`）は、この順を前提に書いてある。
  * エンジンが順を変えたら、案内も書き直す。
  */
 /**

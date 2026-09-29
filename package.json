@@ -16,8 +16,7 @@
     "deploy": "tsx tools/deploy.ts",
     "replay:verify": "tsx tools/replay-verify.ts",
     "verify:all": "npm run typecheck && npm run fmt:check && npm run lint && npm run test",
-    "test:e2e": "playwright test",
-    "test:e2e:next": "playwright test -c playwright.next.config.ts"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.0",

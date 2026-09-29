@@ -5,7 +5,6 @@
 import type { SeedShares } from "../../src/fingerprint.js";
 import type { Seated } from "../../src/lobby.js";
 import type { EndedMessage } from "../../src/protocol.js";
-import { BASEPATH } from "../basepath.js";
 
 /**
  * 画面が覚える座席。繋ぎ直しに要るのは座席トークンと番号だけで、残りは検算に使う。
@@ -18,7 +17,7 @@ export type StoredSeat = Pick<Seated, "seat" | "seatToken"> &
   };
 
 /**
- * 指している座席を置く localStorage のキー。いまの画面と同じキーにして、入れ替えのあとも同じ座席へ繋ぎ直せるようにする。
+ * 指している座席を置く localStorage のキー。作り直す前の画面と同じキーにして、入れ替える前に着いた座席へも繋ぎ直せるようにする。
  *
  * **持たずに閉じると、その対戦には二度と入れない。** 繋ぎ直しに要るのは座席トークンだけ
  * （3.3 節）で、切断中も時計は流れる（3.4 節）ので、戻れないまま時間切れで負ける。
@@ -56,7 +55,7 @@ export function storedSeat(): StoredSeat | null {
 
 /** 観戦のリンク。渡された人は、この画面と同じ場所で観戦の卓を開く。 */
 export function watchUrl(spectatorToken: string): string {
-  return `${location.origin}${BASEPATH}/?watch=${encodeURIComponent(spectatorToken)}`;
+  return `${location.origin}/?watch=${encodeURIComponent(spectatorToken)}`;
 }
 
 /** シェアのコミットを作る側と確かめる側で、同じ手順を使う。 */

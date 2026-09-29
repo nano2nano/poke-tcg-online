@@ -269,9 +269,7 @@ export function Lobby({
               return onSeated(withShare(claimed.seat, share));
             case "finished":
               // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
-              show(
-                "この対戦は、席に着く前に終わりました。いまの画面の「一覧を出す」から読み返せます。",
-              );
+              show("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
               refreshAccount(queryClient).catch(() => {});
               return;
             case "dropped":
