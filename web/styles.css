@@ -1019,14 +1019,6 @@ button.secondary {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .result,
-  .coin-inner,
-  .hit,
-  .showcase {
-    animation: none;
-  }
-}
 :root[data-no-motion] :is(.result, .coin-inner, .hit, .showcase) {
   animation: none;
 }

@@ -68,7 +68,7 @@ export function useNotices(): NoticeFeed {
   const [showcase, setShowcase] = useState<Showcase | null>(null);
   const [queue] = useState(() => createQueue(setNotices, setHits, setShowcase));
   useEffect(() => queue.dispose, [queue]);
-  // OS で動きを減らす設定にしている人にはカードを動かさないので、結果も数字も待たせずに出す。
+  // 演出を出さないときはカードを動かさないので、結果も数字も待たせずに出す。
   const animate = useMotionOn();
   useEffect(() => queue.setAnimate(animate), [queue, animate]);
   return { notices, hits, showcase, show: queue.show };
