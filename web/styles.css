@@ -1002,7 +1002,7 @@ button.secondary {
   animation: showcase-in 0.25s ease-out;
 }
 .showcase .card {
-  --w: clamp(120px, 14vw, 240px);
+  --w: clamp(96px, 14vw, 240px);
 }
 @keyframes showcase-in {
   from {

@@ -214,6 +214,7 @@ const Arrivals = createContext<BoardArrivals>({ cards: new Map(), backs: {} });
 function boardArrivals(before: BoardSides, after: BoardSides): BoardArrivals {
   const cards = new Map<string, Arrival>();
   const backs: BoardArrivals["backs"] = {};
+  const played: Arrival["side"][] = [];
   const shown = new Set(shownIds(before));
   const unseen = (list: readonly CardInstance[]) =>
     list.filter((card) => !shown.has(card.instanceId));
@@ -231,9 +232,15 @@ function boardArrivals(before: BoardSides, after: BoardSides): BoardArrivals {
     const drew = now.handCount - handCount(was);
     if (drew > 0 && prizes !== deck) backs[side] = { from: handCount(was), zone };
     if (drew < 0 && !prizes && !deck) {
-      for (const card of unseen([...fieldCards(now), ...stadiumCards(after.stadium)])) {
+      played.push(side);
+      for (const card of unseen(fieldCards(now)))
         cards.set(card.instanceId, { side, zone: "hand" });
-      }
+    }
+  }
+  // スタジアムはどちらの側にも置かれないので、伏せた手札から出したのが片方だけのときに限り、その手札から動かす。
+  if (played.length === 1) {
+    for (const card of unseen(stadiumCards(after.stadium))) {
+      cards.set(card.instanceId, { side: played[0]!, zone: "hand" });
     }
   }
   return { cards, backs };

@@ -76,13 +76,51 @@ describe("describeEvents", () => {
     expect(capped?.hit).toBeUndefined();
   });
 
-  it("続けて引いたカードは 1 つに畳み、枚数と引かせたカードを書く", () => {
-    const source = { defId: "nanjamo", instanceId: "n1", label: "ナンジャモ" };
-    const drawn = event({ kind: "card-drawn-hidden", player: 1, count: 1, actor: 0, source });
+  it("続けて引いたカードは 1 つに畳み、枚数を書く", () => {
+    const drawn = event({ kind: "card-drawn-hidden", player: 1, count: 1, actor: 1 });
     const notices = describeEvents([drawn, drawn, drawn], [null], who, cards);
-    expect(notices.map((notice) => notice.text)).toEqual(["いがカードを 3 枚引いた（ナンジャモ）"]);
-    // 引かせたのは座席 0 なので、座席 1 の画面にも出す。
-    expect(noticesToShow(notices, 1)).toHaveLength(1);
+    expect(notices.map((notice) => notice.text)).toEqual(["いがカードを 3 枚引いた"]);
+  });
+
+  it("相手の番に自分に起きたことは、座席の画面の結果に出す", () => {
+    // 相手の効果で入れ替えても、エンジンは入れ替えたポケモンの持ち主を `actor` にする。
+    const view = board([{}, { active: pokemon("p1") }]);
+    const switched = event({ kind: "pokemon-switched", player: 1, actor: 1, from: "p1", to: "p2" });
+    expect(noticesToShow(describeEvents([switched], [view], who, cards), 1)).toHaveLength(1);
+  });
+
+  it("使ったトレーナーズをトラッシュするイベントは、使ったことの文に含める", () => {
+    const card = { instanceId: "c1", defId: "nanjamo" };
+    const notices = describeEvents(
+      [
+        event({ kind: "trainer-played", player: 0, card }),
+        event({ kind: "card-discarded", player: 0, card, from: { kind: "hand", player: 0 } }),
+      ],
+      [null],
+      who,
+      cards,
+    );
+    expect(notices.map((notice) => notice.text)).toEqual(["あがナンジャモを使った"]);
+  });
+
+  it("きぜつしたポケモンをトラッシュしたことは、記録にだけ残す", () => {
+    const card = { instanceId: "c1", defId: "pikachu" };
+    const notices = describeEvents(
+      [
+        event({
+          kind: "card-discarded",
+          player: 1,
+          actor: null,
+          card,
+          from: { kind: "active", player: 1 },
+        }),
+      ],
+      [null],
+      who,
+      cards,
+    );
+    expect(notices).toHaveLength(1);
+    expect(noticesToShow(notices)).toEqual([]);
   });
 
   it("自分でしたことは座席の画面の結果に出さず、記録には残す", () => {
@@ -98,7 +136,7 @@ describe("describeEvents", () => {
     );
     expect(notices.map((notice) => notice.text)).toEqual([
       "あがナンジャモを使った",
-      "あのピカチュウが「でんきショック」を使った",
+      "あのピカチュウがワザ「でんきショック」を使った",
     ]);
     expect(notices.map((notice) => notice?.card)).toEqual(["nanjamo", "pikachu"]);
     expect(noticesToShow(notices, 0)).toEqual([]);

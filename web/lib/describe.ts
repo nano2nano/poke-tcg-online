@@ -265,14 +265,21 @@ export function describeEvents(
   who: (player: Player) => string,
   cards: CardTable,
 ): Notice[] {
+  // トレーナーズを使うと、使ったカードをトラッシュするイベントが続く。使ったことは 1 つの文で言う。
+  const played = new Set(
+    events.flatMap((event) => (event.kind === "trainer-played" ? [event.card.instanceId] : [])),
+  );
+  const told = events.filter(
+    (event) => event.kind !== "card-discarded" || !played.has(event.card.instanceId),
+  );
   const notices: Notice[] = [];
   let start = 0;
-  while (start < events.length) {
-    const key = foldKey(events[start]!);
+  while (start < told.length) {
+    const key = foldKey(told[start]!);
     const folds = (event: PlayerEvent) => key !== undefined && foldKey(event) === key;
     let end = start + 1;
-    while (end < events.length && folds(events[end]!)) end += 1;
-    const notice = describeRun(events.slice(start, end), views, who, cards);
+    while (end < told.length && folds(told[end]!)) end += 1;
+    const notice = describeRun(told.slice(start, end), views, who, cards);
     if (notice !== null) notices.push(notice);
     start = end;
   }
@@ -348,6 +355,8 @@ function describeRun(
       ? ZONES[zone.kind]
       : `${who(zone.player)}の${ZONES[zone.kind]}`;
   const cause = event.source === null ? "" : `（${name(event.source.defId)}）`;
+  // 自分でしたことかは、誰の番に起きたかで決める。`actor` は効果を受けた側を指すことがある（入れ替えなど）。
+  const byTurn = (player: Player) => (event.window.kind === "turn" ? event.window.player : player);
   switch (event.kind) {
     case "coin-flipped": {
       const heads = event.results.filter(Boolean).length;
@@ -411,48 +420,59 @@ function describeRun(
     case "card-drawn":
     case "card-drawn-hidden":
       return {
-        text: `${who(event.player)}がカードを ${run.length} 枚引いた${cause}`,
-        by: event.actor ?? event.player,
+        text: `${who(event.player)}がカードを ${run.length} 枚引いた`,
+        by: byTurn(event.player),
       };
     case "card-discarded": {
-      const by = event.actor ?? event.player;
-      const whose = by === event.player ? "" : `${who(event.player)}の`;
-      return { text: `${who(by)}が${whose}${names()}をトラッシュした${cause}`, by };
+      // きぜつしたポケモンをトラッシュするときなど、ルールが動かしたものは記録にだけ残す。
+      if (event.actor === null) {
+        return { text: `${who(event.player)}の${names()}をトラッシュした`, quiet: true };
+      }
+      const whose = event.actor === event.player ? "" : `${who(event.player)}の`;
+      return {
+        text: `${who(event.actor)}が${whose}${names()}をトラッシュした${cause}`,
+        by: byTurn(event.actor),
+      };
     }
     case "card-moved":
     case "card-moved-hidden": {
-      const by = event.actor ?? (event.from.kind === "stadium" ? null : event.from.player);
+      const subject = event.actor ?? (event.from.kind === "stadium" ? null : event.from.player);
       const what = event.kind === "card-moved" ? names() : ` ${run.length} 枚`;
-      const text = `${what}を${place(event.from, by)}から${place(event.to, by)}へ移した${cause}`;
-      return by === null ? { text: text.trimStart() } : { text: `${who(by)}が${text}`, by };
+      const text = `${what}を${place(event.from, subject)}から${place(event.to, subject)}へ移した${cause}`;
+      return subject === null
+        ? { text: text.trimStart() }
+        : { text: `${who(subject)}が${text}`, by: byTurn(subject) };
     }
     case "cards-revealed":
       if (event.reshow === true) return null;
       return {
         text: `${who(event.player)}が${place(event.zone, event.player)}の${names()}を${event.audience === "public" ? "見せた" : "見た"}${cause}`,
-        by: event.player,
+        by: byTurn(event.player),
         quiet: true,
       };
     case "cards-revealed-hidden":
       return {
         text: `${who(event.player)}が${place(event.zone, event.player)}の ${event.count} 枚を見た${cause}`,
-        by: event.player,
+        by: byTurn(event.player),
         quiet: true,
       };
     case "deck-shuffled":
-      return { text: `${who(event.player)}が山札を切った`, by: event.player, quiet: true };
+      return { text: `${who(event.player)}が山札を切った`, by: byTurn(event.player), quiet: true };
     case "card-name-declared":
-      return { text: `${who(event.player)}が${name(event.defId)}を宣言した`, by: event.player };
+      return {
+        text: `${who(event.player)}が${name(event.defId)}を宣言した`,
+        by: byTurn(event.player),
+      };
     case "pokemon-played":
       return {
         text: `${who(event.player)}が${name(event.card.defId)}を${ZONES[event.to.kind]}に出した`,
         card: event.card.defId,
-        by: event.player,
+        by: byTurn(event.player),
       };
     case "pokemon-played-hidden":
       return {
         text: `${who(event.player)}が${ZONES[event.to.kind]}にポケモンを裏向きで出した`,
-        by: event.player,
+        by: byTurn(event.player),
       };
     case "pokemon-evolved": {
       // 適用後の盤面では、もう進化したあとの名前になっている。
@@ -460,13 +480,14 @@ function describeRun(
       return {
         text: `${who(event.player)}の${before}が${name(event.card.defId)}に進化した`,
         card: event.card.defId,
-        by: event.player,
+        by: byTurn(event.player),
       };
     }
     case "pokemon-devolved":
       return {
-        text: `${pokemon(event.target)}が退化した${cause}`,
-        by: event.actor ?? event.player,
+        // 適用後の盤面では、もう退化したあとの名前になっている。
+        text: `${pokemon(event.target, null, [...views].reverse())}が退化した${cause}`,
+        by: byTurn(event.player),
       };
     case "pokemon-replaced":
     case "pokemon-top-card-replaced": {
@@ -475,7 +496,7 @@ function describeRun(
       return {
         text: `${who(event.player)}の${from}が${name(event.newCard.defId)}になった${cause}`,
         card: event.newCard.defId,
-        by: event.actor ?? event.player,
+        by: byTurn(event.player),
       };
     }
     case "trainer-played":
@@ -483,53 +504,56 @@ function describeRun(
       return {
         text: `${who(event.player)}が${name(event.card.defId)}を${event.kind === "trainer-played" ? "使った" : "出した"}`,
         card: event.card.defId,
-        by: event.player,
+        by: byTurn(event.player),
       };
     case "stadium-effect-used":
       return {
         text: `${who(event.player)}が${name(event.card.defId)}の効果を使った`,
         card: event.card.defId,
-        by: event.player,
+        by: byTurn(event.player),
       };
     case "energy-attached":
     case "tool-attached":
       return {
         text: `${who(event.player)}が${pokemon(event.target, event.player)}に${name(event.card.defId)}をつけた${cause}`,
         card: event.card.defId,
-        by: event.actor ?? event.player,
+        by: byTurn(event.player),
       };
     case "ability-used":
     case "attack-declared": {
       const found = findPokemon(event.sourceInPlay, views);
-      const brief = found === null ? undefined : cards[found.defId];
-      const ability = event.kind === "ability-used";
-      // `attackIndex` は宣言できるワザの表の番号で、印刷されたワザが前に並ぶ（`describe-move.ts` の `attackName`）。
-      const label = ability
-        ? brief?.abilities?.[event.abilityIndex]
-        : brief?.attacks?.[event.attackIndex];
-      const what = label === undefined ? (ability ? "特性" : "ワザ") : `「${label}」`;
+      const attack =
+        event.kind === "attack-declared"
+          ? printedAttack(cards, found?.defId, event.attackIndex)
+          : undefined;
+      const what =
+        event.kind === "ability-used"
+          ? abilityName(cards, found?.defId, event.abilityIndex)
+          : attack === undefined
+            ? "ワザ"
+            : `ワザ「${attack}」`;
       return {
         text: `${who(event.player)}の${pokemon(event.sourceInPlay, event.player)}が${what}を使った`,
         ...(found === null ? {} : { card: found.defId }),
-        by: event.player,
+        by: byTurn(event.player),
       };
     }
     case "hand-ability-used":
-      return { text: `${who(event.player)}が手札のカードの特性を使った`, by: event.player };
+      return { text: `${who(event.player)}が手札のカードの特性を使った`, by: byTurn(event.player) };
     case "pokemon-retreated":
       return {
         text: `${who(event.player)}が${pokemon(event.from, event.player)}をにがし、${pokemon(event.to, event.player)}をバトル場に出した`,
-        by: event.player,
+        by: byTurn(event.player),
       };
     case "pokemon-switched":
       return {
         text: `${who(event.player)}の${pokemon(event.from, event.player)}と${pokemon(event.to, event.player)}が入れ替わった${cause}`,
-        by: event.actor ?? event.player,
+        by: byTurn(event.player),
       };
     case "pokemon-promoted":
       return {
         text: `${who(event.player)}が${pokemon(event.target, event.player)}をバトル場に出した`,
-        by: event.player,
+        by: byTurn(event.player),
       };
     // 手順の区切りと、ほかのイベントが言っていることの言い直し。先攻と決着は、別の知らせで出す。
     case "game-started":
@@ -547,9 +571,28 @@ function describeRun(
     case "choice-answered":
       return null;
     default:
-      // エンジンにイベントが増えたら、ここで型が合わなくなる。記録にイベントの名前を出さないため。
-      return event satisfies never;
+      // エンジンにイベントが増えたら、ここで型が合わなくなる。文を書き足すまで、記録にも出さない。
+      event satisfies never;
+      return null;
   }
+}
+
+export function abilityName(cards: CardTable, defId: string | undefined, index: number): string {
+  const name = defId === undefined ? undefined : cards[defId]?.abilities?.[index];
+  return name === undefined ? "特性" : `特性「${name}」`;
+}
+
+/**
+ * `attackIndex` は印刷されたワザの番号ではなく、どうぐなどで使えるようになったワザを
+ * 後ろに足した表の番号である（`engine/docs/spec/engine-core.md` 3.3 節）。印刷されたワザが前に並ぶので、
+ * その数より小さければ名前が引ける。
+ */
+export function printedAttack(
+  cards: CardTable,
+  defId: string | undefined,
+  index: number,
+): string | undefined {
+  return defId === undefined ? undefined : cards[defId]?.attacks?.[index];
 }
 
 /** 場のポケモンの持ち主と、いちばん上のカード。見つからなければ null。 */
