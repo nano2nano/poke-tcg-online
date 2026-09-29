@@ -63,8 +63,11 @@ export function CardPreview() {
     // マウスなら下に来たカードへ移り、閉じてから開き直す一瞬のちらつきを出さない。マウスの下が替わったときに
     // ブラウザが載せ直しを知らせるかどうかには頼らない。指で押している最中なら、押したカードが残っていれば
     // そのまま出し、もう無ければ閉じる。
-    const watch = new MutationObserver(() => {
-      if (current === null) return;
+    const watch = new MutationObserver((records) => {
+      // プレビューそのものの描き直しでは、カードは動かない。
+      if (current === null || records.every((record) => box.current?.contains(record.target))) {
+        return;
+      }
       if (current.pointer === "touch" || lastMouse === null) {
         if (current.card.isConnected) show(current.card, current.pointer);
         else hide();
@@ -116,10 +119,11 @@ export function CardPreview() {
     const up = (event: PointerEvent) => {
       if (longPress?.pointerId !== event.pointerId) return;
       endLongPress();
-      // 離したときのクリックは、この直後に届く。長押しのメニューを止めた端末などで届かなかったら、
-      // キーボードで押したボタンのクリックを止めないよう、残さない。
       if (event.type === "pointercancel") swallowClick = false;
-      else window.setTimeout(() => (swallowClick = false));
+    };
+    // 長押しを離してもクリックが届かない端末がある。そのあとキーボードで押したボタンのクリックは止めない。
+    const key = () => {
+      swallowClick = false;
     };
     const click = (event: MouseEvent) => {
       if (!swallowClick) return;
@@ -150,6 +154,7 @@ export function CardPreview() {
     document.addEventListener("pointerup", up);
     document.addEventListener("pointercancel", up);
     document.addEventListener("click", click, { capture: true });
+    document.addEventListener("keydown", key, { capture: true });
     document.addEventListener("contextmenu", menu);
     document.addEventListener("scroll", scroll, { capture: true, passive: true });
     window.addEventListener("resize", resize);
@@ -163,6 +168,7 @@ export function CardPreview() {
       document.removeEventListener("pointerup", up);
       document.removeEventListener("pointercancel", up);
       document.removeEventListener("click", click, { capture: true });
+      document.removeEventListener("keydown", key, { capture: true });
       document.removeEventListener("contextmenu", menu);
       document.removeEventListener("scroll", scroll, { capture: true });
       window.removeEventListener("resize", resize);

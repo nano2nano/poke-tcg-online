@@ -1923,7 +1923,8 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
       BOARD_IMAGES,
     );
     await advance(a, b, seenA);
-    const drawn = seenA()?.stateVersion ?? -1;
+    const drawn = seenA()?.stateVersion;
+    if (drawn === undefined) throw new Error("局面が届いていない");
     await expect
       .poll(() =>
         a.evaluate(
@@ -2187,10 +2188,18 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   const hovered = (await hand.last().boundingBox()) as Box;
   const point = { x: hovered.x + hovered.width / 2, y: hovered.y + hovered.height / 2 };
   const mat = await a.evaluateHandle(() => document.querySelector("#self .mat"));
+  const hides = await preview.evaluateHandle((node) => {
+    const seen = { count: 0 };
+    new MutationObserver(() => {
+      if (node instanceof HTMLElement && node.hidden) seen.count += 1;
+    }).observe(node, { attributes: true, attributeFilter: ["hidden"] });
+    return seen;
+  });
   const before = seenA()?.stateVersion ?? -1;
   expect(await playOne(b)).toBe(true);
   await expect.poll(() => seenA()?.stateVersion ?? -1).toBeGreaterThan(before);
-  const drawn = seenA()?.stateVersion ?? -1;
+  const drawn = seenA()?.stateVersion;
+  if (drawn === undefined) throw new Error("局面が届いていない");
   await expect
     .poll(() =>
       a.evaluate(
@@ -2209,6 +2218,8 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
     )
     .toBe(true);
   await mat.dispose();
+  // マウスの下にカードが残っていれば、描き直しのあいだも閉じない。
+  if (await preview.isVisible()) expect(await hides.evaluate((seen) => seen.count)).toBe(0);
 
   await a.mouse.move(0, 0);
   await expect(preview).toBeHidden();

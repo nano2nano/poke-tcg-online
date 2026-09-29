@@ -28,7 +28,8 @@ export function useZoomable(target: ZoomTarget | undefined) {
       if (event.key !== "Enter" && event.key !== " ") return;
       // Enter の keypress を出させない。スペースでは画面が送られないようにする。
       event.preventDefault();
-      if (event.key === "Enter") open(target);
+      // 「閉じる」で Enter を押し続けると、閉じて戻ったこの要素にくり返しが届く。開き直さない。
+      if (event.key === "Enter" && !event.repeat) open(target);
     },
     onKeyUp: (event: KeyboardEvent) => {
       if (event.target === event.currentTarget && event.key === " ") open(target);

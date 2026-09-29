@@ -23,7 +23,10 @@ export function CardZoom({ children }: { children: ReactNode }) {
         id="card-zoom"
         className="card-zoom"
         ref={dialog}
-        onClose={() => setTarget(null)}
+        // close イベントは閉じたあとで届く。そのあいだに開き直していたら、開いた中身を消さない。
+        onClose={(event) => {
+          if (!event.currentTarget.open) setTarget(null);
+        }}
         // 枠の外（背景）を押しても閉じる。中身は内側の要素が覆っているので、dialog そのものに当たるのは背景だけである。
         onPointerDown={(event) => {
           pressedBackdrop.current = event.target === event.currentTarget;

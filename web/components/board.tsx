@@ -143,9 +143,12 @@ export function Zone({
 function PileZone({ name, label, pile }: { name: string; label: string; pile: CardInstance[] }) {
   const top = pile[pile.length - 1];
   // 山は下から順に持っているので、上から並べ直す。
-  const zoom = { title: label, defIds: pile.map((card) => card.defId).reverse() };
+  const zoom =
+    top === undefined
+      ? undefined
+      : { title: label, defIds: pile.map((card) => card.defId).reverse() };
   return (
-    <Zone name={name} label={label} count={pile.length} zoom={top === undefined ? undefined : zoom}>
+    <Zone name={name} label={label} count={pile.length} zoom={zoom}>
       {top === undefined ? <EmptySlot /> : <CardFace defId={top.defId} />}
     </Zone>
   );

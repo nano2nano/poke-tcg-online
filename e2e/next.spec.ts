@@ -721,6 +721,12 @@ test("キーボードで開いたキーを押し続けても、拡大を開い�
   for (let i = 0; i < 3; i++) await page.keyboard.down("Enter");
   await page.keyboard.up("Enter");
   await expect(page.locator("#card-zoom")).toBeVisible();
+
+  // 「閉じる」で押し続けても、閉じたあとに戻ったカードで開き直さない。
+  await page.locator("#card-zoom-close").focus();
+  for (let i = 0; i < 3; i++) await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+  await expect(page.locator("#card-zoom")).toBeHidden();
 });
 
 test.describe("タッチ端末", () => {
