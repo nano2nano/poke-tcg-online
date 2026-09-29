@@ -12,7 +12,7 @@
  */
 const failedImages = new Set<string>();
 
-/** 手放された要素。同じ描き直しの中で、同じ画像のカードが拾う。 */
+/** 手放された要素。同じコミットの中で、同じ画像のカードが拾う。 */
 const spares = new Map<string, HTMLImageElement[]>();
 let sweeping = false;
 
@@ -33,8 +33,9 @@ export function takeImage(src: string, onFailed: () => void): HTMLImageElement {
 }
 
 /**
- * 借りた要素を返す。React は描き直しで消える部品の片付けを、新しく出る部品の用意より先に済ませるので、
- * 同じ描き直しで出る同じ画像のカードが拾える。拾われなかったものは、描き直しが済んだら捨てる。
+ * 借りた要素を返す。React は 1 回のコミットの中で、消える部品の `useLayoutEffect` のクリーンアップを
+ * 新しく出る部品の `useLayoutEffect` より先に実行するので、同じコミットで出る同じ画像のカードが拾える。
+ * 拾われなかったものは、コミットが済んだら捨てる。
  */
 export function releaseImage(image: HTMLImageElement): void {
   owners.delete(image);

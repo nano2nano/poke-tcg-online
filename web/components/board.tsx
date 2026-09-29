@@ -60,7 +60,8 @@ export function CardFace({
     setFailedSrc(failedUrl);
     onImageFailed?.();
   });
-  // 描き直しの片付けより後、画面に出る前に付ける。後だと、名前の面が一瞬見える。
+  // ほかの部品のクリーンアップで手放された要素を拾い、描画より前に付けるため `useLayoutEffect` にする。
+  // `useEffect` では、名前の面が一瞬見える。
   useLayoutEffect(() => {
     if (shown === null || face.current === null) return;
     const image = takeImage(shown, () => failed(shown));
@@ -141,7 +142,7 @@ export function Zone({
 
 function PileZone({ name, label, pile }: { name: string; label: string; pile: CardInstance[] }) {
   const top = pile[pile.length - 1];
-  // 上から順に並べる。
+  // 山は下から順に持っているので、上から並べ直す。
   const zoom = { title: label, defIds: pile.map((card) => card.defId).reverse() };
   return (
     <Zone name={name} label={label} count={pile.length} zoom={top === undefined ? undefined : zoom}>

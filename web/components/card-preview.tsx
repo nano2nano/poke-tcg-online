@@ -3,7 +3,6 @@ import { imageUrl } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
 import { CardCaption, CardFace } from "./board.js";
 
-/** 長押しとみなすまでの時間。 */
 const LONG_PRESS_MS = 400;
 /** 長押しの途中で指がこれより動いたら、スクロールのつもりとみなしてやめる。 */
 const LONG_PRESS_SLOP_PX = 10;
@@ -22,7 +21,7 @@ interface Shown {
  * マウスを載せている間（タッチ端末では長押しの間）、カードを大きく出す。印刷の小さな文字は
  * 盤面の大きさでは読めない。押して開く拡大と違ってマウスの操作を受けないので、手を指す邪魔をしない。
  *
- * どの画面のカードにも出すので、ルートに 1 つ置き、文書全体のポインタの動きを見る。
+ * どの画面のカードにも出すので、ルートに 1 つ置き、document 全体のポインタイベントを見る。
  */
 export function CardPreview() {
   const [shown, setShown] = useState<Shown | null>(null);
