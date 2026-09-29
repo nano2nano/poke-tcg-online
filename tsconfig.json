@@ -13,8 +13,7 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true,
-    "allowJs": true
+    "noEmit": true
   },
   "include": ["src", "tests", "tools", "playwright.config.ts", "vite.config.ts"]
 }

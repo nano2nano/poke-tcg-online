@@ -26,6 +26,12 @@ test("画面を開くとロビーが描け、アセットに無いパスでも�
   expect(errors).toEqual([]);
 });
 
+test("画面を入れ替える前に `/next/` で配った観戦のリンクは、`/` で開き直す", async ({ page }) => {
+  await page.goto("/next/?watch=e2e-old-link");
+  await expect(page).toHaveURL(/\/\?watch=e2e-old-link$/);
+  await expect(page.locator("#watch")).toBeVisible();
+});
+
 test("相手さがしを頼んでいるあいだは、「対戦をさがす」を押し直せない", async ({ page }) => {
   let release = (): void => {};
   const held = new Promise<void>((resolve) => {

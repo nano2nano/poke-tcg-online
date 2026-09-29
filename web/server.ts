@@ -12,6 +12,7 @@ export { Server };
 export default {
   fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
+    // `wrangler.jsonc` の `run_worker_first` と同じパスを対戦サーバへ渡す。
     if (pathname === "/ws" || pathname.startsWith("/api/")) return server.fetch(request, env);
     return renderPage(request);
   },
