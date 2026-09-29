@@ -1,14 +1,9 @@
-/**
- * プレイヤーが保存したデッキ（`docs/spec/battle-server.md` 5.5 節）。
- *
- * 保存するのは組みかけのデッキも含めて、人が組んだものそのままである。規則に通るかは保存のたびではなく、
- * 読むたびに照らす。カードデータが変わると、保存したときに通ったデッキが通らなくなることがある。
- */
+/** プレイヤーが保存したデッキ（`docs/spec/battle-server.md` 5.5 節）。 */
 
 import { randomBytes } from "node:crypto";
 import type { D1Database } from "@cloudflare/workers-types/index.ts";
-import { cleanText } from "./accounts.js";
-import { describeViolation, validateDeck } from "./deck.js";
+import { deckFromEntries, describeViolation, validateDeck, type DeckEntry } from "./deck.js";
+import { cleanText } from "./text.js";
 
 /** 1 人が保存できるデッキの数。消すエンドポイントがあるので、溢れたら人が選んで消せる。 */
 export const DECK_LIMIT = 50;
@@ -21,10 +16,8 @@ const DEFAULT_DECK_NAME = "名前のないデッキ";
 /** 保存できる数を越えたことの合図。 */
 export const TOO_MANY_DECKS = "too-many-decks";
 
-export interface DeckEntry {
-  defId: string;
-  count: number;
-}
+/** 自分のデッキに無いことの合図。別のブラウザで消したデッキを置き換えようとしたときに返る。 */
+export const DECK_NOT_FOUND = "deck-not-found";
 
 export interface SavedDeck {
   deckId: string;
@@ -50,11 +43,10 @@ export type SaveOutcome =
 export class DeckStore {
   constructor(private readonly db: D1Database) {}
 
-  /** 新しく組み替えたものから並べる。 */
   async list(playerId: string): Promise<SavedDeck[]> {
     const { results } = await this.db
       .prepare(
-        "SELECT deck_id, name, cards, updated_at FROM decks WHERE player_id = ? ORDER BY updated_at DESC",
+        "SELECT deck_id, name, cards, updated_at FROM decks WHERE player_id = ? ORDER BY updated_at DESC, deck_id",
       )
       .bind(playerId)
       .all<DeckRow>();
@@ -108,12 +100,11 @@ export class DeckStore {
 
 function deckOf(row: DeckRow): SavedDeck {
   const cards = JSON.parse(row.cards) as DeckEntry[];
-  const list = cards.flatMap(({ defId, count }) => Array<string>(count).fill(defId));
   return {
     deckId: row.deck_id,
     name: row.name,
     cards,
     updatedAt: row.updated_at,
-    errors: validateDeck({ cards: list }).map(describeViolation),
+    errors: validateDeck(deckFromEntries(cards)).map(describeViolation),
   };
 }

@@ -9,7 +9,7 @@
 import type { ZodType } from "zod";
 import type { DeckList } from "./engine.js";
 import { cardIndexJson } from "./card-index.js";
-import { describeViolation, validateDeck } from "./deck.js";
+import { deckFromEntries, describeViolation, validateDeck } from "./deck.js";
 import { resolveOfficialDeck } from "./official-deck.js";
 import { sampleDeck } from "./sample-deck.js";
 import { MatchHub, type SeatSocket } from "./hub.js";
@@ -17,7 +17,7 @@ import { deckPresets, presetDeck, type BotLoad, type BotStore } from "./bots.js"
 import { Lobby } from "./lobby.js";
 import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
 import type { MatchArchive } from "./archive.js";
-import { DECK_LIMIT, TOO_MANY_DECKS, type DeckStore } from "./decks.js";
+import { DECK_LIMIT, DECK_NOT_FOUND, TOO_MANY_DECKS, type DeckStore } from "./decks.js";
 import { frameAt, isMatchId, replayability } from "./history.js";
 import { clientMessageSchema } from "./protocol.js";
 import {
@@ -73,7 +73,7 @@ const MALFORMED = "送られた中身の形が違う";
 export interface AppOptions {
   accounts: AccountStore;
   archive: MatchArchive;
-  decks: DeckStore;
+  deckStore: DeckStore;
   /** AI の重みの保存先（7.3 節）。無ければ AI とは対戦できない。 */
   bots?: BotStore | null;
   /** AI が手を指すまでの間。テストが待たずに済むように置く。 */
@@ -159,7 +159,7 @@ function readCount(name: string, value: string | undefined): number | null {
 
 export function createApp(options: AppOptions): App {
   const now = options.now ?? (() => Date.now());
-  const { accounts, archive, decks } = options;
+  const { accounts, archive, deckStore } = options;
   const registry = new MatchRegistry();
   const lobby = new Lobby(registry, accounts, now);
   const limitOptions =
@@ -190,7 +190,7 @@ export function createApp(options: AppOptions): App {
           registry,
           accounts,
           archive,
-          decks,
+          deckStore,
           bots,
           hub,
           now,
@@ -283,7 +283,7 @@ interface RouteContext {
   registry: MatchRegistry;
   accounts: AccountStore;
   archive: MatchArchive;
-  decks: DeckStore;
+  deckStore: DeckStore;
   bots: BotStore | null;
   hub: MatchHub;
   now: () => number;
@@ -291,8 +291,7 @@ interface RouteContext {
 }
 
 async function route(request: Request, origin: string, context: RouteContext): Promise<Response> {
-  const { lobby, registry, accounts, archive, bots, hub, now, accountLimit } = context;
-  const deckStore = context.decks;
+  const { lobby, registry, accounts, archive, deckStore, bots, hub, now, accountLimit } = context;
   const url = new URL(request.url);
 
   /**
@@ -383,8 +382,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
   if (request.method === "POST" && url.pathname === "/api/deck/official") {
     const { cards } = parseBody(officialDeckSchema, await readBody(request));
     const { entries, failures } = resolveOfficialDeck(cards);
-    const deck = { cards: entries.flatMap(({ defId, count }) => Array<string>(count).fill(defId)) };
-    const errors = validateDeck(deck).map(describeViolation);
+    const errors = validateDeck(deckFromEntries(entries)).map(describeViolation);
     return json(200, {
       ok: failures.length === 0 && errors.length === 0,
       errors,
@@ -409,7 +407,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const account = await accounts.find(secret);
     if (account === null) return accountNotFound();
     const outcome = await deckStore.save(account.playerId, deck, now());
-    if (outcome.kind === "not-found") return json(404, { error: "デッキが見つからない" });
+    if (outcome.kind === "not-found") return deckNotFound();
     if (outcome.kind === "full") {
       return json(400, {
         code: TOO_MANY_DECKS,
@@ -422,10 +420,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const { secret, deckId } = parseBody(deleteDeckSchema, await readBody(request));
     const account = await accounts.find(secret);
     if (account === null) return accountNotFound();
-    if (!(await deckStore.remove(account.playerId, deckId))) {
-      return json(404, { error: "デッキが見つからない" });
-    }
-    return json(200, {});
+    return (await deckStore.remove(account.playerId, deckId)) ? json(200, {}) : deckNotFound();
   }
   if (request.method === "POST" && url.pathname === "/api/join") {
     const body = parseBody(joinRequestSchema, await readBody(request));
@@ -558,6 +553,10 @@ function jsonText(status: number, text: string): Response {
 
 function accountNotFound(): Response {
   return json(404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
+}
+
+function deckNotFound(): Response {
+  return json(404, { code: DECK_NOT_FOUND, error: "デッキが見つからない" });
 }
 
 /**

@@ -107,7 +107,7 @@ describe("黙ったままの接続", () => {
     // 接続と定期処理しか使わないので、保存先は持たせない。
     const app = createApp({
       accounts: {} as AccountStore,
-      decks: {} as DeckStore,
+      deckStore: {} as DeckStore,
       archive: {} as MatchArchive,
       now: () => nowMs,
       accountLimit: null,

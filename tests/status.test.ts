@@ -18,7 +18,7 @@ describe("/api/status", () => {
     const settling = new Promise<void>((resolve) => (settle = resolve));
     const app = createApp({
       accounts: {} as AccountStore,
-      decks: {} as DeckStore,
+      deckStore: {} as DeckStore,
       archive: { settle: () => settling, settled: () => settling } as unknown as MatchArchive,
       accountLimit: null,
     });

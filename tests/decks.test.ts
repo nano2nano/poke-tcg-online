@@ -7,7 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ensureSchema } from "../src/database.js";
-import { DECK_LIMIT, TOO_MANY_DECKS } from "../src/decks.js";
+import { DECK_LIMIT, DECK_NOT_FOUND, TOO_MANY_DECKS } from "../src/decks.js";
 import { sampleDeck } from "../src/sample-deck.js";
 import { ensureCards } from "./helpers.js";
 import { startWorker, type TestWorker } from "./worker.js";
@@ -91,6 +91,7 @@ describe("保存したデッキ", () => {
       cards: [],
     });
     expect(replaced.status).toBe(404);
+    expect(replaced.body.code).toBe(DECK_NOT_FOUND);
     expect((await postJson("/api/decks/delete", { secret: other, deckId })).status).toBe(404);
 
     const kept = await postJson("/api/decks", { secret: owner });
@@ -119,14 +120,21 @@ describe("保存したデッキ", () => {
     expect(body.code).toBe("account-not-found");
   });
 
-  it("枚数が上限を越える行は、形が違うとして断る", async () => {
+  it("合わせて 60 枚を越えるデッキと、同じカードを 2 行に分けたデッキは、形が違うとして断る", async () => {
     const secret = await newPlayer();
-    const { status } = await postJson("/api/decks/save", {
-      secret,
-      name: "おおすぎ",
-      cards: [{ defId: "x", count: 61 }],
-    });
-    expect(status).toBe(400);
+    const save = (cards: { defId: string; count: number }[]) =>
+      postJson("/api/decks/save", { secret, name: "だめ", cards });
+    const [first, second] = sampleEntries();
+    expect(
+      (
+        await save([
+          { defId: first!.defId, count: 31 },
+          { defId: second!.defId, count: 30 },
+        ])
+      ).status,
+    ).toBe(400);
+    expect((await save([first!, first!])).status).toBe(400);
+    expect((await postJson("/api/decks", { secret })).body.decks).toEqual([]);
   });
 });
 
@@ -134,10 +142,17 @@ describe("保存したデッキ", () => {
 describe("表の形", () => {
   it("前の版の表のところへ起きると、残りの段だけを当てて、ある行を残す", async () => {
     const secret = await newPlayer();
+    const before = await worker.db
+      .prepare("SELECT COUNT(*) AS n FROM players")
+      .first<{ n: number }>();
     await worker.db.exec("DROP TABLE decks");
     await worker.db.prepare("DELETE FROM schema_version WHERE version > 1").run();
 
     await ensureSchema(worker.db);
+    const after = await worker.db
+      .prepare("SELECT COUNT(*) AS n FROM players")
+      .first<{ n: number }>();
+    expect(after?.n).toBe(before?.n);
     const saved = await postJson("/api/decks/save", { secret, name: "あとから", cards: [] });
     expect(saved.status).toBe(200);
   });

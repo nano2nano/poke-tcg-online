@@ -10,6 +10,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import type { D1Database, D1PreparedStatement } from "@cloudflare/workers-types/index.ts";
+import { cleanText } from "./text.js";
 
 /** アカウントが見つからないことを、画面の文言に頼らずに伝える合図。 */
 export const ACCOUNT_NOT_FOUND = "account-not-found";
@@ -334,42 +335,6 @@ function hash(secret: string): string {
   return createHash("sha256").update(`account:${secret}`).digest("hex");
 }
 
-/**
- * 見えない字。制御文字（Cc）と書式文字（Cf）の両方を落とす。
- *
- * **0x20 より下だけでは足りない。** DEL と 0x80〜0x9f は Cc、向きを変える U+202E や
- * 幅の無い U+FEFF は Cf にあり、どちらも数値では下に来ない。U+202E が名前に入ると、
- * 一覧に並んだ相手の名前がうしろから読める形で出る。
- *
- * 相方を失った片割れ（Cs）も同じ扱いにする。それだけでは字にならず、書き出すときに
- * 別の値へ化けるので、ストアにも対局ログにも入れない。
- */
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}]/u;
-
-/**
- * 見えないが、字を繋ぐために要るもの。
- *
- * ZWJ は絵文字を 1 文字に繋ぎ、ZWNJ はデーヴァナーガリーやペルシア文字で
- * 繋がりを断つ。**落とすと、その人の名前が別の字になる。** 向きは変えないので残す。
- */
-const JOINERS = new Set(["\u200c", "\u200d"]);
-
 function cleanName(displayName: string): string {
   return cleanText(displayName, MAX_DISPLAY_NAME) || "ななし";
-}
-
-/** 人が付けた名前から見えない字を落とし、`max` 文字で切る。何も残らなければ空文字。 */
-export function cleanText(text: string, max: number): string {
-  // 見えない字を落とすのは、名前が画面に出るためである。表示名は対局ログにも残る。
-  // **切るのは文字の単位である。** UTF-16 の長さで切ると、絵文字が半分になったものが
-  // そのままストアにも対局ログにも入る。
-  return (
-    [...text.trim()]
-      .filter((char) => JOINERS.has(char) || !INVISIBLE.test(char))
-      .slice(0, max)
-      .join("")
-      // 繋ぐ相手を失った端の繋ぎ字は、それだけでは字にならない。
-      .replace(/^[\u200c\u200d]+|[\u200c\u200d]+$/gu, "")
-      .trim()
-  );
 }

@@ -25,6 +25,16 @@ export const SAME_NAME_LIMIT = 4;
 /** ACE SPEC のカードはデッキに 1 枚しか入れられない。 */
 const ACE_SPEC_LIMIT = 1;
 
+/** デッキの 1 行。同じカードを何枚入れるか。 */
+export interface DeckEntry {
+  defId: CardDefId;
+  count: number;
+}
+
+export function deckFromEntries(entries: readonly DeckEntry[]): DeckList {
+  return { cards: entries.flatMap(({ defId, count }) => Array<CardDefId>(count).fill(defId)) };
+}
+
 export type DeckViolation =
   | { kind: "size"; actual: number }
   | { kind: "unknown-card"; defIds: CardDefId[] }

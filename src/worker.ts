@@ -76,7 +76,7 @@ export class Server {
     this.app = createApp({
       accounts,
       archive,
-      decks: new DeckStore(env.DB),
+      deckStore: new DeckStore(env.DB),
       bots: new BotStore(env.ARCHIVE),
       ...optionsFromVars(env),
     });
