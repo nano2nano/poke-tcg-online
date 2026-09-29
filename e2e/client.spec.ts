@@ -1840,6 +1840,12 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
   await a.click("#card-zoom-close");
   await expect(a.locator("#card-zoom")).toBeHidden();
 
+  // キーボードでも開ける。
+  await hand.first().press("Enter");
+  await expect(a.locator("#card-zoom")).toBeVisible();
+  await a.keyboard.press("Escape");
+  await expect(a.locator("#card-zoom")).toBeHidden();
+
   await close();
 });
 
@@ -1904,7 +1910,8 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
   await expect(a.locator("#self .card img").first()).toBeVisible();
 
   for (let move = 0; move < 3; move += 1) {
-    // 場（`.mat`）が別の要素に替わるまで待つ。描き直す前に比べると、前の要素どうしを比べて通ってしまう。
+    // 描き直すまで待つ。描き直す前に比べると、前の要素どうしを比べて通ってしまう。いまの画面は場（`.mat`）ごと
+    // 作り直し、`/next/` は要素を残したまま描いた局面の版を卓に書く。
     const previous = await a.evaluateHandle(
       (selector) => ({
         mat: document.querySelector("#self .mat"),
@@ -1914,10 +1921,11 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
       BOARD_IMAGES,
     );
     await advance(a, b, seenA);
+    const drawn = String(seenA()?.stateVersion);
     await expect
       .poll(() =>
         a.evaluate(
-          ([selector, old]) => {
+          ([selector, old, version]) => {
             const after = [...document.querySelectorAll(selector)];
             const copies = (urls: (string | null)[], url: string | null): number =>
               urls.filter((other) => other === url).length;
@@ -1926,14 +1934,16 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
               .filter((image) => old.images.has(image))
               .map((image) => image.getAttribute("src"));
             return {
-              redrawn: document.querySelector("#self .mat") !== old.mat,
+              redrawn:
+                document.querySelector("#self .mat") !== old.mat ||
+                document.querySelector("#table")?.getAttribute("data-state-version") === version,
               // 前にも後にも出ている枚数ぶん、前の要素が残っていない URL。
               recreated: [...new Set(old.urls)].filter(
                 (url) => copies(kept, url) < Math.min(copies(old.urls, url), copies(urls, url)),
               ),
             };
           },
-          [BOARD_IMAGES, previous] as const,
+          [BOARD_IMAGES, previous, drawn] as const,
         ),
       )
       .toEqual({ redrawn: true, recreated: [] });
@@ -2156,32 +2166,6 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   expect(shown.x + shown.width).toBeLessThanOrEqual(viewport.width);
   expect(shown.y + shown.height).toBeLessThanOrEqual(viewport.height);
 
-  // 盤面の描き直しと同じく、載せているカードを差し替える。閉じずに、マウスの下に来た方へ移る。
-  const hides = await preview.evaluateHandle((node) => {
-    const seen = { count: 0 };
-    new MutationObserver(() => {
-      if (node instanceof HTMLElement && node.hidden) seen.count += 1;
-    }).observe(node, { attributes: true, attributeFilter: ["hidden"] });
-    return seen;
-  });
-  const other = "差し替えたカード";
-  await card.evaluate((node, replacedDefId) => {
-    const replacement = node.cloneNode() as typeof node;
-    replacement.dataset.defId = replacedDefId;
-    node.replaceWith(replacement);
-  }, other);
-  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", other);
-  expect(await hides.evaluate((seen) => seen.count)).toBe(0);
-
-  // 下にカードが無くなったら閉じる。
-  await hand.evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
-  await expect(preview).toBeHidden();
-  await expect(hand).toHaveCount(0);
-  while (!(await playOne(a)) && !(await playOne(b)));
-  await expect(hand.first()).toBeVisible();
-
-  await hand.first().hover();
-  await expect(preview).toBeVisible();
   await a.mouse.move(0, 0);
   await expect(preview).toBeHidden();
 
@@ -2193,6 +2177,44 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   await expect(preview).toBeHidden();
 
   await close();
+});
+
+test("載せていたカードが消えたら、閉じずにマウスの下に来たカードへ移る", async ({ page }) => {
+  // 行が消えてページが縮んでも送られない高さにして、下の行がそのまま上がってくるようにする。
+  await page.setViewportSize({ width: 1280, height: 1600 });
+  await withCardImages(page, (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
+  );
+  await page.goto("./");
+  await page.fill("#card-search", "エネルギー");
+  const add = page.locator("#card-results .card-row button.add");
+  await add.nth(0).click();
+  await add.nth(1).click();
+  const rows = page.locator("#deck-cards .card-row");
+  await expect(rows).toHaveCount(2);
+  const next = await rows.nth(1).getAttribute("data-def-id");
+
+  const preview = page.locator("#card-preview");
+  await rows.nth(0).locator(".card").hover();
+  await expect(preview).toBeVisible();
+  const hides = await preview.evaluateHandle((node) => {
+    const seen = { count: 0 };
+    new MutationObserver(() => {
+      if (node instanceof HTMLElement && node.hidden) seen.count += 1;
+    }).observe(node, { attributes: true, attributeFilter: ["hidden"] });
+    return seen;
+  });
+
+  // マウスを動かさずに消す。下の行が上がってきて、マウスの下に来る。
+  await rows.nth(0).locator("button.remove").press("Enter");
+  await expect(rows).toHaveCount(1);
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", next as string);
+  expect(await hides.evaluate((seen) => seen.count)).toBe(0);
+
+  // 下にカードが無くなったら閉じる。
+  await rows.nth(0).locator("button.remove").press("Enter");
+  await expect(rows).toHaveCount(0);
+  await expect(preview).toBeHidden();
 });
 
 test("一覧を送ると、プレビューもカードに付いていく", async ({ page }) => {

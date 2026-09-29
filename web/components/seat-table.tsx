@@ -85,6 +85,7 @@ export function SeatTable({
         className="table"
         ref={board}
         data-ended={ended === null ? undefined : ""}
+        data-state-version={state.stateVersion}
       >
         <div className="table-status">
           <div id="clock" className="clock">
@@ -422,13 +423,21 @@ function RevealedDeck({
       <div className="revealed-cards">
         {defIds.map((defId) => (
           <div key={defId} className="revealed-card" data-count={counts.get(defId)}>
-            <CardFace defId={defId} pickable={pickable.has(defId)} />
+            <CardFace
+              defId={defId}
+              pickable={pickable.has(defId)}
+              zoom={{ title: "山札", defIds: [defId] }}
+            />
             <span>×{counts.get(defId)}</span>
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+function shownInMulligan(defId: string) {
+  return { title: "見せた手札", defIds: [defId] };
 }
 
 /**
@@ -466,7 +475,7 @@ function Mulligans({ state: { mulligans, view } }: { state: SeatState }) {
               <div className="zone hand">
                 {cards.map((defId, at) => (
                   // oxlint-disable-next-line react/no-array-index-key -- 同じカードが何枚も並ぶので、位置のほかに見分けがない。
-                  <CardFace key={at} defId={defId} />
+                  <CardFace key={at} defId={defId} zoom={shownInMulligan(defId)} />
                 ))}
               </div>
             </div>
