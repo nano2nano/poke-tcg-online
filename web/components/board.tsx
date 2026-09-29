@@ -7,6 +7,7 @@
 
 import {
   memo,
+  useEffect,
   useEffectEvent,
   useLayoutEffect,
   useReducer,
@@ -19,6 +20,7 @@ import type { CardInstance, SpectatorView } from "../../src/engine.js";
 import { imageUrl, releaseImage, takeImage } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
 import { cardSubtitle, conditionName, describeCard, nameOf, type Side } from "../lib/describe.js";
+import { MOVE_SECONDS } from "../lib/motion.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 
 type Pokemon = NonNullable<Side["active"]>;
@@ -63,6 +65,8 @@ export function CardFace({
   // 読めなかった画像は `imageUrl` が覚えているので、描き直せば名前の面になる。
   const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
   const face = useRef<HTMLDivElement>(null);
+  const settling = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(settling.current), []);
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -98,17 +102,27 @@ export function CardFace({
       {pickable === false && <span className="visually-hidden">（選べません）</span>}
     </>
   );
+  const settle = () => {
+    clearTimeout(settling.current);
+    face.current?.removeAttribute("data-moving");
+  };
   // 一覧や拡大のカードは動かさない。デッキを組む画面では数百枚になる。
   if (instanceId === undefined) return <div {...props}>{children}</div>;
   return (
     <motion.div
       {...props}
       layoutId={instanceId}
-      initial={false}
-      animate={{ rotate: posture === undefined ? 0 : (POSTURE_ANGLES[posture] ?? 0) }}
+      // 倒すのは動かさずに描く。プレビューは描いた直後のカードの大きさで置き場所を決める。
+      style={{ rotate: posture === undefined ? 0 : (POSTURE_ANGLES[posture] ?? 0) }}
       // 動いているあいだはほかのカードの上に描く。プレビューは収まった合図で置き直す。
-      onLayoutAnimationStart={() => face.current?.setAttribute("data-moving", "")}
-      onLayoutAnimationComplete={() => face.current?.removeAttribute("data-moving")}
+      onLayoutAnimationStart={() => {
+        face.current?.setAttribute("data-moving", "");
+        // Motion は動きを途中で打ち切ると（画面の幅が変わったときなど）終わりを知らせないので、
+        // 長さが過ぎたら外す。
+        clearTimeout(settling.current);
+        settling.current = setTimeout(settle, MOVE_SECONDS * 1_000 + 100);
+      }}
+      onLayoutAnimationComplete={settle}
     >
       {children}
     </motion.div>

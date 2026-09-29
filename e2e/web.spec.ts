@@ -681,6 +681,19 @@ test("手札のカードを場に出すと、手札の位置から動いて場�
   await expect(card).not.toHaveAttribute("data-moving");
 });
 
+test("動いている途中で画面の幅が変わっても、動き終えた印を付ける", async ({ page }) => {
+  const [before, after] = placingActive();
+  const { card } = await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  await page.clock.runFor(20);
+  await expect(card).toHaveAttribute("data-moving");
+  // 幅が変わると、Motion は動きを途中で打ち切る。
+  const size = page.viewportSize()!;
+  await page.setViewportSize({ width: size.width - 40, height: size.height });
+  await page.clock.runFor(1_000);
+  await expect(card).not.toHaveAttribute("data-moving");
+});
+
 test("OS で動きを減らす設定にしていたら、カードを動かさずに場に置く", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const [before, after] = placingActive();

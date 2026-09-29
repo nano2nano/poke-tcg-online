@@ -4,6 +4,7 @@ import { MotionConfig } from "motion/react";
 import { CardPreview } from "../components/card-preview.js";
 import { CardZoom } from "../components/card-zoom.js";
 import { CardDataProvider } from "../lib/cards.js";
+import { MOVE_SECONDS } from "../lib/motion.js";
 import styles from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -27,7 +28,7 @@ export const Route = createRootRoute({
 function Root() {
   return (
     // OS で動きを減らす設定にしている人には、カードを動かさずに置き換える。
-    <MotionConfig reducedMotion="user" transition={{ duration: 0.3, ease: "easeOut" }}>
+    <MotionConfig reducedMotion="user" transition={{ duration: MOVE_SECONDS, ease: "easeOut" }}>
       <CardDataProvider>
         <CardZoom>
           <Outlet />

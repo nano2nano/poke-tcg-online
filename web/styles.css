@@ -438,8 +438,9 @@ button.secondary {
 .card[data-type="dragon"] {
   --type: #b7950b;
 }
-/* 動いているカードは、ほかのカードやダメージの印より上に描く。 */
-.card[data-moving] {
+/* 動いているカードは、ほかのカードやダメージの印より上に描く。ついているカードは枠ごと上げる。 */
+.card[data-moving],
+.attached:has(> .card[data-moving]) {
   z-index: 3;
 }
 .card.back {
