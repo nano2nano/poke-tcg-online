@@ -12,7 +12,7 @@ import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl, type Reconnector } from "./connection.js";
 import {
   describeEvents,
-  eventLines,
+  noticesToShow,
   rejectText,
   seatEndText,
   seatEndTone,
@@ -135,7 +135,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         case "delta": {
           const happened = message.t === "delta" ? message.events : [];
           const notices = describeEvents(happened, [current.view, before.view], who, cardTable());
-          log(eventLines(happened, notices));
+          log(notices.map((notice) => notice.text));
           // 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。
           if (message.t === "sync" && !firstPlayerShown && message.view.phase === "setup") {
             firstPlayerShown = true;
@@ -147,7 +147,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
               coins: { results: [message.firstPlayer === seated.seat], faces: ["先攻", "後攻"] },
             });
           }
-          for (const notice of notices) if (notice !== null && !notice.repeated) show(notice);
+          for (const notice of noticesToShow(notices, seated.seat)) show(notice);
           return;
         }
         case "ended": {

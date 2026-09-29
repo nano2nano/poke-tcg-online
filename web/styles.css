@@ -990,6 +990,27 @@ button.secondary {
   }
 }
 
+/* 真ん中のバトル場と、上の端の結果を隠さないよう、盤面の左の端に置く。触っても下の盤面へ通す。 */
+.showcase {
+  position: fixed;
+  top: 50%;
+  left: 16px;
+  z-index: 9;
+  transform: translateY(-50%);
+  filter: drop-shadow(0 8px 24px rgb(0 0 0 / 0.35));
+  pointer-events: none;
+  animation: showcase-in 0.25s ease-out;
+}
+.showcase .card {
+  --w: clamp(96px, 14vw, 240px);
+}
+@keyframes showcase-in {
+  from {
+    opacity: 0;
+    transform: translate(-24px, -50%) scale(0.85);
+  }
+}
+
 /* 狭い画面には盤面の横に空きが無く、どこに出しても盤面に重なる。スマートフォンのトーストにならって下に出す。 */
 @media (max-width: 640px) {
   .results {
@@ -1001,11 +1022,12 @@ button.secondary {
 @media (prefers-reduced-motion: reduce) {
   .result,
   .coin-inner,
-  .hit {
+  .hit,
+  .showcase {
     animation: none;
   }
 }
-:root[data-no-motion] :is(.result, .coin-inner, .hit) {
+:root[data-no-motion] :is(.result, .coin-inner, .hit, .showcase) {
   animation: none;
 }
 

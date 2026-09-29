@@ -13,7 +13,7 @@ import type { ServerMessage } from "../../src/protocol.js";
 import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl } from "./connection.js";
 import { describeMove, moveTargets } from "./describe-move.js";
-import { describeEvents, eventLines, seatDisplayName, type Notice } from "./describe.js";
+import { describeEvents, noticesToShow, seatDisplayName, type Notice } from "./describe.js";
 import { initialWatchState, watchReducer, type WatchState } from "./match-state.js";
 import {
   initialPlayback,
@@ -123,13 +123,8 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
               ...board(message.view, seatViews),
               clock: message.clock,
               moved,
-              lines: [
-                ...(moved === null ? [] : [`${who(moved.seat)}: ${moved.text}`]),
-                ...eventLines(message.events, notices),
-              ],
-              notices: notices.filter(
-                (notice): notice is Notice => notice !== null && !notice.repeated,
-              ),
+              lines: notices.map((notice) => notice.text),
+              notices: noticesToShow(notices),
             });
             return;
           }

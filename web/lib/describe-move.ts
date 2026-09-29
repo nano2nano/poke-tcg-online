@@ -10,8 +10,10 @@ import type { ReplayFrame } from "../../src/history.js";
 import type { AnswerDestination, DeckPlacementView, SetupView } from "../../src/match.js";
 import type { CardTable } from "./cards.js";
 import {
+  abilityName,
   conditionName,
   nameOf,
+  printedAttack,
   readerView,
   sidesOf,
   type ReaderView,
@@ -211,16 +213,6 @@ export function describeMove(
   }
 }
 
-function abilityName(cards: CardTable, defId: string | undefined, index: number): string {
-  const name = defId === undefined ? undefined : cards[defId]?.abilities?.[index];
-  return name === undefined ? "特性" : `特性「${name}」`;
-}
-
-/**
- * `attackIndex` は印刷されたワザの番号ではなく、どうぐなどで使えるようになったワザを
- * 後ろに足した表の番号である（`engine/docs/spec/engine-core.md` 3.3 節）。印刷されたワザが前に並ぶので、
- * その数より小さければ名前が引ける。
- */
 function attackName(
   move: Extract<Move, { type: "Attack" }>,
   { view, cards }: MoveContext,
@@ -228,8 +220,7 @@ function attackName(
   const side = move.player === view?.viewer ? view.self : view?.opponent;
   const active = side?.active;
   if (active == null || "concealed" in active) return undefined;
-  const top = active.stack.at(-1);
-  return top === undefined ? undefined : cards[top.defId]?.attacks?.[move.attackIndex];
+  return printedAttack(cards, active.stack.at(-1)?.defId, move.attackIndex);
 }
 
 /**
