@@ -16,8 +16,18 @@ const failedImages = new Set<string>();
 const spares = new Map<string, HTMLImageElement[]>();
 let sweeping = false;
 
-/** 読めなかったときに知らせる先。要素を使っている部品だけが受け取る。 */
-const owners = new WeakMap<HTMLImageElement, () => void>();
+/** 貸している要素と、読めなかったときに知らせる先。画像ごとに持つ。 */
+const lent = new Map<string, Map<HTMLImageElement, () => void>>();
+
+/**
+ * 読んでいる最中の画像と、読み終わるのを待っている要素。読んでいる最中に同じ画像のカードが出ても、
+ * `src` を付けずに待たせる。Chromium でも版によっては、読んでいる最中の同じ URL を分け合わずに
+ * もう一度頼む。読めたら待っている要素に `src` を付け、読めなければ付けずに捨てる。
+ */
+const pending = new Map<string, Set<HTMLImageElement>>();
+const loaded = new Set<string>();
+/** 要素ごとの画像。待っている要素は `src` 属性をまだ持たない。 */
+const sources = new WeakMap<HTMLImageElement, string>();
 
 export function imageUrl(enabled: boolean, cardID: string | undefined): string | null {
   if (!enabled || cardID === undefined) return null;
@@ -28,7 +38,9 @@ export function imageUrl(enabled: boolean, cardID: string | undefined): string |
 /** `src` の画像の要素を借りる。読めなかったら `onFailed` を呼ぶ。 */
 export function takeImage(src: string, onFailed: () => void): HTMLImageElement {
   const image = spares.get(src)?.pop() ?? createImage(src);
-  owners.set(image, onFailed);
+  const same = lent.get(src);
+  if (same === undefined) lent.set(src, new Map([[image, onFailed]]));
+  else same.set(image, onFailed);
   return image;
 }
 
@@ -38,16 +50,23 @@ export function takeImage(src: string, onFailed: () => void): HTMLImageElement {
  * 拾われなかったものは、コミットが済んだら捨てる。
  */
 export function releaseImage(image: HTMLImageElement): void {
-  owners.delete(image);
   image.remove();
-  const src = image.getAttribute("src");
-  if (src === null || failedImages.has(src)) return;
-  const same = spares.get(src);
-  if (same === undefined) spares.set(src, [image]);
-  else same.push(image);
+  const src = sources.get(image);
+  if (src === undefined) return;
+  const same = lent.get(src);
+  same?.delete(image);
+  if (same?.size === 0) lent.delete(src);
+  if (failedImages.has(src)) return;
+  const pooled = spares.get(src);
+  if (pooled === undefined) spares.set(src, [image]);
+  else pooled.push(image);
   if (sweeping) return;
   sweeping = true;
   queueMicrotask(() => {
+    // 捨てる要素は、読み終わっても `src` を付けない。付けると、どこにも出さない画像を頼む。
+    for (const [dropped, images] of spares) {
+      for (const each of images) pending.get(dropped)?.delete(each);
+    }
     spares.clear();
     sweeping = false;
   });
@@ -55,14 +74,34 @@ export function releaseImage(image: HTMLImageElement): void {
 
 function createImage(src: string): HTMLImageElement {
   const image = document.createElement("img");
+  sources.set(image, src);
   // 名前は下の面が持っている。読み上げで二重にしない。
   image.alt = "";
-  image.loading = "lazy";
   image.decoding = "async";
   image.addEventListener("error", () => {
+    // 同じ画像の要素はそれぞれ失敗を知らせてくる。貸している先へ知らせるのは最初の 1 回だけにする。
+    if (failedImages.has(src)) return;
     failedImages.add(src);
-    owners.get(image)?.();
+    pending.delete(src);
+    for (const onFailed of lent.get(src)?.values() ?? []) onFailed();
   });
+  const waiting = pending.get(src);
+  if (waiting !== undefined) {
+    image.loading = "lazy";
+    waiting.add(image);
+    return image;
+  }
+  if (loaded.has(src)) {
+    image.loading = "lazy";
+  } else {
+    // 同じ画像のほかの要素はこの要素が読み終わるのを待つので、これは見えなくてもすぐ読む。
+    pending.set(src, new Set());
+    image.addEventListener("load", () => {
+      loaded.add(src);
+      for (const each of pending.get(src) ?? []) each.src = src;
+      pending.delete(src);
+    });
+  }
   image.src = src;
   return image;
 }

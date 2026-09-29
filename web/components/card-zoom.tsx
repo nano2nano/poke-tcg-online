@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { ZoomContext, type ZoomTarget } from "../lib/zoom.js";
 import { CardCaption, CardFace } from "./board.js";
 
@@ -10,13 +11,17 @@ export function CardZoom({ children }: { children: ReactNode }) {
   const pressedBackdrop = useRef(false);
   const releasedBackdrop = useRef(false);
 
-  useLayoutEffect(() => {
+  // 開くのは押したその場で行う。閉じてから close イベントが届くまでに同じカードを押すと、`target` に
+  // 同じものが渡って描き直しが起きないので、描き直しを待っていると開かない。開くと「閉じる」へ
+  // 移るので、中身を描いてから開く。
+  const open = useCallback((next: ZoomTarget) => {
+    flushSync(() => setTarget(next));
     const shown = dialog.current;
-    if (target !== null && shown !== null && !shown.open) shown.showModal();
-  }, [target]);
+    if (shown !== null && !shown.open) shown.showModal();
+  }, []);
 
   return (
-    <ZoomContext value={setTarget}>
+    <ZoomContext value={open}>
       {children}
       {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- 背景を押して閉じるのはマウスの近道で、キーボードでは Esc で閉じる。 */}
       <dialog

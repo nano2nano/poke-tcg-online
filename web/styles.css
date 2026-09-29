@@ -438,6 +438,16 @@ button.secondary {
 .card[data-type="dragon"] {
   --type: #b7950b;
 }
+/*
+ * 別の場所から来たカードは、ほかのカードやダメージの印より上に描く。ついているカードとスタジアムは
+ * 枠ごと上げる。同じ場所の中で詰めて動くだけのカードは上げない。来たカードより上に描いてしまう。
+ */
+.card[data-moving="arriving"],
+.pokemon[data-moving="arriving"],
+.attached:has(> .card[data-moving="arriving"]),
+.board-center:has(.card[data-moving="arriving"]) {
+  z-index: 3;
+}
 .card.back {
   background: repeating-linear-gradient(45deg, #2c4a8a 0 6px, #24407a 6px 12px);
   border-color: #1b2f5c;
@@ -445,17 +455,6 @@ button.secondary {
 .card.empty {
   background: transparent;
   border: 1px dashed var(--line);
-}
-
-/* 卓では、ねむりは左へ、マヒは右へ倒し、こんらんは逆さにして示す。 */
-.card[data-posture="asleep"] {
-  transform: rotate(-90deg);
-}
-.card[data-posture="paralyzed"] {
-  transform: rotate(90deg);
-}
-.card[data-posture="confused"] {
-  transform: rotate(180deg);
 }
 
 .pokemon {

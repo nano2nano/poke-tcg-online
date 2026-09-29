@@ -3,10 +3,10 @@
 import { createHash } from "node:crypto";
 import { expect, test, type Page, type WebSocket } from "@playwright/test";
 import type { Bot } from "../src/bots.js";
-import { loadGeneratedCards, type PlayerView } from "../src/engine.js";
+import { legalMoves, loadGeneratedCards, type Player, type PlayerView } from "../src/engine.js";
 import { MatchHub } from "../src/hub.js";
 import type { Seated } from "../src/lobby.js";
-import { concede, createMatch, viewFor } from "../src/match.js";
+import { concede, createMatch, submitMove, toMove, viewFor } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
 import { ensureCards, legalDecks, newMatch } from "../tests/helpers.js";
 
@@ -531,6 +531,41 @@ test("画像を読めなかったカードは、候補の行に小さな面を�
   await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
 });
 
+test("読んでいる最中の画像は、あとから出た同じカードのために頼み直さない", async ({ page }) => {
+  const asked: string[] = [];
+  const [held, release] = gate();
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  await page.route("**/api/card-image/*", async (route) => {
+    asked.push(new URL(route.request().url()).pathname);
+    await held;
+    await route.fulfill({ status: 502, body: "" });
+  });
+  await page.goto("/");
+  await page.fill("#card-search", "エネルギー");
+  const last = page.locator("#card-results .card-row").last();
+  await expect(last.locator("img")).toHaveCount(1);
+  const defId = (await last.getAttribute("data-def-id")) as string;
+  const row = page.locator(`#card-results .card-row[data-def-id="${defId}"]`);
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { cardID?: string }
+  >;
+  const path = `/api/card-image/${cards[defId]?.cardID}`;
+  await expect.poll(() => asked).toContain(path);
+
+  // 読んでいる最中に、同じカードを隠したデッキの行に出す。`loading="lazy"` の画像は隠れているあいだ
+  // 頼まないので、失敗が分かったあとで見えたときに頼まないかを確かめる。
+  const hiding = await page.addStyleTag({ content: "#deck-cards { display: none; }" });
+  await row.locator("button.add").click();
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+  release();
+  await expect(row.locator(".card")).toHaveCount(0);
+  await hiding.evaluate((style) => (style as HTMLStyleElement).remove());
+  await expect(page.locator("#deck-cards .card-row")).toBeVisible();
+  await expect(page.locator("#deck-cards .card-row .card")).toHaveCount(0);
+  expect(asked.filter((each) => each === path)).toHaveLength(1);
+});
+
 /** サーバがプレイヤーを忘れていたときの答え。 */
 const accountMissing = {
   status: 404,
@@ -549,14 +584,14 @@ function opening(): PlayerView[] {
   return openingViews;
 }
 
-/** 一覧とリプレイの答えを差し替える。盤面は開始局面のまま、手数だけを返す。 */
+/** 一覧とリプレイの答えを差し替える。盤面は `viewsFor` がなければ開始局面のまま、手数だけを返す。 */
 async function mockHistory(
   page: Page,
   frameFor: (matchId: string, ply: number) => Promise<"fail" | "ok">,
   /** 再現できない地点。サーバと同じく、その先を頼まれたときだけ知らせる。 */
   diverged: number | null = null,
+  viewsFor: (ply: number) => PlayerView[] = opening,
 ): Promise<void> {
-  const views = opening();
   const summary = (matchId: string, opponentName: string) => ({
     matchId,
     startedAt: "2026-09-28T00:00:00Z",
@@ -582,7 +617,7 @@ async function mockHistory(
           matchId,
           ply: beyond ? diverged : ply,
           moveCount: 10,
-          views,
+          views: viewsFor(beyond ? diverged : ply),
           playedMove: null,
           beforeViews: null,
           events: [[], []],
@@ -623,6 +658,206 @@ async function replayHand(page: Page) {
   return hand;
 }
 
+/** 自分のたねポケモンを手札からバトル場へ出す前と後の、両座席の局面。 */
+function placingActive(): [PlayerView[], PlayerView[]] {
+  ensureCards();
+  const match = newMatch("motion-place");
+  const views = () => [viewFor(match, 0), viewFor(match, 1)];
+  while (match.state.phase === "setup") {
+    const before = views();
+    const mover = toMove(match) as Player;
+    expect(submitMove(match, mover, match.version, legalMoves(match.state)[0]!, 0).ok).toBe(true);
+    if (viewFor(match, 0).self.active !== null) return [before, views()];
+  }
+  throw new Error("バトル場にポケモンを出さないまま準備が終わった");
+}
+
+/**
+ * リプレイを開き、`frames` の最初の局面を描いたところで時計を止める。1 手進めるごとに次の局面を描く。
+ * 返すのは、自分のバトル場に出たカードと、それがその枠に収まっているかを調べる関数。
+ */
+async function openPlacing(page: Page, ...frames: PlayerView[][]) {
+  await page.clock.install();
+  await mockHistory(
+    page,
+    async () => "ok",
+    null,
+    (ply) => frames[Math.min(ply, frames.length - 1)]!,
+  );
+  await page.goto("/");
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  const zone = page.locator('#replay-self [data-zone="active"]');
+  await expect(page.locator('#replay-self [data-zone="hand"] .card').first()).toBeVisible();
+  const now = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(now + 1_000);
+
+  const card = zone.locator(".card[data-def-id]");
+  const inZone = async (): Promise<boolean> => {
+    const [box, area] = [await card.boundingBox(), await zone.boundingBox()];
+    if (box === null || area === null) return false;
+    const middle = box.y + box.height / 2;
+    return middle >= area.y && middle <= area.y + area.height;
+  };
+  return { card, inZone };
+}
+
+test("手札のカードを場に出すと、手札の位置から動いて場に収まる", async ({ page }) => {
+  const [before, after] = placingActive();
+  const { card, inZone } = await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
+  // 動き始めは、手札にあった位置に描く。
+  await page.clock.runFor(20);
+  expect(await inZone()).toBe(false);
+  await expect(card).toHaveAttribute("data-moving");
+  // 出ていくカードは、詰めて動く手札より上に描く。
+  const zIndex = (node: Element) => getComputedStyle(node).zIndex;
+  expect(await card.evaluate(zIndex)).toBe("3");
+  const shifting = page.locator('#replay-self [data-zone="hand"] .card[data-moving]');
+  await expect(shifting.first()).toBeAttached();
+  expect(await shifting.first().evaluate(zIndex)).toBe("auto");
+  await page.clock.runFor(1_000);
+  expect(await inZone()).toBe(true);
+  await expect(card).not.toHaveAttribute("data-moving");
+});
+
+test("動いている途中で画面の幅が変わっても、動き終えた印を付ける", async ({ page }) => {
+  const [before, after] = placingActive();
+  const { card } = await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  await page.clock.runFor(20);
+  await expect(card).toHaveAttribute("data-moving");
+  // 幅が変わると、Motion は動きを途中で打ち切る。
+  const size = page.viewportSize()!;
+  await page.setViewportSize({ width: size.width - 40, height: size.height });
+  await page.clock.runFor(1_000);
+  await expect(card).not.toHaveAttribute("data-moving");
+});
+
+test("ベンチへ下がるポケモンは、ダメージの印も一緒に動く", async ({ page }) => {
+  const [, placed] = placingActive();
+  const damaged = structuredClone(placed);
+  const active = damaged[0]!.self.active;
+  if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
+  active.damage = 60;
+  const benched = structuredClone(damaged);
+  benched[0]!.self.bench = [benched[0]!.self.active];
+  benched[0]!.self.active = null;
+  await openPlacing(page, damaged, benched);
+  await page.click("#replay-next");
+  const pokemon = page.locator('#replay-self [data-zone="bench"] .pokemon');
+  await expect(pokemon).toBeVisible();
+  await page.clock.runFor(20);
+  const [card, badge] = [
+    await pokemon.locator(".card").boundingBox(),
+    await pokemon.locator(".damage").boundingBox(),
+  ];
+  if (card === null || badge === null) throw new Error("カードか印が描けていない");
+  const middle = { x: badge.x + badge.width / 2, y: badge.y + badge.height / 2 };
+  expect(middle.x).toBeGreaterThan(card.x);
+  expect(middle.x).toBeLessThan(card.x + card.width);
+  expect(middle.y).toBeGreaterThan(card.y);
+  expect(middle.y).toBeLessThan(card.y + card.height);
+});
+
+/** バトル場のポケモンに、ダメージを載せて別の ID を付けた写し。ベンチに並べる 2 匹目にする。 */
+function anotherPokemon(views: PlayerView[], damage: number) {
+  const active = views[0]!.self.active;
+  if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
+  const copy = structuredClone(active);
+  copy.inPlayId += "-2";
+  for (const card of copy.stack) card.instanceId += "-2";
+  copy.damage = damage;
+  return { active, copy };
+}
+
+test("バトル場とベンチが入れ替わると、ベンチから出たポケモンも印ごと動く", async ({ page }) => {
+  const [, placed] = placingActive();
+  const before = structuredClone(placed);
+  const { active, copy } = anotherPokemon(before, 30);
+  before[0]!.self.bench = [copy];
+  const after = structuredClone(before);
+  after[0]!.self.active = structuredClone(copy);
+  after[0]!.self.bench = [structuredClone(active)];
+  await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  const pokemon = page.locator('#replay-self [data-zone="active"] .pokemon');
+  await expect(pokemon).toHaveAttribute("data-damage", "30");
+  await page.clock.runFor(20);
+  const [card, badge] = [
+    await pokemon.locator(".card").boundingBox(),
+    await pokemon.locator(".damage").boundingBox(),
+  ];
+  if (card === null || badge === null) throw new Error("カードか印が描けていない");
+  await page.clock.runFor(1_000);
+  const middle = { x: badge.x + badge.width / 2, y: badge.y + badge.height / 2 };
+  expect(middle.x).toBeGreaterThan(card.x);
+  expect(middle.x).toBeLessThan(card.x + card.width);
+  expect(middle.y).toBeGreaterThan(card.y);
+  expect(middle.y).toBeLessThan(card.y + card.height);
+  expect(await pokemon.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
+});
+
+test("何手か前に見えていたカードが出てきても、前の場所からは動かさない", async ({ page }) => {
+  const [before, placed] = placingActive();
+  // Motion は、消えたカードの最後の位置を、次に同じ layoutId のカードが出てきたときまで持ち越さない。
+  // 持ち越すようになったら、前の局面で描いていなかったカードには別の layoutId を付ける。
+  // 出したカードをいったん盤面から消し（山札へもどしたことにする）、次の手でまた場に出す。
+  const hidden = structuredClone(placed);
+  hidden[0]!.self.active = null;
+  const { inZone, card } = await openPlacing(page, before, hidden, placed);
+  await page.click("#replay-next");
+  await expect(card).toHaveCount(0);
+  await page.clock.runFor(1_000);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
+  await page.clock.runFor(20);
+  expect(await inZone()).toBe(true);
+});
+
+test("場から手札へもどるカードも、ほかのカードの上に描く", async ({ page }) => {
+  const [, placed] = placingActive();
+  const back = structuredClone(placed);
+  const active = back[0]!.self.active;
+  if (active === null || "concealed" in active || !("hand" in back[0]!.self)) {
+    throw new Error("バトル場にポケモンがいないか、手札が見えない");
+  }
+  back[0]!.self.hand.push(...active.stack.map((card) => ({ ...card, identified: false })));
+  back[0]!.self.active = null;
+  await openPlacing(page, placed, back);
+  await page.click("#replay-next");
+  const card = page.locator('#replay-self [data-zone="hand"] .card[data-def-id]').last();
+  await page.clock.runFor(20);
+  await expect(card).toHaveAttribute("data-moving", "arriving");
+  expect(await card.evaluate((node) => getComputedStyle(node).zIndex)).toBe("3");
+});
+
+test("OS で動きを減らす設定にしていたら、カードを動かさずに場に置く", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const [before, after] = placingActive();
+  const { card, inZone } = await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
+  await page.clock.runFor(20);
+  expect(await inZone()).toBe(true);
+});
+
+test("ねむりのポケモンは、カードを左へ倒して描く", async ({ page }) => {
+  const [before, after] = placingActive();
+  const asleep = structuredClone(after);
+  const active = asleep[0]!.self.active;
+  if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
+  active.conditions = [{ kind: "asleep" }] as typeof active.conditions;
+  const { card } = await openPlacing(page, before, asleep);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
+  await page.clock.runFor(1_000);
+  // 左へ 90 度倒すと、変換の行列は (0, -1, 1, 0) になる。
+  const matrix = await card.evaluate((node) => getComputedStyle(node).transform);
+  expect(matrix).toMatch(/^matrix\(0, -1, 1, 0, /);
+});
+
 test("載せているカードが別のカードに描き替わったら、プレビューも替える", async ({ page }) => {
   const hand = await replayHand(page);
   const preview = page.locator("#card-preview");
@@ -661,6 +896,25 @@ test("載せているカードが描き直しで少し動いたら、プレビ�
     document.body.append(document.createElement("div"));
   });
   expect((await card.boundingBox())?.y).toBeCloseTo(top + 6, 0);
+  await expect.poll(offset).toBeCloseTo(before, 0);
+});
+
+test("載せているカードが動き終えたら、収まった位置でプレビューを置き直す", async ({ page }) => {
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  const card = hand.first();
+  await card.hover();
+  await expect(preview).toBeVisible();
+  const offset = async (): Promise<number> =>
+    ((await preview.boundingBox())?.y ?? 0) - ((await card.boundingBox())?.y ?? 0);
+  const before = await offset();
+
+  // 動いているあいだは位置が決まらないので、動き終えた合図（`data-moving` を外す）で置き直す。
+  await card.evaluate((node) => node.setAttribute("data-moving", ""));
+  await card.evaluate((node) => {
+    if (node instanceof HTMLElement) node.style.translate = "0 6px";
+  });
+  await card.evaluate((node) => node.removeAttribute("data-moving"));
   await expect.poll(offset).toBeCloseTo(before, 0);
 });
 
@@ -746,6 +1000,25 @@ test("キーボードで開いたキーを押し続けても、拡大を開い�
   for (let i = 0; i < 3; i++) await page.keyboard.down("Enter");
   await page.keyboard.up("Enter");
   await expect(page.locator("#card-zoom")).toBeHidden();
+});
+
+test("閉じてすぐに同じカードを押しても、拡大を開き直す", async ({ page }) => {
+  const hand = await replayHand(page);
+  const zoom = page.locator("#card-zoom");
+  await hand.first().click();
+  await expect(zoom).toBeVisible();
+  // dialog の close イベントは閉じたあとで届く。届く前に押し、届くまで待つ。
+  await hand.first().evaluate(async (card) => {
+    const dialog = document.querySelector("#card-zoom") as HTMLDialogElement;
+    const closed = new Promise((resolve) =>
+      dialog.addEventListener("close", resolve, { once: true }),
+    );
+    dialog.close();
+    (card as HTMLElement).click();
+    await closed;
+  });
+  await expect(zoom).toBeVisible();
+  await expect(page.locator("#card-zoom-cards .card")).toHaveCount(1);
 });
 
 test.describe("タッチ端末", () => {

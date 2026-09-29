@@ -6,18 +6,25 @@
  */
 
 import {
+  createContext,
   memo,
+  use,
+  useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
+import { LayoutGroup, motion } from "motion/react";
 import type { CardInstance, SpectatorView } from "../../src/engine.js";
 import { imageUrl, releaseImage, takeImage } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
 import { cardSubtitle, conditionName, describeCard, nameOf, type Side } from "../lib/describe.js";
+import { MOVE_SECONDS } from "../lib/motion.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 
 type Pokemon = NonNullable<Side["active"]>;
@@ -25,8 +32,12 @@ type Pokemon = NonNullable<Side["active"]>;
 export type AimedSet = ReadonlySet<string>;
 export const NOTHING_AIMED: AimedSet = new Set();
 
-/** ねむり・マヒ・こんらんは、卓で向きを変えて示すのに合わせてカードを傾ける。 */
-const POSTURES = new Set(["asleep", "paralyzed", "confused"]);
+/** 卓では、ねむりは左へ、マヒは右へ倒し、こんらんは逆さにして示す。それに合わせてカードを傾ける。 */
+const POSTURE_ANGLES: Readonly<Record<string, number>> = {
+  asleep: -90,
+  paralyzed: 90,
+  confused: 180,
+};
 
 /**
  * カード 1 枚。名前と種類の面を敷き、画像を出すときはその上に重ねる。
@@ -34,6 +45,7 @@ const POSTURES = new Set(["asleep", "paralyzed", "confused"]);
  */
 export function CardFace({
   defId,
+  instanceId,
   posture,
   pickable,
   thumb,
@@ -41,6 +53,8 @@ export function CardFace({
   onImageFailed,
 }: {
   defId: string;
+  /** 卓に出ているカードの ID。同じ ID のカードが別の場所に描かれたら、前の場所から動かして見せる。 */
+  instanceId?: string;
   posture?: string | undefined;
   /** 山札から選ぶ効果で並べたカードが、いま選べるか。 */
   pickable?: boolean;
@@ -55,6 +69,8 @@ export function CardFace({
   // 読めなかった画像は `imageUrl` が覚えているので、描き直せば名前の面になる。
   const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
   const face = useRef<HTMLDivElement>(null);
+  const frame = use(BoardFrame);
+  const moving = useMovingMark(face, frame);
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -71,25 +87,69 @@ export function CardFace({
   // 画像の無い小さな面は名前も読めないので、出さない。
   if (thumb === true && src === null) return null;
   const classes = ["card", thumb === true && "thumb", zoom !== undefined && "zoomable"];
-  return (
-    <div
-      ref={face}
-      className={classes.filter(Boolean).join(" ")}
-      {...zoomable}
-      data-def-id={defId}
-      data-kind={card?.kind ?? ""}
-      data-type={card?.type}
-      data-half={card?.stadiumHalf}
-      data-posture={posture}
-      data-pickable={pickable === undefined ? undefined : String(pickable)}
-    >
+  const props = {
+    ref: face,
+    className: classes.filter(Boolean).join(" "),
+    ...zoomable,
+    "data-def-id": defId,
+    "data-kind": card?.kind ?? "",
+    "data-type": card?.type,
+    "data-half": card?.stadiumHalf,
+    "data-pickable": pickable === undefined ? undefined : String(pickable),
+  };
+  const children = (
+    <>
       <span className="card-name">{card?.name ?? defId}</span>
       <span className="card-sub">{cardSubtitle(card)}</span>
       {/* 読み上げでは、同じ名前の別のカードを見分けられるよう、種類と収録まで読む。 */}
       {card !== undefined && <span className="visually-hidden">{describeCard(card)}</span>}
       {pickable === false && <span className="visually-hidden">（選べません）</span>}
-    </div>
+    </>
   );
+  // 一覧や拡大のカードは動かさない。デッキを組む画面では数百枚になる。
+  if (instanceId === undefined) return <div {...props}>{children}</div>;
+  return (
+    <motion.div
+      {...props}
+      layoutId={instanceId}
+      layoutDependency={frame}
+      // 倒すのは動かさずに描く。プレビューは描いた直後のカードの大きさで置き場所を決める。
+      style={{ rotate: POSTURE_ANGLES[posture ?? ""] ?? 0 }}
+      {...moving}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+/**
+ * 動いているあいだ要素に `data-moving` を付ける。この局面で別の場所から来たものは `arriving`、同じ
+ * 場所の中で詰めて動くだけのものは `shifting` にする。CSS は来たものをほかのカードの上に描き、
+ * プレビューは外れたときに置き直す。
+ */
+function useMovingMark(element: RefObject<HTMLElement | null>, frame: object | undefined) {
+  const settling = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(settling.current), []);
+  const mountedIn = useRef(frame);
+  const latest = useRef(frame);
+  useLayoutEffect(() => {
+    latest.current = frame;
+  });
+  const settle = () => {
+    clearTimeout(settling.current);
+    element.current?.removeAttribute("data-moving");
+  };
+  return {
+    onLayoutAnimationStart: () => {
+      const arriving = mountedIn.current === latest.current;
+      element.current?.setAttribute("data-moving", arriving ? "arriving" : "shifting");
+      // Motion は動きを途中で打ち切ると（画面の幅が変わったときなど）終わりを知らせないので、
+      // 長さが過ぎたら外す。
+      clearTimeout(settling.current);
+      settling.current = setTimeout(settle, MOVE_SECONDS * 1_000 + 100);
+    },
+    onLayoutAnimationComplete: settle,
+  };
 }
 
 /** 名前と、種類やワザの説明。画像が無くても、何のカードか読めるようにする。 */
@@ -149,7 +209,11 @@ function PileZone({ name, label, pile }: { name: string; label: string; pile: Ca
       : { title: label, defIds: pile.map((card) => card.defId).reverse() };
   return (
     <Zone name={name} label={label} count={pile.length} zoom={zoom}>
-      {top === undefined ? <EmptySlot /> : <CardFace defId={top.defId} />}
+      {top === undefined ? (
+        <EmptySlot />
+      ) : (
+        <CardFace key={top.instanceId} defId={top.defId} instanceId={top.instanceId} />
+      )}
     </Zone>
   );
 }
@@ -169,8 +233,13 @@ function ShownPokemon({
   aimed: AimedSet;
 }) {
   const { table } = useCardData();
+  const self = useRef<HTMLDivElement>(null);
+  const frame = use(BoardFrame);
+  const moving = useMovingMark(self, frame);
   const top = pokemon.stack[pokemon.stack.length - 1]!;
-  const posture = pokemon.conditions.find((condition) => POSTURES.has(condition.kind))?.kind;
+  const posture = pokemon.conditions.find((condition) =>
+    Object.hasOwn(POSTURE_ANGLES, condition.kind),
+  )?.kind;
   const zoomable = useZoomable({
     title: nameOf(table, top.defId),
     defIds: [
@@ -178,14 +247,25 @@ function ShownPokemon({
       ...pokemon.attached.map((card) => card.defId),
     ],
   });
+  // ダメージの印やついているカードも、ポケモンと一緒に動かす。
   return (
-    <div
+    <motion.div
+      ref={self}
+      layoutId={`pokemon ${pokemon.inPlayId}`}
+      layoutDependency={frame}
+      {...moving}
       className={aimed.has(pokemon.inPlayId) ? "pokemon aimed zoomable" : "pokemon zoomable"}
       {...zoomable}
       data-in-play-id={pokemon.inPlayId}
       data-damage={pokemon.damage}
     >
-      <CardFace defId={top.defId} posture={posture} />
+      {/* 上のカードが替わったら別の要素として描き、手札に見えていたカードならそこから動かす。 */}
+      <CardFace
+        key={top.instanceId}
+        defId={top.defId}
+        instanceId={top.instanceId}
+        posture={posture}
+      />
       <div className="marks">
         {pokemon.damage > 0 && <span className="damage">{pokemon.damage}</span>}
         {pokemon.conditions.map((condition) => (
@@ -197,11 +277,47 @@ function ShownPokemon({
       {pokemon.attached.length > 0 && (
         <div className="attached">
           {pokemon.attached.map((card) => (
-            <CardFace key={card.instanceId} defId={card.defId} />
+            <CardFace key={card.instanceId} defId={card.defId} instanceId={card.instanceId} />
           ))}
         </div>
       )}
-    </div>
+    </motion.div>
+  );
+}
+
+/**
+ * 描いている局面。カードはこれが変わったときだけ位置を測り直す。指せる手のボタンにマウスを載せるたびに
+ * 盤面を描き直すが、そのたびに全部のカードを測らない。
+ */
+const BoardFrame = createContext<object | undefined>(undefined);
+
+/**
+ * 卓の両側とスタジアムを並べる枠。カードを動かして見せるのは同じ枠の中だけにする。対戦とそのリプレイを
+ * 同時に開くと、同じカードが 2 つの盤面に出る。
+ */
+export function Board({
+  name,
+  near,
+  far,
+  stadium,
+  children,
+}: {
+  name: string;
+  near: Side | null;
+  far: Side | null;
+  stadium: SpectatorView["stadium"];
+  children: ReactNode;
+}) {
+  const frame = useMemo(() => ({ near, far, stadium }), [near, far, stadium]);
+  return (
+    <LayoutGroup id={name}>
+      <BoardFrame value={frame}>
+        {/* 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。 */}
+        <motion.div className="board" layoutScroll layoutDependency={frame}>
+          {children}
+        </motion.div>
+      </BoardFrame>
+    </LayoutGroup>
   );
 }
 
@@ -248,7 +364,12 @@ export const SideBoard = memo(function SideBoard({
       </div>
       <div className="field">
         <Zone name="active" label="バトル場">
-          <PokemonSlot pokemon={side.active} aimed={aimed} />
+          {/* 入れ替わったポケモンは別の要素として描く。同じ要素のまま layoutId だけ変えても Motion は追わない。 */}
+          <PokemonSlot
+            key={side.active !== null && "inPlayId" in side.active ? side.active.inPlayId : "none"}
+            pokemon={side.active}
+            aimed={aimed}
+          />
         </Zone>
         <Zone name="bench" label="ベンチ">
           {bench.length === 0 ? (
@@ -286,6 +407,7 @@ export const SideBoard = memo(function SideBoard({
             <CardFace
               key={card.instanceId}
               defId={card.defId}
+              instanceId={card.instanceId}
               zoom={{ title: "手札", defIds: [card.defId] }}
             />
           ))
@@ -312,12 +434,18 @@ export const Stadium = memo(function Stadium({ stadium }: { stadium: SpectatorVi
       {stadium === null ? (
         <EmptySlot />
       ) : "instanceId" in stadium ? (
-        <CardFace defId={stadium.defId} zoom={{ title: "スタジアム", defIds: [stadium.defId] }} />
+        <CardFace
+          key={stadium.instanceId}
+          defId={stadium.defId}
+          instanceId={stadium.instanceId}
+          zoom={{ title: "スタジアム", defIds: [stadium.defId] }}
+        />
       ) : (
         [stadium.left, stadium.right].map((card) => (
           <CardFace
             key={card.instanceId}
             defId={card.defId}
+            instanceId={card.instanceId}
             zoom={{ title: "スタジアム", defIds: [card.defId] }}
           />
         ))
