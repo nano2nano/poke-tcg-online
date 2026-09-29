@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { CardPreview } from "../components/card-preview.js";
+import { CardZoom } from "../components/card-zoom.js";
 import { CardDataProvider } from "../lib/cards.js";
 import styles from "../styles.css?url";
 
@@ -20,7 +22,10 @@ export const Route = createRootRoute({
 function Root() {
   return (
     <CardDataProvider>
-      <Outlet />
+      <CardZoom>
+        <Outlet />
+        <CardPreview />
+      </CardZoom>
     </CardDataProvider>
   );
 }

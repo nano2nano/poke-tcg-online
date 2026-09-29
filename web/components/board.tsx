@@ -5,18 +5,22 @@
  * （`docs/spec/battle-server.md` 1 節の S-1）。
  */
 
-import { memo, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  memo,
+  useEffectEvent,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type { CardInstance, SpectatorView } from "../../src/engine.js";
+import { imageUrl, releaseImage, takeImage } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
-import { cardSubtitle, conditionName, describeCard, type Side } from "../lib/describe.js";
+import { cardSubtitle, conditionName, describeCard, nameOf, type Side } from "../lib/describe.js";
+import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 
 type Pokemon = NonNullable<Side["active"]>;
-
-/**
- * 読めなかった画像。盤面は 1 手ごとに描き直すので、覚えておかないと公式が落ちているあいだ
- * 1 手ごとに全部のカードを頼み直す。開き直せば、もう一度頼む。
- */
-const failedImages = new Set<string>();
 
 export type AimedSet = ReadonlySet<string>;
 export const NOTHING_AIMED: AimedSet = new Set();
@@ -33,6 +37,8 @@ export function CardFace({
   posture,
   pickable,
   thumb,
+  zoom,
+  onImageFailed,
 }: {
   defId: string;
   posture?: string | undefined;
@@ -40,16 +46,36 @@ export function CardFace({
   pickable?: boolean;
   /** 一覧の行に添える小さな面。 */
   thumb?: boolean;
+  zoom?: ZoomTarget;
+  onImageFailed?: () => void;
 }) {
   const { table, images } = useCardData();
   const card = table[defId];
   const src = imageUrl(images, card?.cardID);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  // 読めなかった画像は `imageUrl` が覚えているので、描き直せば名前の面になる。
+  const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
+  const face = useRef<HTMLDivElement>(null);
+  const zoomable = useZoomable(zoom);
+  const failed = useEffectEvent(() => {
+    noteFailedImage();
+    onImageFailed?.();
+  });
+  // ほかの部品のクリーンアップで手放された要素を拾い、描画より前に付けるため `useLayoutEffect` にする。
+  // `useEffect` では、名前の面が一瞬見える。
+  useLayoutEffect(() => {
+    if (src === null || face.current === null) return;
+    const image = takeImage(src, () => failed());
+    face.current.append(image);
+    return () => releaseImage(image);
+  }, [src]);
   // 画像の無い小さな面は名前も読めないので、出さない。
-  if (thumb === true && (src === null || src === failedSrc)) return null;
+  if (thumb === true && src === null) return null;
+  const classes = ["card", thumb === true && "thumb", zoom !== undefined && "zoomable"];
   return (
     <div
-      className={thumb === true ? "card thumb" : "card"}
+      ref={face}
+      className={classes.filter(Boolean).join(" ")}
+      {...zoomable}
       data-def-id={defId}
       data-kind={card?.kind ?? ""}
       data-type={card?.type}
@@ -62,27 +88,18 @@ export function CardFace({
       {/* 読み上げでは、同じ名前の別のカードを見分けられるよう、種類と収録まで読む。 */}
       {card !== undefined && <span className="visually-hidden">{describeCard(card)}</span>}
       {pickable === false && <span className="visually-hidden">（選べません）</span>}
-      {src !== null && src !== failedSrc && (
-        // 名前は下の面が持っている。読み上げで二重にしない。
-        <img
-          alt=""
-          loading="lazy"
-          decoding="async"
-          src={src}
-          onError={() => {
-            failedImages.add(src);
-            setFailedSrc(src);
-          }}
-        />
-      )}
     </div>
   );
 }
 
-export function imageUrl(enabled: boolean, cardID: string | undefined): string | null {
-  if (!enabled || cardID === undefined) return null;
-  const url = `/api/card-image/${cardID}`;
-  return failedImages.has(url) ? null : url;
+/** 名前と、種類やワザの説明。画像が無くても、何のカードか読めるようにする。 */
+export function CardCaption({ defId }: { defId: string }) {
+  const { table } = useCardData();
+  return (
+    <>
+      <strong>{nameOf(table, defId)}</strong> {describeCard(table[defId])}
+    </>
+  );
 }
 
 export function CardBack() {
@@ -98,17 +115,21 @@ export function Zone({
   label,
   count = null,
   style,
+  zoom,
   children,
 }: {
   name: string;
   label: string;
   count?: number | null;
   style?: CSSProperties;
+  zoom?: ZoomTarget | undefined;
   children: ReactNode;
 }) {
+  const zoomable = useZoomable(zoom);
   return (
     <div
-      className={`zone ${name}`}
+      className={zoom === undefined ? `zone ${name}` : `zone ${name} zoomable`}
+      {...zoomable}
       data-zone={name}
       data-count={count === null ? undefined : String(count)}
       style={style}
@@ -121,8 +142,13 @@ export function Zone({
 
 function PileZone({ name, label, pile }: { name: string; label: string; pile: CardInstance[] }) {
   const top = pile[pile.length - 1];
+  // 山は下から順に持っているので、上から並べ直す。
+  const zoom =
+    top === undefined
+      ? undefined
+      : { title: label, defIds: pile.map((card) => card.defId).reverse() };
   return (
-    <Zone name={name} label={label} count={pile.length}>
+    <Zone name={name} label={label} count={pile.length} zoom={zoom}>
       {top === undefined ? <EmptySlot /> : <CardFace defId={top.defId} />}
     </Zone>
   );
@@ -132,11 +158,30 @@ function PileZone({ name, label, pile }: { name: string; label: string; pile: Ca
 function PokemonSlot({ pokemon, aimed }: { pokemon: Pokemon | null; aimed: AimedSet }) {
   if (pokemon === null) return <EmptySlot />;
   if ("concealed" in pokemon) return <CardBack />;
+  return <ShownPokemon pokemon={pokemon} aimed={aimed} />;
+}
+
+function ShownPokemon({
+  pokemon,
+  aimed,
+}: {
+  pokemon: Extract<Pokemon, { inPlayId: string }>;
+  aimed: AimedSet;
+}) {
+  const { table } = useCardData();
   const top = pokemon.stack[pokemon.stack.length - 1]!;
   const posture = pokemon.conditions.find((condition) => POSTURES.has(condition.kind))?.kind;
+  const zoomable = useZoomable({
+    title: nameOf(table, top.defId),
+    defIds: [
+      ...pokemon.stack.map((card) => card.defId).reverse(),
+      ...pokemon.attached.map((card) => card.defId),
+    ],
+  });
   return (
     <div
-      className={aimed.has(pokemon.inPlayId) ? "pokemon aimed" : "pokemon"}
+      className={aimed.has(pokemon.inPlayId) ? "pokemon aimed zoomable" : "pokemon zoomable"}
+      {...zoomable}
       data-in-play-id={pokemon.inPlayId}
       data-damage={pokemon.damage}
     >
@@ -195,7 +240,7 @@ export const SideBoard = memo(function SideBoard({
               return defId === undefined ? (
                 <CardBack key={index} />
               ) : (
-                <CardFace key={index} defId={defId} />
+                <CardFace key={index} defId={defId} zoom={{ title: "サイド", defIds: [defId] }} />
               );
             })}
           </div>
@@ -237,7 +282,13 @@ export const SideBoard = memo(function SideBoard({
       style={{ "--cards": String(handCount) } as CSSProperties}
     >
       {"hand" in side
-        ? side.hand.map((card) => <CardFace key={card.instanceId} defId={card.defId} />)
+        ? side.hand.map((card) => (
+            <CardFace
+              key={card.instanceId}
+              defId={card.defId}
+              zoom={{ title: "手札", defIds: [card.defId] }}
+            />
+          ))
         : Array.from({ length: handCount }, (_, index) => <CardBack key={index} />)}
     </Zone>
   );
@@ -261,10 +312,14 @@ export const Stadium = memo(function Stadium({ stadium }: { stadium: SpectatorVi
       {stadium === null ? (
         <EmptySlot />
       ) : "instanceId" in stadium ? (
-        <CardFace defId={stadium.defId} />
+        <CardFace defId={stadium.defId} zoom={{ title: "スタジアム", defIds: [stadium.defId] }} />
       ) : (
         [stadium.left, stadium.right].map((card) => (
-          <CardFace key={card.instanceId} defId={card.defId} />
+          <CardFace
+            key={card.instanceId}
+            defId={card.defId}
+            zoom={{ title: "スタジアム", defIds: [card.defId] }}
+          />
         ))
       )}
     </Zone>

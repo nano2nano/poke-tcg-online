@@ -85,6 +85,7 @@ export function SeatTable({
         className="table"
         ref={board}
         data-ended={ended === null ? undefined : ""}
+        data-state-version={state.stateVersion}
       >
         <div className="table-status">
           <div id="clock" className="clock">
@@ -384,7 +385,8 @@ function SetupForm({
 /**
  * 山札を見て選ぶ効果で、見ている山札を並べる。エンジンの候補は条件に合うカードだけなので、
  * ボタンだけでは、選べないカードや、山札に何が残っていて何がサイドに落ちたかを読めない。
- * 選ぶのはボタンで行い、選べるカードは枠で囲まない。囲むと、カードを押せば選べるように見える。
+ * 選ぶのはボタンで行い、選べるカードは枠で囲まない。盤面のほかのカードと同じく押すと拡大するので、
+ * 囲むと押せば選べるように見える。
  */
 function RevealedDeck({
   state,
@@ -422,7 +424,11 @@ function RevealedDeck({
       <div className="revealed-cards">
         {defIds.map((defId) => (
           <div key={defId} className="revealed-card" data-count={counts.get(defId)}>
-            <CardFace defId={defId} pickable={pickable.has(defId)} />
+            <CardFace
+              defId={defId}
+              pickable={pickable.has(defId)}
+              zoom={{ title: "山札", defIds: [defId] }}
+            />
             <span>×{counts.get(defId)}</span>
           </div>
         ))}
@@ -464,10 +470,13 @@ function Mulligans({ state: { mulligans, view } }: { state: SeatState }) {
             <div key={index} className="mulligan" data-side={own ? "self" : "opponent"}>
               {`${own ? "自分" : "相手"}（${counts[player]} 回目）`}
               <div className="zone hand">
-                {cards.map((defId, at) => (
-                  // oxlint-disable-next-line react/no-array-index-key -- 同じカードが何枚も並ぶので、位置のほかに見分けがない。
-                  <CardFace key={at} defId={defId} />
-                ))}
+                {cards.map((defId, at) => {
+                  const zoom = { title: "見せた手札", defIds: [defId] };
+                  return (
+                    // oxlint-disable-next-line react/no-array-index-key -- 同じカードが何枚も並ぶので、位置のほかに見分けがない。
+                    <CardFace key={at} defId={defId} zoom={zoom} />
+                  );
+                })}
               </div>
             </div>
           );

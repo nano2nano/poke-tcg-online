@@ -609,6 +609,193 @@ function gate(): [Promise<void>, () => void] {
   return [promise, release];
 }
 
+/** リプレイを開いて、盤面の手札のカードを返す。 */
+async function replayHand(page: Page) {
+  await mockHistory(page, async () => "ok");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  const hand = page.locator('#replay [data-zone="hand"] .card[data-def-id]');
+  await expect(hand.first()).toBeVisible();
+  return hand;
+}
+
+test("載せているカードが別のカードに描き替わったら、プレビューも替える", async ({ page }) => {
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  await hand.first().hover();
+  await expect(preview).toBeVisible();
+  const other = await page.evaluate(
+    (shown) =>
+      [...document.querySelectorAll<HTMLElement>("#replay .card[data-def-id]")]
+        .map((card) => card.dataset.defId)
+        .find((defId) => defId !== shown),
+    await hand.first().getAttribute("data-def-id"),
+  );
+  if (other === undefined) throw new Error("盤面に別のカードが無い");
+
+  // 同じ位置の要素のまま中身だけ替わる描き直しと同じにする。
+  await hand.first().evaluate((node, defId) => {
+    if (node instanceof HTMLElement) node.dataset.defId = defId;
+  }, other);
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", other);
+});
+
+test("載せているカードが描き直しで少し動いたら、プレビューも付いていく", async ({ page }) => {
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  const card = hand.first();
+  await card.hover();
+  await expect(preview).toBeVisible();
+  const offset = async (): Promise<number> =>
+    ((await preview.boundingBox())?.y ?? 0) - ((await card.boundingBox())?.y ?? 0);
+  const before = await offset();
+  const top = (await card.boundingBox())?.y ?? 0;
+
+  // 描き直しでカードが少し下へずれる。マウスの下は同じカードのままなので、載せ直しの合図は来ない。
+  await card.evaluate((node) => {
+    if (node instanceof HTMLElement) node.style.translate = "0 6px";
+    document.body.append(document.createElement("div"));
+  });
+  expect((await card.boundingBox())?.y).toBeCloseTo(top + 6, 0);
+  await expect.poll(offset).toBeCloseTo(before, 0);
+});
+
+test("載せているあいだに画面が低くなっても、プレビューを画面に収める", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1600 });
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
+  await page.route("**/api/card-image/*", () => {});
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#card-search", "エネルギー");
+  const add = page.locator("#card-results .card-row button.add");
+  for (let i = 0; i < 3; i++) await add.nth(i).click();
+  const card = page.locator("#deck-cards .card-row .card").last();
+  const preview = page.locator("#card-preview");
+  await card.hover();
+  await expect(preview).toBeVisible();
+
+  // カードは見えたまま、プレビューの下端より低くする。
+  const under = await card.boundingBox();
+  const shown = await preview.boundingBox();
+  if (under === null || shown === null) throw new Error("カードかプレビューが出ていない");
+  const height = Math.ceil(under.y + under.height) + 20;
+  expect(shown.y + shown.height).toBeGreaterThan(height);
+  await page.setViewportSize({ width: 1280, height });
+  await expect
+    .poll(async () => {
+      const box = await preview.boundingBox();
+      return box === null ? Infinity : box.y + box.height;
+    })
+    .toBeLessThanOrEqual(height);
+});
+
+test("拡大の中と背景にまたがって押しても、閉じない", async ({ page }) => {
+  const hand = await replayHand(page);
+  const zoom = page.locator("#card-zoom");
+  await hand.first().click();
+  await expect(zoom).toBeVisible();
+
+  // 説明の文字を選ぼうとして、枠の外まで引っぱる。
+  const title = await page.locator("#card-zoom-title").boundingBox();
+  if (title === null) throw new Error("見出しが出ていない");
+  await page.mouse.move(title.x + 2, title.y + title.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(2, 2);
+  await page.mouse.up();
+  await expect(zoom).toBeVisible();
+  // 逆に、背景で押し始めて中で離しても閉じない。
+  await page.mouse.down();
+  await page.mouse.move(title.x + 2, title.y + title.height / 2);
+  await page.mouse.up();
+  await expect(zoom).toBeVisible();
+
+  await page.mouse.click(2, 2);
+  await expect(zoom).toBeHidden();
+});
+
+test("拡大の中身が長くて出たスクロールバーを押しても、閉じない", async ({ page }) => {
+  const hand = await replayHand(page);
+  // カード 1 枚でも収まらない高さにする。
+  await page.setViewportSize({ width: 1280, height: 240 });
+  await hand.first().click();
+  const zoom = page.locator("#card-zoom");
+  await expect(zoom).toBeVisible();
+  const scrolls = await zoom.evaluate((node) => node.scrollHeight > node.clientHeight);
+  expect(scrolls).toBe(true);
+  const box = await zoom.boundingBox();
+  if (box === null) throw new Error("拡大が出ていない");
+  // 縦のスクロールバーは右端の内側にある。
+  await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+  await expect(zoom).toBeVisible();
+});
+
+test("キーボードで開いたキーを押し続けても、拡大を開いたままにする", async ({ page }) => {
+  const hand = await replayHand(page);
+  await hand.first().focus();
+  // 押したままのあいだ、くり返しの keydown が届く。
+  for (let i = 0; i < 3; i++) await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+  await expect(page.locator("#card-zoom")).toBeVisible();
+
+  // 「閉じる」で押し続けても、閉じたあとに戻ったカードで開き直さない。
+  await page.locator("#card-zoom-close").focus();
+  for (let i = 0; i < 3; i++) await page.keyboard.down("Enter");
+  await page.keyboard.up("Enter");
+  await expect(page.locator("#card-zoom")).toBeHidden();
+});
+
+test.describe("タッチ端末", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+
+  test("長押しを指をずらしてやめたら、次にキーボードで押したボタンを止めない", async ({ page }) => {
+    await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+    // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
+    await page.route("**/api/card-image/*", () => {});
+    await page.goto(`${BASEPATH}/`);
+    await page.fill("#card-search", "エネルギー");
+    const thumb = page.locator("#card-results .card-row .card").first();
+    await expect(thumb).toBeVisible();
+    const box = await thumb.boundingBox();
+    if (box === null) throw new Error("小さな面が出ていない");
+
+    // Playwright の `tap` は置いてすぐ離すので、CDP で指を置く。
+    const cdp = await page.context().newCDPSession(page);
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    await expect(page.locator("#card-preview")).toBeVisible();
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: point.x, y: point.y + 30 }],
+    });
+    await expect(page.locator("#card-preview")).toBeHidden();
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+
+    await page.locator("#card-results .card-row button.add").first().press("Enter");
+    await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+  });
+});
+
+test("載せているあいだに画像が読めなかったと分かったら、プレビューに説明を書き添える", async ({
+  page,
+}) => {
+  const [held, release] = gate();
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  await page.route("**/api/card-image/*", async (route) => {
+    await held;
+    await route.fulfill({ status: 502, body: "" });
+  });
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  await hand.first().hover();
+  await expect(preview).toBeVisible();
+  await expect(preview.locator("p")).toHaveCount(0);
+
+  release();
+  await expect(preview.locator("p")).toBeVisible();
+  await expect(preview.locator("p")).not.toBeEmpty();
+});
+
 test("閉じて別の対戦を開いたあとに、閉じた対戦を開けなかった答えが届いても、開いている方を閉じない", async ({
   page,
 }) => {
