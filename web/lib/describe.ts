@@ -12,6 +12,7 @@ import type {
   PlayerView,
   SpectatorView,
 } from "../../src/engine.js";
+import type { MatchSummary } from "../../src/archive.js";
 import type { ClockView, EndedMessage, RejectReason, SpectatorSeat } from "../../src/protocol.js";
 import type { CardBrief, CardTable } from "./cards.js";
 
@@ -217,6 +218,39 @@ export interface Notice {
 export type View = PlayerView | SpectatorView;
 
 /**
+ * 済んだ対戦を読み返す盤面。相手の側も相手自身の射影から取るので、相手の手札まで見える（仕様 6.6 節）。
+ * 座席の射影より見えるものが多いだけなので、座席の射影もこの形として読める。
+ */
+export type ReaderView = Omit<PlayerView, "opponent"> & { opponent: Side };
+
+/**
+ * 座席ごとの射影 2 つを、`seat` に座っていた人から見た 1 枚の盤面にする。
+ * 選択の中身は持ち主の射影にしか載らないので、相手の選択は相手の射影から取る。
+ */
+export function readerView(views: readonly [PlayerView, PlayerView], seat: Player): ReaderView {
+  const other = views[seat === 0 ? 1 : 0];
+  return {
+    ...views[seat],
+    opponent: other.self,
+    choices: views[seat].choices.map((choice) =>
+      choice.owner === seat
+        ? choice
+        : (other.choices.find(({ choiceId }) => choiceId === choice.choiceId) ?? choice),
+    ),
+  };
+}
+
+/** 指した対戦の一覧の 1 行。 */
+export function describeSummary(summary: MatchSummary): string {
+  const outcome = { win: "勝ち", loss: "負け", draw: "引き分け" }[summary.outcome];
+  const how = { normal: "", concede: "（投了）", timeout: "（時間切れ）" }[
+    summary.matchResult.kind
+  ];
+  const when = new Date(summary.endedAt).toLocaleString("ja-JP");
+  return `${when} ${summary.opponentName} と ${outcome}${how} ${summary.moveCount} 手`;
+}
+
+/**
  * 届いたイベントを、人に見せる結果へ直す。見せないイベントの位置は null にする。
  * 名前は適用後と適用前の盤面から引く。きぜつしたポケモンは適用後の盤面にもういない。
  */
@@ -340,7 +374,7 @@ function pokemonName(
 }
 
 /** 座席の番号と、その座席の場の組。座席と観戦で盤面の形が違う。 */
-export function sidesOf(view: View | null): [Player, Side][] {
+export function sidesOf(view: View | ReaderView | null): [Player, Side][] {
   if (view === null) return [];
   if (view.viewer === "spectator")
     return [

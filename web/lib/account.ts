@@ -5,7 +5,7 @@
 
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { Account } from "../../src/accounts.js";
-import { post, postJson } from "./api.js";
+import { ApiError, post, postJson } from "./api.js";
 
 export type { Account };
 
@@ -54,6 +54,37 @@ export async function loadAccount(displayName: string): Promise<Account> {
   if (typeof created.secret !== "string") throw new Error("プレイヤーを作れなかった");
   localStorage.setItem(SECRET_KEY, created.secret);
   return created.account;
+}
+
+/**
+ * シークレットを添えて頼む。サーバがプレイヤーを忘れていたら、覚えているプレイヤーを古いものとする。
+ * すぐには取り直さない。取り直すとプレイヤーを作るので、それは人が次に頼んだときにする。
+ */
+export async function postAsPlayer<T>(
+  queryClient: QueryClient,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  try {
+    return await postJson<T>(path, { ...body, secret: requireSecret() });
+  } catch (error) {
+    // シークレットが無いのは、別のタブが作り直そうとして消したときで、覚えているプレイヤーはもう使えない。
+    const forgotten = error instanceof ApiError && error.code === "account-not-found";
+    if (forgotten || storedSecret() === null) forgetAccount(queryClient);
+    throw error;
+  }
+}
+
+/** 用意したはずのシークレット。用意に失敗して消えたままなら、送らずに止める。 */
+export function requireSecret(): string {
+  const secret = storedSecret();
+  if (secret === null) throw new Error("プレイヤーを用意できなかった");
+  return secret;
+}
+
+/** サーバが忘れていたプレイヤーを古いものとする。次に用意するときに作り直す。 */
+export function forgetAccount(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
 }
 
 /**

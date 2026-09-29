@@ -6,12 +6,12 @@
 import { createHash } from "node:crypto";
 import { expect, test, type Page, type WebSocket } from "@playwright/test";
 import type { Bot } from "../src/bots.js";
-import { loadGeneratedCards } from "../src/engine.js";
+import { loadGeneratedCards, type PlayerView } from "../src/engine.js";
 import { MatchHub } from "../src/hub.js";
 import type { Seated } from "../src/lobby.js";
-import { concede, createMatch } from "../src/match.js";
+import { concede, createMatch, viewFor } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
-import { ensureCards, legalDecks } from "../tests/helpers.js";
+import { ensureCards, legalDecks, newMatch } from "../tests/helpers.js";
 import { BASEPATH } from "../web/basepath.js";
 
 test("新しい画面は /next/ で描け、いまの画面は / に残る", async ({ page }) => {
@@ -526,6 +526,512 @@ test("画像を読めなかったカードは、候補の行に小さな面を�
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
+});
+
+/** サーバがプレイヤーを忘れていたときの答え。 */
+const accountMissing = {
+  status: 404,
+  json: { error: "アカウントが見つからない", code: "account-not-found" },
+};
+
+let openingViews: PlayerView[] | null = null;
+
+/** リプレイの答えに載せる盤面。どのテストでも開始局面で足りるので、1 度だけ作る。 */
+function opening(): PlayerView[] {
+  if (openingViews === null) {
+    ensureCards();
+    const match = newMatch("next-history");
+    openingViews = [viewFor(match, 0), viewFor(match, 1)];
+  }
+  return openingViews;
+}
+
+/** 一覧とリプレイの答えを差し替える。盤面は開始局面のまま、手数だけを返す。 */
+async function mockHistory(
+  page: Page,
+  frameFor: (matchId: string, ply: number) => Promise<"fail" | "ok">,
+  /** 再現できない地点。サーバと同じく、その先を頼まれたときだけ知らせる。 */
+  diverged: number | null = null,
+): Promise<void> {
+  const views = opening();
+  const summary = (matchId: string, opponentName: string) => ({
+    matchId,
+    startedAt: "2026-09-28T00:00:00Z",
+    endedAt: "2026-09-28T00:10:00Z",
+    seat: 0,
+    opponentName,
+    outcome: "win",
+    matchResult: { kind: "concede", winner: 0, conceded: 1 },
+    moveCount: 10,
+  });
+  await page.route("**/api/matches", (route) =>
+    route.fulfill({ json: { matches: [summary("a", "あ"), summary("b", "い")] } }),
+  );
+  await page.route("**/api/replay", async (route) => {
+    const { matchId, ply } = route.request().postDataJSON() as { matchId: string; ply: number };
+    if ((await frameFor(matchId, ply)) === "fail") {
+      return route.fulfill({ status: 503, json: { error: "落とした" } });
+    }
+    const beyond = diverged !== null && ply > diverged;
+    return route.fulfill({
+      json: {
+        frame: {
+          matchId,
+          ply: beyond ? diverged : ply,
+          moveCount: 10,
+          views,
+          playedMove: null,
+          beforeViews: null,
+          events: [[], []],
+          engineCommitDiffers: false,
+          divergedAt: beyond ? diverged : null,
+        },
+      },
+    });
+  });
+}
+
+/** 見出しの手数。「10 / 10 手」を 0 手目と取り違えない。 */
+const atPly = (ply: number) => new RegExp(`(^|[^0-9])${ply} / 10 手`);
+
+/** 答えを受けてから描き直すまでを待つ。 */
+async function painted(page: Page): Promise<void> {
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+}
+
+function gate(): [Promise<void>, () => void] {
+  let release = (): void => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return [promise, release];
+}
+
+test("閉じて別の対戦を開いたあとに、閉じた対戦を開けなかった答えが届いても、開いている方を閉じない", async ({
+  page,
+}) => {
+  const [slow, release] = gate();
+  await mockHistory(page, async (matchId) => {
+    if (matchId !== "a") return "ok";
+    await slow;
+    return "fail";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  const rows = page.locator("#history-list button");
+  await rows.nth(0).click();
+  await page.click("#replay-close");
+  await rows.nth(1).click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+
+  const failed = page.waitForResponse((response) => response.url().endsWith("/api/replay"));
+  release();
+  await failed;
+  await painted(page);
+  await expect(page.locator("#history-status")).toBeEmpty();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+});
+
+test("追い越された問い合わせの失敗は、描けた局面の見出しを隠さない", async ({ page }) => {
+  const [slow, release] = gate();
+  await mockHistory(page, async (_matchId, ply) => {
+    if (ply !== 1) return "ok";
+    await slow;
+    return "fail";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-next");
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText(atPly(2));
+
+  const failed = page.waitForResponse((response) => response.url().endsWith("/api/replay"));
+  release();
+  await failed;
+  await painted(page);
+  await expect(page.locator("#replay-status")).toContainText(atPly(2));
+});
+
+test("最初の局面が描けるまでは、辿るボタンを押せない", async ({ page }) => {
+  const [slow, release] = gate();
+  await mockHistory(page, async () => {
+    await slow;
+    return "ok";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-next")).toBeDisabled();
+  release();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await expect(page.locator("#replay-next")).toBeEnabled();
+});
+
+test("辿れなかったときも、描けている局面の手数を出したままにする", async ({ page }) => {
+  await mockHistory(page, async (_matchId, ply) => (ply === 1 ? "fail" : "ok"));
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText("辿れませんでした");
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+});
+
+test("サーバがプレイヤーを忘れて作り直したら、前のプレイヤーの一覧とリプレイを出さない", async ({
+  page,
+}) => {
+  await mockHistory(page, async () => "ok");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+
+  // 作り直したプレイヤーはまだ対戦を指していない。
+  await page.route("**/api/matches", (route) => route.fulfill({ json: { matches: [] } }));
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
+  );
+  await page.route("**/api/account/me", (route) =>
+    route.fulfill({ status: 404, json: { error: "いない", code: "account-not-found" } }),
+  );
+  // 1 度目で断られ、2 度目の前にプレイヤーを作り直す。
+  for (let round = 0; round < 2; round += 1) {
+    const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+    await page.click("#join-button");
+    await joined;
+    await expect(page.locator("#join-button")).toBeEnabled();
+  }
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await expect(page.locator("#replay")).toHaveCount(0);
+});
+
+test("一覧を取り直せなかったあとに開けなかったら、開けなかった理由を出す", async ({ page }) => {
+  await mockHistory(page, async () => "fail");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-list button")).toHaveCount(2);
+  await page.route("**/api/matches", (route) =>
+    route.fulfill({ status: 503, json: { error: "落とした" } }),
+  );
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("一覧を出せませんでした");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#history-status")).toContainText("開けませんでした");
+});
+
+test("端でさらに押しても、同じ局面を取りに行かない", async ({ page }) => {
+  const asked: number[] = [];
+  await mockHistory(page, async (_matchId, ply) => {
+    asked.push(ply);
+    return "ok";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-prev");
+  await page.click("#replay-first");
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText(atPly(1));
+  expect(asked).toEqual([0, 1]);
+});
+
+test("一覧を取りに行けなかった理由は、取り直しているあいだは出さない", async ({ page }) => {
+  const [slow, release] = gate();
+  let calls = 0;
+  await page.route("**/api/matches", async (route) => {
+    calls += 1;
+    if (calls === 1) return route.fulfill({ json: { matches: [] } });
+    if (calls === 2) return route.fulfill({ status: 503, json: { error: "落とした" } });
+    await slow;
+    return route.fulfill({ json: { matches: [] } });
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  // 一覧を持っている取り直しの失敗は、次の取り直しのあいだも失敗のまま残る。
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("一覧を出せませんでした");
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toBeEmpty();
+  release();
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+});
+
+test("サーバがプレイヤーを忘れていたら、次に一覧を出すときにプレイヤーを作り直す", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect(page.locator("#history-button")).toBeEnabled();
+  await page.route("**/api/matches", (route) => route.fulfill(accountMissing));
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+
+  await page.unroute("**/api/matches");
+  const created = page.waitForRequest((request) => request.url().endsWith("/api/account"));
+  await page.click("#history-button");
+  await created;
+  // 作り直したプレイヤーの一覧を、押し直さずに出す。
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+});
+
+test("プレイヤーを作っているあいだに押しても、作り終えたら一覧を出す", async ({ page }) => {
+  const [slow, release] = gate();
+  // 初めて開いた画面はシークレットを持たないので、プレイヤーを作るところで止める。
+  await page.route("**/api/account", async (route) => {
+    await slow;
+    await route.continue();
+  });
+  let listed = 0;
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/matches")) listed += 1;
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  release();
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await painted(page);
+  expect(listed).toBe(1);
+});
+
+test("リプレイでサーバがプレイヤーを忘れていたと分かったら、次に一覧を出すときに作り直す", async ({
+  page,
+}) => {
+  await mockHistory(page, async () => "ok");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-list button")).toHaveCount(2);
+  await page.route("**/api/replay", (route) => route.fulfill(accountMissing));
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#history-status")).toContainText("開けませんでした");
+
+  const created = page.waitForRequest((request) => request.url().endsWith("/api/account"));
+  await page.click("#history-button");
+  await created;
+});
+
+test("席に着いたまま開き直しても、一覧の欄はプレイヤーを読みに行かない", async ({ page }) => {
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/account")) asked.push(request.url());
+  });
+  await page.routeWebSocket(
+    (url) => url.searchParams.has("seatToken"),
+    () => {},
+  );
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "poke-seat",
+      JSON.stringify({ seat: 0, seatToken: "つながったままの座席" }),
+    );
+  });
+  await page.goto(`${BASEPATH}/`);
+  await expect(page.locator("#table")).toBeVisible();
+  await expect(page.locator("#history")).toBeAttached();
+  await painted(page);
+  expect(asked).toEqual([]);
+});
+
+test("返ってこない問い合わせは、同じ手数を押し直せば頼み直す", async ({ page }) => {
+  const [never] = gate();
+  let lastAsked = 0;
+  await mockHistory(page, async (_matchId, ply) => {
+    if (ply === 10 && lastAsked++ === 0) await never;
+    return "ok";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-last");
+  await page.click("#replay-last");
+  await expect(page.locator("#replay-status")).toContainText(atPly(10));
+});
+
+test("再現できない地点は、手前へ戻っても出したままにする", async ({ page }) => {
+  await mockHistory(page, async () => "ok", 4);
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-last");
+  await expect(page.locator("#replay-status")).toContainText("5 手目から先は");
+  await page.click("#replay-prev");
+  await expect(page.locator("#replay-status")).toContainText(atPly(3));
+  await expect(page.locator("#replay-status")).toContainText("5 手目から先は");
+});
+
+test("最初の局面が返ってこなくても、同じ対戦を押し直せば開き直す", async ({ page }) => {
+  const [never] = gate();
+  let opened = 0;
+  await mockHistory(page, async () => {
+    if (opened++ === 0) await never;
+    return "ok";
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  const row = page.locator("#history-list button").first();
+  await row.click();
+  await expect(page.locator("#replay-next")).toBeDisabled();
+  await row.click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+});
+
+test("プレイヤーを用意できなかったら、その理由を一覧の欄に出す", async ({ page }) => {
+  await page.route("**/api/account", (route) =>
+    route.fulfill({ status: 503, json: { error: "作れなかった" } }),
+  );
+  const failed = page.waitForResponse((response) => response.url().endsWith("/api/account"));
+  await page.goto(`${BASEPATH}/`);
+  await failed;
+  // ロビーが開いたときに用意できなかったことは、一覧の欄では言わない。
+  await painted(page);
+  await expect(page.locator("#history-status")).toBeEmpty();
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("作れなかった");
+});
+
+test("覚えているプレイヤーを読み直しているあいだに押しても、一覧は 1 度だけ頼む", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
+    .not.toBeNull();
+
+  const [slow, release] = gate();
+  await page.route("**/api/account/me", async (route) => {
+    await slow;
+    await route.continue();
+  });
+  let listed = 0;
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/matches")) listed += 1;
+  });
+  await page.reload();
+  await page.click("#history-button");
+  release();
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await painted(page);
+  expect(listed).toBe(1);
+});
+
+test("忘れられていたと言われても同じプレイヤーが読めたら、次に押したときに一覧を出す", async ({
+  page,
+}) => {
+  let once = true;
+  await page.route("**/api/matches", async (route) => {
+    if (!once) return route.continue();
+    once = false;
+    return route.fulfill(accountMissing);
+  });
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await expect(page.locator("#history-status")).toBeEmpty();
+});
+
+test("プレイヤーを作り直している途中に続けて押しても、作るのは 1 人だけ", async ({ page }) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
+    .not.toBeNull();
+  await page.route("**/api/matches", (route) => route.fulfill(accountMissing));
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
+  const [slow, release] = gate();
+  let created = 0;
+  await page.route("**/api/account", async (route) => {
+    created += 1;
+    await slow;
+    await route.continue();
+  });
+  await page.click("#history-button");
+  await expect.poll(() => created).toBe(1);
+  await page.click("#history-button");
+  await painted(page);
+  release();
+  await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
+  expect(created).toBe(1);
+});
+
+test("ロビーでプレイヤーが忘れられていたと分かったら、一覧は作り直したプレイヤーで頼む", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
+    .not.toBeNull();
+  const old = await page.evaluate(() => localStorage.getItem("poke-account-secret"));
+  await page.route("**/api/join", (route) =>
+    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
+  );
+  await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
+  await page.click("#join-button");
+  await expect(page.locator("#join-status")).toContainText("断った");
+
+  const sent: unknown[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/matches")) sent.push(request.postDataJSON());
+  });
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  expect(sent).not.toContainEqual({ secret: old });
+});
+
+test("別のタブがシークレットを消していたら、次に一覧を出すときにプレイヤーを作り直す", async ({
+  page,
+}) => {
+  await page.goto(`${BASEPATH}/`);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
+    .not.toBeNull();
+  await page.evaluate(() => localStorage.removeItem("poke-account-secret"));
+  await page.click("#history-button");
+  await expect(page.locator("#history-status")).toContainText("プレイヤーを用意できなかった");
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+});
+
+test("追い越された局面の再現できない地点は、見出しに出さない", async ({ page }) => {
+  const [slow, release] = gate();
+  await mockHistory(
+    page,
+    async (_matchId, ply) => {
+      if (ply === 10) await slow;
+      return "ok";
+    },
+    4,
+  );
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  await page.click("#replay-next");
+  await expect(page.locator("#replay-status")).toContainText(atPly(1));
+  const last = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/replay") &&
+      (response.request().postDataJSON() as { ply: number }).ply === 10,
+  );
+  await page.click("#replay-last");
+  await page.click("#replay-first");
+  await expect(page.locator("#replay-status")).toContainText(atPly(0));
+  release();
+  await last;
+  await painted(page);
+  await expect(page.locator("#replay-status")).not.toContainText("手目から先は");
 });
 
 /**

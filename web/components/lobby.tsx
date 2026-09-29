@@ -1,13 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  accountKey,
   accountQuery,
   accountText,
   DEFAULT_NAME,
+  forgetAccount,
   nameOrDefault,
   refreshAccount,
-  storedSecret,
+  requireSecret,
 } from "../lib/account.js";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
@@ -155,7 +155,7 @@ export function Lobby({
    */
   const refused = (outcome: { errors: string[]; code?: string }) => {
     if (outcome.code === "account-not-found") {
-      void queryClient.invalidateQueries({ queryKey: accountKey, refetchType: "none" });
+      forgetAccount(queryClient);
     }
     setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
   };
@@ -463,7 +463,5 @@ export function Lobby({
 
 async function secretOf(ensureAccount: () => Promise<unknown>): Promise<string> {
   await ensureAccount();
-  const secret = storedSecret();
-  if (secret === null) throw new Error("プレイヤーを用意できなかった");
-  return secret;
+  return requireSecret();
 }

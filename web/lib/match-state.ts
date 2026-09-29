@@ -240,6 +240,10 @@ export function initialReplayState({
   return { matchId, seat, ply: 0, wanted: 0, moveCount, asked: 0, frame: null };
 }
 
+export function clampPly(state: ReplayState, ply: number): number {
+  return Math.max(0, Math.min(ply, state.moveCount));
+}
+
 /**
  * `ask` のあとの `asked` を問い合わせに添え、返ってきたら `frame` か `failed` で戻す。
  *
@@ -249,11 +253,7 @@ export function initialReplayState({
 export function replayReducer(state: ReplayState, action: ReplayAction): ReplayState {
   switch (action.t) {
     case "ask":
-      return {
-        ...state,
-        asked: state.asked + 1,
-        wanted: Math.max(0, Math.min(action.ply, state.moveCount)),
-      };
+      return { ...state, asked: state.asked + 1, wanted: clampPly(state, action.ply) };
     case "frame": {
       if (action.asked !== state.asked) return state;
       const { frame } = action;

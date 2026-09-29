@@ -5,16 +5,24 @@
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
 
-import type { ChoiceAnswer, Move, PlayerView } from "../../src/engine.js";
+import type { ChoiceAnswer, Move, Player } from "../../src/engine.js";
+import type { ReplayFrame } from "../../src/history.js";
 import type { AnswerDestination, DeckPlacementView, SetupView } from "../../src/match.js";
 import type { CardTable } from "./cards.js";
-import { conditionName, nameOf, sidesOf, type Side } from "./describe.js";
+import {
+  conditionName,
+  nameOf,
+  readerView,
+  sidesOf,
+  type ReaderView,
+  type Side,
+} from "./describe.js";
 
 type Pokemon = NonNullable<Side["active"]>;
 
-/** ラベルを作るのに要るもの。盤面は座席から見たもの。 */
+/** ラベルを作るのに要るもの。盤面は座席から見たもの。リプレイでは相手の手札と選択の中身も見える。 */
 export interface MoveContext {
-  view: PlayerView | null;
+  view: ReaderView | null;
   cards: CardTable;
 }
 
@@ -22,7 +30,7 @@ export interface MoveContext {
  * 座席から見た両側と、それが自分の側か。
  * 対戦中は相手の手札が `hand` を持たないので、自分の手札しか当たらない。
  */
-function seatSides(view: PlayerView | null): [boolean, Side][] {
+function seatSides(view: ReaderView | null): [boolean, Side][] {
   return sidesOf(view).map(([player, side]) => [player === view?.viewer, side]);
 }
 
@@ -32,7 +40,7 @@ function benched(side: Side): Pokemon[] {
   return slots.filter((pokemon) => pokemon !== null);
 }
 
-function pokemonAt(inPlayId: string, view: PlayerView | null) {
+function pokemonAt(inPlayId: string, view: ReaderView | null) {
   for (const [own, side] of seatSides(view)) {
     const active = side.active;
     if (active !== null && "inPlayId" in active && active.inPlayId === inPlayId) {
@@ -452,4 +460,28 @@ export function moveTargets(move: Move): string[] {
   return [fields.target, fields.to, fields.source, answer.target].filter(
     (id): id is string => typeof id === "string",
   );
+}
+
+/** リプレイの 1 枚の見出し。何手目か、その直前の手、辿れるかどうかの注意。 */
+export function replayStatusText(
+  frame: ReplayFrame,
+  seat: Player,
+  cards: CardTable,
+  divergedAt: number | null,
+): string {
+  // 出したカードは指したあとの手札にもう無いので、名前は指す前の盤面から引く。
+  const before = frame.beforeViews === null ? null : readerView(frame.beforeViews, seat);
+  const move =
+    frame.playedMove === null
+      ? "対戦の開始時"
+      : describeMove(frame.playedMove, { view: before, cards });
+  // エンジンの版が違っても止めない。止めるのはカードの定義が変わったときだけである（仕様 6.3 節）。
+  const warning = frame.engineCommitDiffers
+    ? "　※ この対戦を指したときとエンジンの版が違います"
+    : "";
+  const diverged =
+    divergedAt === null
+      ? ""
+      : `　※ ${divergedAt + 1} 手目から先は、いまのエンジンでは再現できません`;
+  return `${frame.ply} / ${frame.moveCount} 手　直前の手: ${move}${warning}${diverged}`;
 }
