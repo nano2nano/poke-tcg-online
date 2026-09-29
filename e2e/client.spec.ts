@@ -2982,6 +2982,69 @@ test("効果で選べるカードが 1 枚も無く、やめるしかないと�
   expect(sent[0]!.move).toEqual(sync.legalMoves[0]);
 });
 
+test("盤面のカードやポケモンを右クリックすると、そこでできる手をその場に出して選べる", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync & {
+    view: {
+      self: { active: { inPlayId: string }; bench: { inPlayId: string }[] };
+      opponent: { active: { inPlayId: string } };
+    };
+  };
+  const { hand, active, bench } = sync.view.self;
+  const item = hand[4]!;
+  const ability = { type: "UseAbility", player: 0, source: bench[1]!.inPlayId, abilityIndex: 0 };
+  const play = { type: "PlayTrainer", player: 0, cardInstanceId: item.instanceId };
+  sync.legalMoves = [play, ability, ...sync.legalMoves];
+  const sent = await openWith(page, sync);
+  const menu = page.locator("#move-menu");
+  const items = menu.getByRole("menuitem");
+  const pokemon = (inPlayId: string) => page.locator(`[data-in-play-id="${inPlayId}"]`);
+
+  // 特性を使えるポケモンには印を付ける。
+  await expect(page.locator(".marks .ability")).toHaveCount(1);
+  await expect(pokemon(bench[1]!.inPlayId).locator(".marks .ability")).toHaveText("特性");
+
+  // ポケモンには、その特性と、そのポケモンにつける手を出す。
+  await pokemon(bench[1]!.inPlayId).click({ button: "right" });
+  await expect(items).toHaveCount(3);
+  await expect(items.first()).toHaveText(/特性/);
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+
+  // バトル場のポケモンにはワザも出す。外を押すと閉じる。
+  await pokemon(active.inPlayId).click({ button: "right" });
+  await expect(items).toHaveCount(3);
+  await expect(items.filter({ hasText: /^ワザ/ })).toHaveCount(1);
+  await page.locator("#clock").click();
+  await expect(menu).toBeHidden();
+
+  // 指せる手の無いカードでは開かない。
+  await pokemon(sync.view.opponent.active.inPlayId).click({ button: "right" });
+  await expect(menu).toBeHidden();
+
+  // キーボードでもメニューのキーで開け、Esc で閉じるとカードへフォーカスを戻す。
+  const card = page.locator(`#self [data-zone="hand"] .card[data-def-id="${item.defId}"]`).first();
+  await card.focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(items).toHaveText([/を使う$/]);
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(card).toBeFocused();
+  // Tab でメニューの外へ出たら閉じる。
+  await page.keyboard.press("Shift+F10");
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(menu).toBeHidden();
+
+  await card.click({ button: "right" });
+  await items.first().click();
+  await expect(menu).toBeHidden();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(play);
+});
+
 test("効果でポケモンを選ぶあいだは、盤面の候補を押すと選び、ほかのポケモンは押すと大きく出す", async ({
   page,
 }) => {

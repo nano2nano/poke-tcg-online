@@ -594,12 +594,16 @@ button.choice-card:enabled > .card {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.marks .condition {
+.marks .condition,
+.marks .ability {
   padding: 0 4px;
   border-radius: 4px;
   background: #5b2c6f;
   color: #fff;
   font-size: 0.7rem;
+}
+.marks .ability {
+  background: #1f6f43;
 }
 
 .zoomable {
@@ -1115,4 +1119,27 @@ button.choice-card:enabled > .card {
   padding: 4px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+/* 右クリックしたカードでできる手。popover の既定は画面の真ん中なので、置いた位置に出す。 */
+.move-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-width: min(360px, 100vw);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+}
+.move-menu button {
+  text-align: left;
+}
+/* 右クリックはマウスの操作なので、タッチだけの端末には案内しない。 */
+@media not ((hover: hover) and (pointer: fine)) {
+  .menu-hint {
+    display: none;
+  }
 }

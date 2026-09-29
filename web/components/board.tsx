@@ -424,6 +424,9 @@ export const PokemonChoices = createContext<{
   choose: (inPlayId: string) => void;
 } | null>(null);
 
+/** いま特性を使える場のポケモン。座席の画面だけが渡す。 */
+export const ReadyAbilities = createContext<ReadonlySet<string>>(new Set());
+
 /** 場のポケモン 1 匹。ついているカードは下からのぞかせ、ダメージと特殊状態は印で出す。 */
 function PokemonSlot({ pokemon, aimed }: { pokemon: Pokemon | null; aimed: AimedSet }) {
   if (pokemon === null) return <EmptySlot />;
@@ -473,6 +476,7 @@ function PokemonBox({
   // 効果で選べるポケモンは、押すと拡大せずに選ぶ。印刷の文字はマウスを載せるか長押しで読める。
   const choices = use(PokemonChoices);
   const choosable = choices?.targets.has(pokemon.inPlayId) === true;
+  const ready = use(ReadyAbilities).has(pokemon.inPlayId);
   const zoomable = useZoomable(
     {
       title: nameOf(table, top.defId),
@@ -506,6 +510,7 @@ function PokemonBox({
       />
       <div className="marks">
         {pokemon.damage > 0 && <span className="damage">{pokemon.damage}</span>}
+        {ready && <span className="ability">特性</span>}
         {pokemon.conditions.map((condition) => (
           <span key={condition.kind} className="condition">
             {conditionName(condition)}
