@@ -1002,6 +1002,20 @@ test("キーボードで開いたキーを押し続けても、拡大を開い�
   await expect(page.locator("#card-zoom")).toBeHidden();
 });
 
+test("閉じてすぐに同じカードを押しても、拡大を開き直す", async ({ page }) => {
+  const hand = await replayHand(page);
+  const zoom = page.locator("#card-zoom");
+  await hand.first().click();
+  await expect(zoom).toBeVisible();
+  // dialog の close イベントは閉じたあとで届く。届く前に押す。
+  await hand.first().evaluate((card) => {
+    (document.querySelector("#card-zoom") as HTMLDialogElement).close();
+    (card as HTMLElement).click();
+  });
+  await expect(zoom).toBeVisible();
+  await expect(page.locator("#card-zoom-cards .card")).toHaveCount(1);
+});
+
 test.describe("タッチ端末", () => {
   test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
 
