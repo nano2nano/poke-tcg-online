@@ -531,6 +531,41 @@ test("画像を読めなかったカードは、候補の行に小さな面を�
   await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
 });
 
+/**
+ * `loading="lazy"` の画像は、隠れているあいだは頼まずに待つ。候補の一覧を隠しておき、デッキの行で
+ * 同じ画像が読めなかったと分かったら、一覧のカードも頼まずに画像を外すことを確かめる。
+ */
+test("読めなかった画像は、隠れて待っていた同じカードでも頼み直さない", async ({ page }) => {
+  const asked: string[] = [];
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  await page.route("**/api/card-image/*", (route) => {
+    asked.push(new URL(route.request().url()).pathname);
+    return route.fulfill({ status: 502, body: "" });
+  });
+  await page.goto("/");
+  const hiding = await page.addStyleTag({ content: "#card-results { display: none; }" });
+  await page.fill("#card-search", "エネルギー");
+  const row = page.locator("#card-results .card-row").last();
+  await expect(row.locator("img")).toHaveCount(1);
+  const defId = (await row.getAttribute("data-def-id")) as string;
+  const cards = (await (await page.request.get("/api/cards")).json()) as Record<
+    string,
+    { cardID?: string }
+  >;
+  const path = `/api/card-image/${cards[defId]?.cardID}`;
+  expect(asked).not.toContain(path);
+
+  await row.locator("button.add").dispatchEvent("click");
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+  await expect.poll(() => asked).toContain(path);
+  await expect(page.locator("#deck-cards .card-row .card")).toHaveCount(0);
+
+  await hiding.evaluate((style) => (style as HTMLStyleElement).remove());
+  await expect(row).toBeVisible();
+  await expect(row.locator(".card")).toHaveCount(0);
+  expect(asked.filter((each) => each === path)).toHaveLength(1);
+});
+
 /** サーバがプレイヤーを忘れていたときの答え。 */
 const accountMissing = {
   status: 404,

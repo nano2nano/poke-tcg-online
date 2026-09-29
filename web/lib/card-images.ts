@@ -16,8 +16,13 @@ const failedImages = new Set<string>();
 const spares = new Map<string, HTMLImageElement[]>();
 let sweeping = false;
 
-/** 読めなかったときに知らせる先。要素を使っている部品だけが受け取る。 */
-const owners = new WeakMap<HTMLImageElement, () => void>();
+/**
+ * 貸している要素と、読めなかったときに知らせる先。画像ごとに持つ。
+ *
+ * 1 枚が読めなかったら、同じ画像を貸している要素にもまとめて知らせる。`loading="lazy"` の要素は、
+ * 画面から遠いか隠れているあいだは頼まずに待つので、放っておくと失敗を知ったあとで同じ画像を頼み直す。
+ */
+const lent = new Map<string, Map<HTMLImageElement, () => void>>();
 
 export function imageUrl(enabled: boolean, cardID: string | undefined): string | null {
   if (!enabled || cardID === undefined) return null;
@@ -28,7 +33,9 @@ export function imageUrl(enabled: boolean, cardID: string | undefined): string |
 /** `src` の画像の要素を借りる。読めなかったら `onFailed` を呼ぶ。 */
 export function takeImage(src: string, onFailed: () => void): HTMLImageElement {
   const image = spares.get(src)?.pop() ?? createImage(src);
-  owners.set(image, onFailed);
+  const same = lent.get(src);
+  if (same === undefined) lent.set(src, new Map([[image, onFailed]]));
+  else same.set(image, onFailed);
   return image;
 }
 
@@ -38,13 +45,16 @@ export function takeImage(src: string, onFailed: () => void): HTMLImageElement {
  * 拾われなかったものは、コミットが済んだら捨てる。
  */
 export function releaseImage(image: HTMLImageElement): void {
-  owners.delete(image);
   image.remove();
   const src = image.getAttribute("src");
-  if (src === null || failedImages.has(src)) return;
-  const same = spares.get(src);
-  if (same === undefined) spares.set(src, [image]);
-  else same.push(image);
+  if (src === null) return;
+  const same = lent.get(src);
+  same?.delete(image);
+  if (same?.size === 0) lent.delete(src);
+  if (failedImages.has(src)) return;
+  const pooled = spares.get(src);
+  if (pooled === undefined) spares.set(src, [image]);
+  else pooled.push(image);
   if (sweeping) return;
   sweeping = true;
   queueMicrotask(() => {
@@ -61,7 +71,7 @@ function createImage(src: string): HTMLImageElement {
   image.decoding = "async";
   image.addEventListener("error", () => {
     failedImages.add(src);
-    owners.get(image)?.();
+    for (const onFailed of lent.get(src)?.values() ?? []) onFailed();
   });
   image.src = src;
   return image;
