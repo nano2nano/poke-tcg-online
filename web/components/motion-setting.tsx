@@ -1,4 +1,4 @@
-import { MotionConfig } from "motion/react";
+import { MotionConfig, useReducedMotion } from "motion/react";
 import { createContext, use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { MOVE_SECONDS } from "../lib/motion.js";
 
@@ -31,6 +31,12 @@ const MotionSetting = createContext<{ animate: boolean; setAnimate: (animate: bo
 /** 演出を出すか。画面の設定で切ったときだけ false になる。OS の設定は `MotionConfig` と CSS が見る。 */
 export function useAnimate(): boolean {
   return use(MotionSetting).animate;
+}
+
+/** カードや結果を動かして見せるか。画面の設定で切ったときと、OS で動きを減らす設定にしているときは動かさない。 */
+export function useMotionOn(): boolean {
+  const reduced = useReducedMotion() === true;
+  return useAnimate() && !reduced;
 }
 
 export function MotionSettingProvider({ children }: { children: ReactNode }) {
