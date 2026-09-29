@@ -55,27 +55,79 @@ button.danger {
   font-size: 0.9rem;
   margin: 8px 0 4px;
 }
-.revealed-deck h3 {
+/* 効果でカードを選ぶあいだ、候補を盤面の上に重ねて大きく並べる。狭い画面では下の端に出す。 */
+.choice-sheet {
+  position: fixed;
+  inset: auto 8px 8px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 70dvh;
+  padding: 12px;
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+}
+.choice-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  --w: 48px;
+}
+.choice-head > .move-prompt {
+  flex: 1;
+  margin: 0;
+}
+.choice-body {
+  min-height: 0;
+  overflow-y: auto;
+}
+.choice-body h3 {
   font-size: 0.9rem;
   margin: 0 0 4px;
 }
-.revealed-cards {
+.choice-cards {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  max-height: 40vh;
-  overflow-y: auto;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 8px;
+  --w: 96px;
 }
-.revealed-card {
-  --w: 44px;
+.choice-card {
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 2px;
+  width: calc(var(--w) + 8px);
+  padding: 4px;
   font-size: 0.75rem;
 }
-.revealed-card > .card[data-pickable="false"] {
+button.choice-card {
+  border: 2px solid transparent;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+button.choice-card > .card {
+  box-shadow:
+    0 0 0 2px #2b6cb0,
+    0 0 12px 2px rgb(43 108 176 / 0.6);
+}
+button.choice-card:hover,
+button.choice-card:focus-visible {
+  border-color: #2b6cb0;
+}
+.choice-card > .card[data-pickable="false"] {
   opacity: 0.45;
+}
+.choice-label {
+  text-align: center;
+}
+@media (max-width: 640px) {
+  .choice-cards {
+    --w: 64px;
+  }
 }
 .setup > button {
   margin-top: 10px;
@@ -464,6 +516,12 @@ button.secondary {
   flex-direction: column;
   align-items: center;
 }
+/* 効果で選べるポケモンは、押せば選べることが分かるようにする。 */
+.pokemon[data-choosable] > .card {
+  outline: 3px solid #2b6cb0;
+  outline-offset: 2px;
+  cursor: pointer;
+}
 /* 指せる手のボタンにマウスを載せると、その手が向かうポケモンを囲む。 */
 .pokemon.aimed > .card {
   outline: 3px solid #d69e2e;
@@ -480,9 +538,12 @@ button.secondary {
   outline-style: solid;
   outline-width: 5px;
 }
-/* つかめるカードは、つかめることが分かるようにする。 */
+/* 使えるカードは、ほかのカードゲームと同じく光らせ、つかめることが分かるようにする。 */
 .card[data-grippable] {
   cursor: grab;
+  box-shadow:
+    0 0 0 2px #2b6cb0,
+    0 0 12px 2px rgb(43 108 176 / 0.6);
 }
 /* タッチで押して選んだカードは、落とす先を押すまで持ち上げて見せる。 */
 .card[data-picked] {
@@ -720,6 +781,15 @@ button.secondary {
     margin: 8px 0 0;
   }
 
+  /* 選ぶカードは盤面の上に重ね、右の欄の時計と投了は隠さない。 */
+  .table > .choice-sheet {
+    position: relative;
+    inset: auto;
+    grid-area: board;
+    align-self: center;
+    max-height: 80%;
+    margin: 0 32px;
+  }
   .table > .board {
     grid-area: board;
     min-height: 0;

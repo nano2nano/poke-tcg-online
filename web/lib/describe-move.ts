@@ -260,7 +260,7 @@ function describeAnswer(
     case "accept":
       return "はい";
     case "decline":
-      return "いいえ";
+      return declineLabel(choice?.prompt?.kind);
     case "card":
       return cardWithPlace(answer.card, context);
     case "cardDef":
@@ -288,6 +288,19 @@ function describeAnswer(
       return `HP ${answer.value}`;
     default:
       return JSON.stringify(answer);
+  }
+}
+
+/** カードやポケモンを 1 つずつ選ぶ選択の「いいえ」は、そこで選ぶのをやめることになる。 */
+function declineLabel(prompt: string | undefined): string {
+  switch (prompt) {
+    case "selectCard":
+    case "selectFromHiddenZone":
+      return "選び終える";
+    case "selectInPlay":
+      return "選ばない";
+    default:
+      return "いいえ";
   }
 }
 
@@ -377,6 +390,81 @@ export function placementPrompt(placement: DeckPlacementView, cards: CardTable):
 function placementPlace(placement: DeckPlacementView): string {
   if (placement.edge === "bottom") return "山札のいちばん下";
   return placement.nth === 1 ? "山札のいちばん上" : `山札の上から ${placement.nth} 枚目`;
+}
+
+/** 選んだカードの行き先の言い方。エンジンの `ChoiceDestination` で引く。 */
+const PICK_PURPOSES: Record<string, string> = {
+  hand: "手札に加える",
+  bench: "ベンチに出す",
+  attach: "つける",
+  discard: "トラッシュする",
+  deckTop: "山札の上に置く",
+  deckBottom: "山札の下に置く",
+  lostZone: "ロストゾーンに置く",
+  prizes: "サイドに置く",
+};
+
+/**
+ * 効果の選択で、どのカードの効果で何を選んでいるのか。エンジンは 1 枚ずつ選ばせるので、書かないと、
+ * 何の効果の選択か、あと何枚選ぶのかがボタンからは読めない。枚数と行き先は、エンジンが書いた効果でだけ出す。
+ */
+export function choicePrompt(context: MoveContext): string {
+  const { view, cards } = context;
+  const choice = view?.choices.at(-1);
+  if (choice === undefined || choice.owner !== view?.viewer || choice.prompt === null) return "";
+  const { prompt } = choice;
+  if (choice.kind === "promote") return "バトル場に出すポケモンを選んでください。";
+  if (prompt.kind === "selectRetreatEnergy") {
+    return `にげるためにトラッシュするエネルギーを選んでください（あと ${prompt.remaining} 個）。`;
+  }
+  const shape = choice.context;
+  const source = shape?.source;
+  if (shape == null || source == null) return "";
+  let what: string;
+  if (prompt.kind === "selectInPlay") what = "ポケモンを選んでください";
+  else if (prompt.kind === "selectCard" || prompt.kind === "selectFromHiddenZone") {
+    const purpose = PICK_PURPOSES[shape.destination ?? ""] ?? "";
+    what = `${pickedFrom(prompt, context)}${purpose}カードを選んでください`;
+  } else what = "選んでください";
+  const unit = prompt.kind === "selectInPlay" ? "匹" : "枚";
+  const left =
+    shape.remaining === null
+      ? ""
+      : `（あと ${shape.remaining} ${unit}${shape.min === shape.max ? "" : "まで"}）`;
+  const picked = (shape.picked ?? []).map((defId) => nameOf(cards, defId)).join("、");
+  return `${source.label}：${what}${left}。${picked === "" ? "" : `選んだカード: ${picked}`}`;
+}
+
+const ZONE_NAMES: Record<string, string> = {
+  hand: "手札",
+  deck: "山札",
+  discard: "トラッシュ",
+  lost: "ロストゾーン",
+};
+
+type Prompt = NonNullable<ReaderView["choices"][number]["prompt"]>;
+
+/** 候補のあるゾーン。候補がどれも同じゾーンにあるときだけ書く。 */
+function pickedFrom(
+  prompt: Extract<Prompt, { kind: "selectCard" | "selectFromHiddenZone" }>,
+  context: MoveContext,
+): string {
+  const zoneName = (own: boolean, zone: string) => {
+    const name = ZONE_NAMES[zone];
+    return name === undefined ? null : `${own ? "" : "相手の"}${name}`;
+  };
+  let names: (string | null)[];
+  if (prompt.kind === "selectFromHiddenZone") {
+    const { zone } = prompt;
+    names = ["player" in zone ? zoneName(zone.player === context.view?.viewer, zone.kind) : null];
+  } else {
+    names = prompt.candidates.map((id) => {
+      const found = locateCard(id, context);
+      return found === null ? null : zoneName(found.own, found.zone);
+    });
+  }
+  const [name, ...rest] = new Set(names);
+  return rest.length === 0 && name != null ? `${name}から` : "";
 }
 
 /**

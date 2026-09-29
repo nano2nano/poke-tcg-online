@@ -77,7 +77,7 @@ export function CardFace({
   /** 卓に出ているカードの ID。同じ ID のカードが別の場所に描かれたら、前の場所から動かして見せる。 */
   instanceId?: string;
   posture?: string | undefined;
-  /** 山札から選ぶ効果で並べたカードが、いま選べるか。 */
+  /** 効果で選ぶカードとして並べたカードが、いま選べるか。 */
   pickable?: boolean;
   /** 一覧の行に添える小さな面。 */
   thumb?: boolean;
@@ -418,6 +418,12 @@ function PileZone({ name, label, pile }: { name: string; label: string; pile: Ca
   );
 }
 
+/** 効果で選べるポケモンと、盤面でそのポケモンを押したときに選ぶ関数。座席の画面だけが渡す。 */
+export const PokemonChoices = createContext<{
+  targets: ReadonlySet<string>;
+  choose: (inPlayId: string) => void;
+} | null>(null);
+
 /** 場のポケモン 1 匹。ついているカードは下からのぞかせ、ダメージと特殊状態は印で出す。 */
 function PokemonSlot({ pokemon, aimed }: { pokemon: Pokemon | null; aimed: AimedSet }) {
   if (pokemon === null) return <EmptySlot />;
@@ -471,6 +477,9 @@ function PokemonBox({
       ...pokemon.attached.map((card) => card.defId),
     ],
   });
+  // 効果で選べるポケモンは、押すと拡大せずに選ぶ。印刷の文字はマウスを載せるか長押しで読める。
+  const choices = use(PokemonChoices);
+  const choosable = choices?.targets.has(pokemon.inPlayId) === true;
   // ダメージの印やついているカードも、ポケモンと一緒に動かす。
   return (
     <motion.div
@@ -480,6 +489,8 @@ function PokemonBox({
       {...moving}
       className={aimed.has(pokemon.inPlayId) ? "pokemon aimed zoomable" : "pokemon zoomable"}
       {...zoomable}
+      {...(choosable && { onClick: () => choices?.choose(pokemon.inPlayId) })}
+      data-choosable={choosable ? "" : undefined}
       data-in-play-id={pokemon.inPlayId}
       data-damage={pokemon.damage}
       data-drop={dropping}
