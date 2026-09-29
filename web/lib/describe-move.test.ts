@@ -140,6 +140,33 @@ describe("choicePrompt", () => {
     );
   });
 
+  it("カードやポケモンを選ぶのでなければ、枚数を書かない", () => {
+    const confirm = { ...shape, picked: null };
+    expect(promptFor({ kind: "confirm", count: 1 }, confirm)).toBe("効果の元：選んでください。");
+  });
+
+  it("選ぶのをやめる答えは、先に選んだカードがあれば「選び終える」、無ければ「選ばない」", () => {
+    ensureCards();
+    const view = viewFor(newMatch("describe-move-prompt"), 0);
+    const decline = (picked: string[] | null) => {
+      const choice = {
+        choiceId: "c1",
+        owner: 0,
+        kind: "card-effect",
+        optional: true,
+        prompt: { kind: "selectFromHiddenZone", zone: { kind: "deck", player: 0 }, candidates: [] },
+        context: { ...shape, picked },
+      };
+      return describeMove(
+        { type: "AnswerChoice", player: 0, choiceId: "c1", answer: { kind: "decline" } },
+        { view: { ...view, choices: [choice] } as PlayerView, cards: {} },
+      );
+    };
+    expect(decline(["選んだ"])).toBe("選び終える");
+    expect(decline([])).toBe("選ばない");
+    expect(decline(null)).toBe("選ばない");
+  });
+
   it("効果の元が分からない選択には書かない", () => {
     expect(promptFor({ kind: "selectInPlay", candidates: [] }, null)).toBe("");
   });

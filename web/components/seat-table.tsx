@@ -604,6 +604,8 @@ function ChoiceSheet({
                 <button
                   key={button.key}
                   className="choice-card"
+                  // カードの面の説明まで読むと長いので、手の見出しだけを読ませる。
+                  aria-label={button.label}
                   data-count={count}
                   disabled={disabled}
                   aria-disabled={awaiting}

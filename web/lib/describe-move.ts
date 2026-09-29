@@ -261,7 +261,7 @@ function describeAnswer(
     case "accept":
       return "はい";
     case "decline":
-      return declineLabel(choice?.prompt?.kind);
+      return declineLabel(choice?.prompt?.kind, (choice?.context?.picked?.length ?? 0) > 0);
     case "card":
       return cardWithPlace(answer.card, context);
     case "cardDef":
@@ -292,14 +292,16 @@ function describeAnswer(
   }
 }
 
-/** カードやポケモンを 1 つずつ選ぶ選択の「いいえ」は、そこで選ぶのをやめることになる。 */
-function declineLabel(prompt: string | undefined): string {
+/**
+ * カードやポケモンを 1 つずつ選ぶ選択の「いいえ」は、選ばずに進むことになる。この効果で先に選んだカードが
+ * 分かっていれば、選ぶのをやめることになる。
+ */
+function declineLabel(prompt: string | undefined, picked: boolean): string {
   switch (prompt) {
     case "selectCard":
     case "selectFromHiddenZone":
-      return "選び終える";
     case "selectInPlay":
-      return "選ばない";
+      return picked ? "選び終える" : "選ばない";
     default:
       return "いいえ";
   }
@@ -421,16 +423,19 @@ export function choicePrompt(context: MoveContext): string {
   const shape = choice.context;
   const source = shape?.source;
   if (shape == null || source == null) return "";
-  let what: string;
-  if (prompt.kind === "selectInPlay") what = "ポケモンを選んでください";
-  else if (prompt.kind === "selectCard" || prompt.kind === "selectFromHiddenZone") {
+  let what = "選んでください";
+  let unit: string | null = null;
+  if (prompt.kind === "selectInPlay") {
+    what = "ポケモンを選んでください";
+    unit = "匹";
+  } else if (prompt.kind === "selectCard" || prompt.kind === "selectFromHiddenZone") {
     const purpose =
       DESTINATION_PHRASES[CHOICE_DESTINATIONS[shape.destination ?? ""] ?? ""]?.("") ?? "";
     what = `${pickedFrom(prompt, context)}${purpose}カードを選んでください`;
-  } else what = "選んでください";
-  const unit = prompt.kind === "selectInPlay" ? "匹" : "枚";
+    unit = "枚";
+  }
   const left =
-    shape.remaining === null
+    shape.remaining === null || unit === null
       ? ""
       : `（あと ${shape.remaining} ${unit}${shape.min === shape.max ? "" : "まで"}）`;
   const picked = (shape.picked ?? []).map((defId) => nameOf(cards, defId)).join("、");
