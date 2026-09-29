@@ -473,6 +473,25 @@ button.secondary {
   outline: 3px solid #d69e2e;
   outline-offset: 2px;
 }
+/* つかんだカードを落とせる先を破線で囲み、上に来た先は太い実線にする。カードの絵には色を重ねない。 */
+.zone[data-drop],
+.pokemon[data-drop] > .card {
+  outline: 3px dashed #2b6cb0;
+  outline-offset: 2px;
+}
+.zone[data-drop="over"],
+.pokemon[data-drop="over"] > .card {
+  outline-style: solid;
+  outline-width: 5px;
+}
+/* つかめるカードは、つかめることが分かるようにする。 */
+.card[data-grippable] {
+  cursor: grab;
+}
+:root[data-dragging] .card-preview {
+  display: none;
+}
+
 /* 倒したカードが隣へはみ出さないよう、縦と横の差のぶんを空けておく。 */
 .zone.active .pokemon {
   padding: 0 calc(var(--w) * 0.2);

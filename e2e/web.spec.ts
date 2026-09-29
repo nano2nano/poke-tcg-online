@@ -1,14 +1,27 @@
 /** 画面（`web/`）のテストの続き。1 つのファイルが長くなりすぎないよう、`client.spec.ts` から分けている。 */
 
 import { createHash } from "node:crypto";
-import { expect, test, type Page, type WebSocket, type WebSocketRoute } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type WebSocket,
+  type WebSocketRoute,
+} from "@playwright/test";
 import type { Bot } from "../src/bots.js";
-import { legalMoves, loadGeneratedCards, type Player, type PlayerView } from "../src/engine.js";
+import {
+  legalMoves,
+  loadGeneratedCards,
+  type Move,
+  type Player,
+  type PlayerView,
+} from "../src/engine.js";
 import { MatchHub } from "../src/hub.js";
 import type { Seated } from "../src/lobby.js";
 import { concede, createMatch, submitMove, toMove, viewFor } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
-import { ensureCards, legalDecks, newMatch } from "../tests/helpers.js";
+import { ensureCards, finishSetup, legalDecks, newMatch } from "../tests/helpers.js";
 
 test("画面を開くとロビーが描け、アセットに無いパスでも画面の骨組みが返る", async ({ page }) => {
   const errors: Error[] = [];
@@ -870,51 +883,52 @@ test("ねむりのポケモンは、カードを左へ倒して描く", async ({
 });
 
 /**
- * 覚えている座席で画面を開き、サーバの代わりに `view` の局面を送って、時計を止める。
- * 返す関数は、同じ局面にイベントを載せて、続けて局面を送る。
+ * 覚えている座席の代わりに、サーバとして `view` の局面を送る。`sent` は画面が送ってきた手。
+ * 返す `send` は、イベントを載せて続けて局面を送る。
  */
-async function seatWithEvents(page: Page, view: PlayerView) {
-  await page.clock.install();
-  await page.addInitScript(() => {
-    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "演出の座席" }));
-  });
-  const moves = { legalMoves: null, setup: null, deckPlacement: null, answerDestinations: null };
+async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = null) {
+  await page.addInitScript((seat) => {
+    localStorage.setItem("poke-seat", JSON.stringify({ seat, seatToken: "差し替えた座席" }));
+  }, view.viewer);
+  const choices = { setup: null, deckPlacement: null, answerDestinations: null };
   const clock = { bankMs: [600_000, 600_000], moveRemainingMs: null, toMove: null };
   let version = 1;
   let socket: WebSocketRoute | null = null;
+  const sent: Move[] = [];
+  /** 手と一緒に送ってきた、見せた手の位置。 */
+  const offers: (number[] | undefined)[] = [];
   await page.routeWebSocket(
     (url) => url.searchParams.has("seatToken"),
     (route) => {
       socket = route;
+      route.onMessage((raw) => {
+        const message = JSON.parse(String(raw));
+        if (message.t !== "move") return;
+        sent.push(message.move);
+        offers.push(message.offered);
+      });
       // 座席からは何も送らなくても、繋がったらサーバが局面一式を送る。
       route.send(
         JSON.stringify({
           t: "sync",
-          matchId: "演出の対戦",
-          seat: 0,
+          matchId: "差し替えた対戦",
+          seat: view.viewer,
           stateVersion: version,
           view,
-          ...moves,
+          legalMoves: offered,
+          ...choices,
           revealedDeck: null,
           mulligans: [],
-          firstPlayer: 0,
+          firstPlayer: view.viewer,
           clock,
           seedCommit: "0".repeat(64),
-          spectatorToken: "演出の観戦",
+          spectatorToken: "差し替えた観戦",
         }),
       );
     },
   );
-  await page.goto("/");
-  await expect(page.locator("#self .mat")).toBeVisible();
-  const now = await page.evaluate(() => Date.now());
-  await page.clock.pauseAt(now + 1_000);
-  // 先攻を知らせる結果を消しておく。
-  await page.clock.runFor(10_000);
-  await expect(page.locator("#results .result")).toHaveCount(0);
-
   const header = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
-  return (events: Record<string, unknown>[], next: PlayerView = view) => {
+  const send = (events: Record<string, unknown>[], next: PlayerView = view) => {
     version += 1;
     socket!.send(
       JSON.stringify({
@@ -922,12 +936,28 @@ async function seatWithEvents(page: Page, view: PlayerView) {
         stateVersion: version,
         events: events.map((event) => ({ ...header, actor: null, source: null, ...event })),
         view: next,
-        ...moves,
+        legalMoves: null,
+        ...choices,
         revealedDeck: null,
         clock,
       }),
     );
   };
+  return { sent, offers, send };
+}
+
+/** 覚えている座席で画面を開き、サーバの代わりに `view` の局面を送って、時計を止める。 */
+async function seatWithEvents(page: Page, view: PlayerView) {
+  await page.clock.install();
+  const { send } = await mockSeat(page, view);
+  await page.goto("/");
+  await expect(page.locator("#self .mat")).toBeVisible();
+  const now = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(now + 1_000);
+  // 先攻を知らせる結果を消しておく。
+  await page.clock.runFor(10_000);
+  await expect(page.locator("#results .result")).toHaveCount(0);
+  return send;
 }
 
 function activeOf(view: PlayerView) {
@@ -1086,6 +1116,196 @@ test("画面で演出を切ると、結果を待たせずに出し、切った�
 
   await page.reload();
   await expect(page.locator("#motion-toggle")).not.toBeChecked();
+});
+
+/** 準備を終え、最初の番の手を持つ座席から見た盤面と、その手。 */
+function firstTurn(): { view: PlayerView; moves: Move[] } {
+  ensureCards();
+  const match = newMatch("drag");
+  finishSetup(match);
+  return { view: viewFor(match, toMove(match) as Player), moves: legalMoves(match.state) };
+}
+
+/** エネルギーをつける手と、そのエネルギーが手札の何枚目か。 */
+function attaching({ view, moves }: { view: PlayerView; moves: Move[] }) {
+  const move = moves.find((each) => each.type === "AttachEnergy");
+  if (move?.type !== "AttachEnergy") throw new Error("エネルギーをつける手が無い");
+  const hand = "hand" in view.self ? view.self.hand : [];
+  const index = hand.findIndex((card) => card.instanceId === move.cardInstanceId);
+  return { move, index, defId: hand[index]!.defId };
+}
+
+/** マウスで `from` をつかんで `to` の上まで動かす。離すかどうかは呼ぶ側が決める。 */
+async function dragOver(page: Page, from: Locator, to: Locator) {
+  const [start, end] = [await from.boundingBox(), await to.boundingBox()];
+  if (start === null || end === null) throw new Error("つかむカードか落とす先が描けていない");
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 20 });
+}
+
+test("手札のエネルギーをポケモンへ落とすと、つける手を指す", async ({ page }) => {
+  const turn = firstTurn();
+  const { move, index, defId } = attaching(turn);
+  const { sent } = await mockSeat(page, turn.view, turn.moves);
+  await page.goto("/");
+  const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+  await expect(card).toHaveAttribute("data-grippable");
+  const target = page.locator(`#self .pokemon[data-in-play-id="${move.target}"]`);
+
+  await dragOver(page, card, target);
+  // つかんでいるあいだは、落とせる先を囲み、上に来ている先は囲みを太くする。
+  await expect(target).toHaveAttribute("data-drop", "over");
+  await expect(page.locator('#self [data-zone="bench"]')).not.toHaveAttribute("data-drop");
+  await page.mouse.up();
+
+  await expect.poll(() => sent.length).toBe(1);
+  const played = sent[0]!;
+  expect(played).toMatchObject({ type: "AttachEnergy", target: move.target });
+  // 同じカードが何枚あっても、指すのはどれか 1 枚をつける手である。
+  const hand = "hand" in turn.view.self ? turn.view.self.hand : [];
+  const attached = "cardInstanceId" in played ? played.cardInstanceId : null;
+  expect(hand.find((each) => each.instanceId === attached)?.defId).toBe(defId);
+  await expect(target).not.toHaveAttribute("data-drop");
+});
+
+test("落とした先でできる手が 2 つ以上あれば、ボタンをそれだけに絞って選ばせる", async ({
+  page,
+}) => {
+  const turn = firstTurn();
+  const { move, index } = attaching(turn);
+  const tool: Move = { ...move, type: "AttachTool" };
+  const player = move.player;
+  const moves: Move[] = [move, tool, { type: "EndTurn", player }];
+  const { sent, offers } = await mockSeat(page, turn.view, moves);
+  await page.goto("/");
+  const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+  const target = page.locator(`#self .pokemon[data-in-play-id="${move.target}"]`);
+  const buttons = page.locator("#moves button");
+  await expect(buttons).toHaveCount(3);
+
+  await dragOver(page, card, target);
+  await page.mouse.up();
+  await expect(page.locator("#drop-prompt")).toBeVisible();
+  await expect(buttons).toHaveCount(2);
+  expect(sent).toEqual([]);
+  await page.click("#drop-widen");
+  await expect(buttons).toHaveCount(3);
+  await expect(page.locator("#drop-prompt")).toHaveCount(0);
+
+  await dragOver(page, card, target);
+  await page.mouse.up();
+  await buttons.nth(1).click();
+  await expect.poll(() => sent).toEqual([tool]);
+  // 記録には、絞って見せた 2 つの手だけを見せたと残す。
+  expect(offers).toEqual([[0, 1]]);
+});
+
+test("ベンチのポケモンの上で離しても、ベンチに出す手を指す", async ({ page }) => {
+  const turn = firstTurn();
+  const { index } = attaching(turn);
+  const view = structuredClone(turn.view);
+  const { copy } = anotherPokemon([view], 0);
+  view.self.bench = [copy];
+  const hand = "hand" in view.self ? view.self.hand : [];
+  // 盤面の判断はしないので、手札のどのカードでも、サーバが出した手のとおりに落とせる。
+  const bench: Move = {
+    type: "PlayBasic",
+    player: view.viewer,
+    cardInstanceId: hand[index]!.instanceId,
+    to: { kind: "bench", player: view.viewer, index: 1 },
+  };
+  const { sent } = await mockSeat(page, view, [bench]);
+  await page.goto("/");
+  const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+  const benched = page.locator(`#self .pokemon[data-in-play-id="${copy.inPlayId}"]`);
+
+  await dragOver(page, card, benched);
+  await expect(page.locator('#self [data-zone="bench"]')).toHaveAttribute("data-drop", "over");
+  await page.mouse.up();
+  await expect.poll(() => sent).toEqual([bench]);
+});
+
+test("ポケモンの横で離すと、カードの面がポケモンに重なっていても何も指さない", async ({ page }) => {
+  const turn = firstTurn();
+  const { move, index } = attaching(turn);
+  const { sent } = await mockSeat(page, turn.view, turn.moves);
+  await page.goto("/");
+  const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+  const target = page.locator(`#self .pokemon[data-in-play-id="${move.target}"]`);
+  const [start, end] = [await card.boundingBox(), await target.boundingBox()];
+  if (start === null || end === null) throw new Error("カードかポケモンが描けていない");
+
+  // つかんだ位置はカードの真ん中なので、ポケモンの左の端から少し外で離すと、カードの右半分が重なる。
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x - 8, end.y + end.height / 2, { steps: 20 });
+  await expect(target).toHaveAttribute("data-drop", "ready");
+  await page.mouse.up();
+  await expect(target).not.toHaveAttribute("data-drop");
+  expect(sent).toEqual([]);
+});
+
+test("落とせない先で離すと、何も指さない。押しただけなら、カードを大きく出す", async ({ page }) => {
+  const turn = firstTurn();
+  const { index } = attaching(turn);
+  const { sent } = await mockSeat(page, turn.view, turn.moves);
+  await page.goto("/");
+  const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+  await expect(card).toHaveAttribute("data-grippable");
+
+  await dragOver(page, card, page.locator('#self [data-zone="discard"]'));
+  await page.mouse.up();
+  await expect(page.locator("#drop-prompt")).toHaveCount(0);
+  await expect(page.locator("#card-zoom")).toBeHidden();
+
+  // 押したまましばらく待っても、動かさなければつかまない。
+  const box = await card.boundingBox();
+  if (box === null) throw new Error("カードが描けていない");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(500);
+  await expect(page.locator("#self [data-drop]")).toHaveCount(0);
+  await page.mouse.up();
+  await expect(page.locator("#card-zoom")).toBeVisible();
+  expect(sent).toEqual([]);
+});
+
+test.describe("タッチ端末の座席", () => {
+  test.use({ hasTouch: true });
+
+  test("長押ししてから指をずらしても、カードはつかまない", async ({ page }) => {
+    const turn = firstTurn();
+    const { move, index } = attaching(turn);
+    const { sent } = await mockSeat(page, turn.view, turn.moves);
+    await page.goto("/");
+    const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+    await expect(card).toHaveAttribute("data-grippable");
+    const [from, to] = [
+      await card.boundingBox(),
+      await page.locator(`#self .pokemon[data-in-play-id="${move.target}"]`).boundingBox(),
+    ];
+    if (from === null || to === null) throw new Error("カードかポケモンが描けていない");
+
+    // Playwright の `tap` は置いてすぐ離すので、CDP で指を置く。
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+      });
+    await touch("touchStart", from.x + from.width / 2, from.y + from.height / 2);
+    await page.waitForTimeout(500);
+    for (let step = 1; step <= 10; step += 1) {
+      const x = from.x + from.width / 2 + ((to.x - from.x) * step) / 10;
+      const y = from.y + from.height / 2 + ((to.y - from.y) * step) / 10;
+      await touch("touchMove", x, y);
+    }
+    await expect(page.locator("#self [data-drop]")).toHaveCount(0);
+    await touch("touchEnd", 0, 0);
+    await page.waitForTimeout(200);
+    expect(sent).toEqual([]);
+  });
 });
 
 test("載せているカードが別のカードに描き替わったら、プレビューも替える", async ({ page }) => {

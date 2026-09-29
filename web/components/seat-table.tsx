@@ -11,10 +11,12 @@ import {
   setupPrompt,
   type MoveContext,
 } from "../lib/describe-move.js";
+import { NO_DROPS, planDrops } from "../lib/card-drops.js";
 import { setupOffer, type SeatState } from "../lib/match-state.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
 import { Board, CardFace, NOTHING_AIMED, SideBoard, Stadium } from "./board.js";
+import type { CardDrops } from "./card-drag.js";
 import { EventLog } from "./event-log.js";
 import { MotionToggle } from "./motion-setting.js";
 import { NoticeLayer, useNotices } from "./notices.js";
@@ -47,14 +49,29 @@ export function SeatTable({
   const [aim, setAim] = useState<Aim>({ hovered: null, focused: null });
   // 一覧が変わったら、消えたボタンの狙いを捨てる。消えたボタンからはマウスが離れた知らせが来ないので、
   // 残すと、同じ手があとでまた並んだときに、載せていないのに囲む。残ったボタンの狙いはそのまま囲む。
+  // カードを落とした先で指せる手が 2 つ以上あれば、ボタンをそれだけに絞って選ばせる。
+  const [narrowed, setNarrowed] = useState<readonly string[] | null>(null);
   const [aimFor, setAimFor] = useState(listed);
   if (aimFor !== listed) {
     setAimFor(listed);
+    setNarrowed(null);
     const keys = new Set(listed.buttons.map(({ key }) => key));
     const kept = (key: string | null) => (key !== null && keys.has(key) ? key : null);
     setAim((current) => ({ hovered: kept(current.hovered), focused: kept(current.focused) }));
   }
   const disabled = connection !== null;
+  const plan = useMemo(() => planDrops(listed.buttons, context), [listed, context]);
+  const drops: CardDrops = {
+    plan: disabled || seating.awaiting ? NO_DROPS : plan,
+    onDrop: (keys) => {
+      if (keys.length > 1) {
+        setNarrowed(keys);
+        return;
+      }
+      const button = listed.buttons.find(({ key }) => key === keys[0]);
+      if (button !== undefined) playMove(seating, listed.offered, button.move);
+    },
+  };
   const aimed = useMemo(() => {
     const targets = listed.buttons
       .filter(({ key }) => key === aim.hovered || key === aim.focused)
@@ -108,6 +125,7 @@ export function SeatTable({
           near={view?.self ?? null}
           far={view?.opponent ?? null}
           stadium={view?.stadium ?? null}
+          drops={drops}
         >
           <div className="board-side">
             <h2>相手</h2>
@@ -121,7 +139,7 @@ export function SeatTable({
           <div className="board-side">
             <h2>自分</h2>
             <div id="self">
-              {view !== null && <SideBoard side={view.self} mirrored={false} aimed={aimed} />}
+              {view !== null && <SideBoard side={view.self} mirrored={false} aimed={aimed} drops />}
             </div>
           </div>
         </Board>
@@ -133,6 +151,8 @@ export function SeatTable({
             seating={seating}
             context={context}
             listed={listed}
+            narrowed={narrowed}
+            onWiden={() => setNarrowed(null)}
             disabled={disabled}
             onAim={onAim}
           />
@@ -221,20 +241,36 @@ function listMoves(
   };
 }
 
+/** `offered` は、見せた手の `legalMoves` での位置。すべて見せたなら undefined。 */
+function playMove({ state, send }: Seating, offered: number[] | undefined, move: Move) {
+  send({
+    t: "move",
+    stateVersion: state.stateVersion,
+    move,
+    ...(offered === undefined ? {} : { offered }),
+  });
+}
+
 /** 対戦が終わっていれば、待ちも選ぶものも無い。 */
 function Moves({
-  seating: { state, awaiting, send, choose },
+  seating,
   context,
   listed,
+  narrowed,
+  onWiden,
   disabled,
   onAim,
 }: {
   seating: Seating;
   context: MoveContext;
   listed: Listed;
+  /** カードを落とした先で指せる手。あれば、ボタンをそれだけにする。 */
+  narrowed: readonly string[] | null;
+  onWiden: () => void;
   disabled: boolean;
   onAim: (kind: "hovered" | "focused", key: string | null) => void;
 }) {
+  const { state, awaiting, send, choose } = seating;
   const { view, legalMoves: moves, setup, deckPlacement: placement, revealedDeck } = state;
   const table = context.cards;
   const playing = state.ended === null;
@@ -244,13 +280,10 @@ function Moves({
       ? placementPrompt(placement, table)
       : setupPrompt(context, moves !== null, setup);
 
-  const play = (move: Move) =>
-    send({
-      t: "move",
-      stateVersion: state.stateVersion,
-      move,
-      ...(listed.offered === undefined ? {} : { offered: listed.offered }),
-    });
+  const buttons =
+    narrowed === null ? listed.buttons : listed.buttons.filter(({ key }) => narrowed.includes(key));
+  // 絞ったときは、絞って見せた手だけを見せたことにする。
+  const offered = narrowed === null ? listed.offered : buttons.map(({ index }) => index);
 
   return (
     <>
@@ -270,18 +303,26 @@ function Moves({
         disabled={disabled}
         awaiting={awaiting}
       />
+      {narrowed !== null && (
+        <p id="drop-prompt" className="move-prompt">
+          落とした先でできる手がいくつかあります。どれにするか選んでください。{" "}
+          <button id="drop-widen" className="secondary" onClick={onWiden}>
+            ほかの手も出す
+          </button>
+        </p>
+      )}
       <div id="moves" className="moves">
         {moves === null
           ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
             playing && view !== null && view.phase !== "setup" && <WaitingNote state={state} />
-          : listed.buttons.map(({ move, key, label }) => (
+          : buttons.map(({ move, key, label }) => (
               <button
                 key={key}
                 disabled={disabled}
                 // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
                 aria-disabled={awaiting}
                 onClick={() => {
-                  if (!awaiting) play(move);
+                  if (!awaiting) playMove(seating, offered, move);
                 }}
                 onPointerEnter={() => onAim("hovered", key)}
                 onPointerLeave={() => onAim("hovered", null)}

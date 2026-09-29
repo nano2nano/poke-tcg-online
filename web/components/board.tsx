@@ -9,6 +9,7 @@ import {
   createContext,
   memo,
   use,
+  useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -24,8 +25,22 @@ import type { CardInstance, SpectatorView } from "../../src/engine.js";
 import { imageUrl, releaseImage, takeImage } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
 import { cardSubtitle, conditionName, describeCard, nameOf, type Side } from "../lib/describe.js";
+import {
+  ACTIVE_SPOT,
+  BENCH_SPOT,
+  PLAY_SPOT,
+  pokemonSpot,
+  type DropSpot,
+} from "../lib/card-drops.js";
 import { SETTLE_MS } from "../lib/motion.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
+import {
+  CardDragArea,
+  useCardGrip,
+  useDropSpot,
+  useInDragArea,
+  type CardDrops,
+} from "./card-drag.js";
 
 type Pokemon = NonNullable<Side["active"]>;
 
@@ -50,6 +65,8 @@ export function CardFace({
   pickable,
   thumb,
   zoom,
+  gripRef,
+  grippable,
   onImageFailed,
 }: {
   defId: string;
@@ -61,6 +78,10 @@ export function CardFace({
   /** 一覧の行に添える小さな面。 */
   thumb?: boolean;
   zoom?: ZoomTarget;
+  /** つかんで盤面へ落とせる手札のカードなら、つかむ側へ要素を渡す。 */
+  gripRef?: (element: Element | null) => void;
+  /** いま、つかんで盤面へ落とせるか。 */
+  grippable?: boolean;
   onImageFailed?: () => void;
 }) {
   const { table, images } = useCardData();
@@ -69,6 +90,13 @@ export function CardFace({
   // 読めなかった画像は `imageUrl` が覚えているので、描き直せば名前の面になる。
   const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
   const face = useRef<HTMLDivElement>(null);
+  const attach = useCallback(
+    (element: HTMLDivElement | null) => {
+      face.current = element;
+      gripRef?.(element);
+    },
+    [gripRef],
+  );
   const frame = use(BoardFrame);
   const moving = useMovingMark(face, frame);
   const zoomable = useZoomable(zoom);
@@ -88,7 +116,7 @@ export function CardFace({
   if (thumb === true && src === null) return null;
   const classes = ["card", thumb === true && "thumb", zoom !== undefined && "zoomable"];
   const props = {
-    ref: face,
+    ref: attach,
     className: classes.filter(Boolean).join(" "),
     ...zoomable,
     "data-def-id": defId,
@@ -96,6 +124,7 @@ export function CardFace({
     "data-type": card?.type,
     "data-half": card?.stadiumHalf,
     "data-pickable": pickable === undefined ? undefined : String(pickable),
+    "data-grippable": grippable === true ? "" : undefined,
   };
   const children = (
     <>
@@ -170,27 +199,52 @@ export function EmptySlot() {
   return <div className="card empty" />;
 }
 
-export function Zone({
-  name,
-  label,
-  count = null,
-  style,
-  zoom,
-  children,
-}: {
+interface ZoneProps {
   name: string;
   label: string;
   count?: number | null;
   style?: CSSProperties;
   zoom?: ZoomTarget | undefined;
+  /** 手札のカードをここへ落として指す手の、落とす先。 */
+  drop?: DropSpot | undefined;
   children: ReactNode;
+}
+
+export function Zone({ drop, ...props }: ZoneProps) {
+  const inDragArea = useInDragArea();
+  return drop !== undefined && inDragArea ? (
+    <DropZone spot={drop} {...props} />
+  ) : (
+    <ZoneBox {...props} />
+  );
+}
+
+function DropZone({ spot, ...props }: Omit<ZoneProps, "drop"> & { spot: DropSpot }) {
+  const { attach, drop } = useDropSpot(spot);
+  return <ZoneBox {...props} attach={attach} dropping={drop} />;
+}
+
+function ZoneBox({
+  name,
+  label,
+  count = null,
+  style,
+  zoom,
+  attach,
+  dropping,
+  children,
+}: Omit<ZoneProps, "drop"> & {
+  attach?: (element: Element | null) => void;
+  dropping?: string | undefined;
 }) {
   const zoomable = useZoomable(zoom);
   return (
     <div
+      ref={attach}
       className={zoom === undefined ? `zone ${name}` : `zone ${name} zoomable`}
       {...zoomable}
       data-zone={name}
+      data-drop={dropping}
       data-count={count === null ? undefined : String(count)}
       style={style}
     >
@@ -225,15 +279,39 @@ function PokemonSlot({ pokemon, aimed }: { pokemon: Pokemon | null; aimed: Aimed
   return <ShownPokemon pokemon={pokemon} aimed={aimed} />;
 }
 
-function ShownPokemon({
-  pokemon,
-  aimed,
-}: {
+interface ShownPokemonProps {
   pokemon: Extract<Pokemon, { inPlayId: string }>;
   aimed: AimedSet;
+}
+
+function ShownPokemon(props: ShownPokemonProps) {
+  const inDragArea = useInDragArea();
+  return inDragArea ? <DropPokemon {...props} /> : <PokemonBox {...props} />;
+}
+
+function DropPokemon(props: ShownPokemonProps) {
+  const { attach, drop } = useDropSpot(pokemonSpot(props.pokemon.inPlayId));
+  return <PokemonBox {...props} dropOn={attach} dropping={drop} />;
+}
+
+function PokemonBox({
+  pokemon,
+  aimed,
+  dropOn,
+  dropping,
+}: ShownPokemonProps & {
+  dropOn?: (element: Element | null) => void;
+  dropping?: string | undefined;
 }) {
   const { table } = useCardData();
   const self = useRef<HTMLDivElement>(null);
+  const attach = useCallback(
+    (element: HTMLDivElement | null) => {
+      self.current = element;
+      dropOn?.(element);
+    },
+    [dropOn],
+  );
   const frame = use(BoardFrame);
   const moving = useMovingMark(self, frame);
   const top = pokemon.stack[pokemon.stack.length - 1]!;
@@ -250,7 +328,7 @@ function ShownPokemon({
   // ダメージの印やついているカードも、ポケモンと一緒に動かす。
   return (
     <motion.div
-      ref={self}
+      ref={attach}
       layoutId={`pokemon ${pokemon.inPlayId}`}
       layoutDependency={frame}
       {...moving}
@@ -258,6 +336,7 @@ function ShownPokemon({
       {...zoomable}
       data-in-play-id={pokemon.inPlayId}
       data-damage={pokemon.damage}
+      data-drop={dropping}
     >
       {/* 上のカードが替わったら別の要素として描き、手札に見えていたカードならそこから動かす。 */}
       <CardFace
@@ -285,6 +364,9 @@ function ShownPokemon({
   );
 }
 
+/** つかんでいるあいだ、ポインタに付いて動かすカード。 */
+const heldCard = (defId: string) => <CardFace defId={defId} />;
+
 /**
  * 描いている局面。カードはこれが変わったときだけ位置を測り直す。指せる手のボタンにマウスを載せるたびに
  * 盤面を描き直すが、そのたびに全部のカードを測らない。
@@ -300,22 +382,34 @@ export function Board({
   near,
   far,
   stadium,
+  drops,
   children,
 }: {
   name: string;
   near: Side | null;
   far: Side | null;
   stadium: SpectatorView["stadium"];
+  /** 手札のカードをつかんで落とし、手を指せる盤面なら渡す。 */
+  drops?: CardDrops;
   children: ReactNode;
 }) {
   const frame = useMemo(() => ({ near, far, stadium }), [near, far, stadium]);
+  const body = (
+    // 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。
+    <motion.div className="board" layoutScroll layoutDependency={frame}>
+      {children}
+    </motion.div>
+  );
   return (
     <LayoutGroup id={name}>
       <BoardFrame value={frame}>
-        {/* 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。 */}
-        <motion.div className="board" layoutScroll layoutDependency={frame}>
-          {children}
-        </motion.div>
+        {drops === undefined ? (
+          body
+        ) : (
+          <CardDragArea drops={drops} overlay={heldCard}>
+            {body}
+          </CardDragArea>
+        )}
       </BoardFrame>
     </LayoutGroup>
   );
@@ -331,9 +425,12 @@ export const SideBoard = memo(function SideBoard({
   side,
   mirrored,
   aimed = NOTHING_AIMED,
+  drops = false,
 }: {
   side: Side;
   mirrored: boolean;
+  /** 手札のカードを、この側のバトル場とベンチへ落とせるか。 */
+  drops?: boolean;
   /** 指せる手のボタンが狙っているポケモン。盤面のそのポケモンを囲む。 */
   aimed?: AimedSet;
 }) {
@@ -363,7 +460,7 @@ export const SideBoard = memo(function SideBoard({
         </Zone>
       </div>
       <div className="field">
-        <Zone name="active" label="バトル場">
+        <Zone name="active" label="バトル場" drop={drops ? ACTIVE_SPOT : undefined}>
           {/* 入れ替わったポケモンは別の要素として描く。同じ要素のまま layoutId だけ変えても Motion は追わない。 */}
           <PokemonSlot
             key={side.active !== null && "inPlayId" in side.active ? side.active.inPlayId : "none"}
@@ -371,7 +468,7 @@ export const SideBoard = memo(function SideBoard({
             aimed={aimed}
           />
         </Zone>
-        <Zone name="bench" label="ベンチ">
+        <Zone name="bench" label="ベンチ" drop={drops ? BENCH_SPOT : undefined}>
           {bench.length === 0 ? (
             <EmptySlot />
           ) : (
@@ -403,14 +500,7 @@ export const SideBoard = memo(function SideBoard({
       style={{ "--cards": String(handCount) } as CSSProperties}
     >
       {"hand" in side
-        ? side.hand.map((card) => (
-            <CardFace
-              key={card.instanceId}
-              defId={card.defId}
-              instanceId={card.instanceId}
-              zoom={{ title: "手札", defIds: [card.defId] }}
-            />
-          ))
+        ? side.hand.map((card) => <HandCard key={card.instanceId} card={card} />)
         : Array.from({ length: handCount }, (_, index) => <CardBack key={index} />)}
     </Zone>
   );
@@ -428,9 +518,36 @@ export const SideBoard = memo(function SideBoard({
   );
 });
 
+function HandCard({ card }: { card: CardInstance }) {
+  const inDragArea = useInDragArea();
+  return inDragArea ? (
+    <GripCard card={card} />
+  ) : (
+    <CardFace
+      defId={card.defId}
+      instanceId={card.instanceId}
+      zoom={{ title: "手札", defIds: [card.defId] }}
+    />
+  );
+}
+
+function GripCard({ card }: { card: CardInstance }) {
+  const { attach, grippable } = useCardGrip(card.defId, card.instanceId);
+  return (
+    <CardFace
+      defId={card.defId}
+      instanceId={card.instanceId}
+      zoom={{ title: "手札", defIds: [card.defId] }}
+      gripRef={attach}
+      grippable={grippable}
+    />
+  );
+}
+
+/** トレーナーズやスタジアムは、盤面の真ん中へ落として使う。 */
 export const Stadium = memo(function Stadium({ stadium }: { stadium: SpectatorView["stadium"] }) {
   return (
-    <Zone name="stadium" label="スタジアム">
+    <Zone name="stadium" label="スタジアム" drop={PLAY_SPOT}>
       {stadium === null ? (
         <EmptySlot />
       ) : "instanceId" in stadium ? (
