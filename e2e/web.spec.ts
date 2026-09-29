@@ -21,7 +21,13 @@ import { MatchHub } from "../src/hub.js";
 import type { Seated } from "../src/lobby.js";
 import { concede, createMatch, submitMove, toMove, viewFor } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
-import { ensureCards, finishSetup, legalDecks, newMatch } from "../tests/helpers.js";
+import {
+  basicEnergyDefId,
+  ensureCards,
+  finishSetup,
+  legalDecks,
+  newMatch,
+} from "../tests/helpers.js";
 
 test("画面を開くとロビーが描け、アセットに無いパスでも画面の骨組みが返る", async ({ page }) => {
   const errors: Error[] = [];
@@ -1133,15 +1139,15 @@ async function newestHandCard(page: Page, next: PlayerView) {
   return hand.last();
 }
 
-/** 手札に入ったカードの動きを始めに戻して止め、そのときのカードの中心と `from` の中心の隔たり。 */
+/** 入ったカードの動きを始めに戻して止め、そのときのカードの中心と `from` の要素の中心の隔たり。 */
 async function arrivalGap(card: Locator, from: string) {
   await expect(card).toHaveAttribute("data-moving", "arriving");
-  return card.evaluate((node, zone) => {
+  return card.evaluate((node, selector) => {
     for (const animation of node.getAnimations()) {
       animation.pause();
       animation.currentTime = 0;
     }
-    const source = document.querySelector(`#self .mat [data-zone="${zone}"]`);
+    const source = document.querySelector(selector);
     if (source === null) throw new Error("来た場所が描けていない");
     const [start, at] = [source.getBoundingClientRect(), node.getBoundingClientRect()];
     return Math.hypot(
@@ -1158,7 +1164,8 @@ test("サイドを取ると、取ったカードをサイドから手札へ動�
   const send = await seatWithEvents(page, view);
   const next = drawnFrom(view, "prizeCount");
   send([], next);
-  expect(await arrivalGap(await newestHandCard(page, next), "prizes")).toBeLessThan(2);
+  const card = await newestHandCard(page, next);
+  expect(await arrivalGap(card, '#self .mat [data-zone="prizes"]')).toBeLessThan(2);
 });
 
 test("山札から引くと、引いたカードを山札から手札へ動かし、動き終えたら印を外す", async ({
@@ -1169,7 +1176,7 @@ test("山札から引くと、引いたカードを山札から手札へ動か�
   const next = drawnFrom(view, "deckCount");
   send([], next);
   const card = await newestHandCard(page, next);
-  expect(await arrivalGap(card, "deck")).toBeLessThan(2);
+  expect(await arrivalGap(card, '#self .mat [data-zone="deck"]')).toBeLessThan(2);
   await card.evaluate((node) => node.getAnimations().forEach((animation) => animation.finish()));
   await expect(card).not.toHaveAttribute("data-moving");
 });
@@ -1199,6 +1206,70 @@ test("サイドと山札が一緒に減ると、どちらから来たか分か�
   const next = drawnFrom(view, "prizeCount", "deckCount");
   send([], next);
   expect(await animationsOf(await newestHandCard(page, next))).toBe(0);
+});
+
+test("相手が山札から引くと、伏せた手札に増えたカードを相手の山札から動かす", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const next = structuredClone(view);
+  next.opponent.handCount += 2;
+  next.opponent.deckCount -= 2;
+  send([], next);
+  const hand = page.locator('#opponent [data-zone="hand"] .card');
+  await expect(hand).toHaveCount(next.opponent.handCount);
+  const deck = '#opponent .mat [data-zone="deck"]';
+  expect(await arrivalGap(hand.last(), deck)).toBeLessThan(2);
+  expect(await arrivalGap(hand.nth(-2), deck)).toBeLessThan(2);
+  expect(await animationsOf(hand.nth(-3))).toBe(0);
+});
+
+/** 相手が手札のエネルギーを、相手のバトル場のポケモンにつけた局面とイベント。 */
+function opponentAttaches(view: PlayerView) {
+  const next = structuredClone(view);
+  const active = next.opponent.active;
+  if (active === null || "concealed" in active) throw new Error("相手のバトル場にポケモンがいない");
+  const card = { instanceId: "相手がつけたエネルギー", defId: basicEnergyDefId() };
+  active.attached.push(card);
+  next.opponent.handCount -= 1;
+  const player = 1 - view.viewer;
+  const event = {
+    kind: "energy-attached",
+    actor: player,
+    player,
+    card,
+    target: active.inPlayId,
+    fromHand: true,
+    from: { kind: "hand", player },
+  };
+  return { next, event, card };
+}
+
+test("相手が手札から出したカードは、相手の手札から動かし、盤面の横に大きく見せる", async ({
+  page,
+}) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const { next, event, card } = opponentAttaches(view);
+  send([event], next);
+  const attached = page.locator(`#opponent [data-zone="active"] .attached .card`).last();
+  await expect(attached).toHaveAttribute("data-def-id", card.defId);
+  expect(await arrivalGap(attached, '#opponent [data-zone="hand"]')).toBeLessThan(2);
+  await expect(page.locator(".showcase .card")).toHaveAttribute("data-def-id", card.defId);
+  await expect(page.locator("#results .result")).toHaveCount(1);
+  await page.clock.runFor(1_600);
+  await expect(page.locator(".showcase")).toHaveCount(0);
+});
+
+test("自分でしたことは、記録に残すが結果には出さず、大きくも見せない", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const { next, event } = opponentAttaches(view);
+  const logged = await page.locator("#events li").count();
+  send([{ ...event, actor: view.viewer, player: view.viewer }], next);
+  await expect(page.locator("#events li")).toHaveCount(logged + 1);
+  await page.clock.runFor(100);
+  await expect(page.locator("#results .result")).toHaveCount(0);
+  await expect(page.locator(".showcase")).toHaveCount(0);
 });
 
 test("前の局面で盤面に見えていたカードが手札に入っても、山札からは動かさない", async ({ page }) => {

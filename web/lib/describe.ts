@@ -11,6 +11,7 @@ import type {
   PlayerEvent,
   PlayerView,
   SpectatorView,
+  Zone,
 } from "../../src/engine.js";
 import type { MatchSummary } from "../../src/archive.js";
 import type { ClockView, EndedMessage, RejectReason, SpectatorSeat } from "../../src/protocol.js";
@@ -210,9 +211,12 @@ export interface Notice {
   tone?: Tone;
   coins?: CoinToss;
   hit?: Hit;
-  /** 同じ `key` が続いたら 1 つに畳む。 */
-  key?: string;
-  repeated?: boolean;
+  /** 大きく見せるカードの defId。出たカードを、文を読む前に絵で分かるようにする。 */
+  card?: string;
+  /** 誰がしたことか。座席の画面は、自分でしたことを結果に出さない。 */
+  by?: Player;
+  /** 記録にだけ残し、結果には出さない。 */
+  quiet?: boolean;
 }
 
 export type View = PlayerView | SpectatorView;
@@ -251,31 +255,99 @@ export function describeSummary(summary: MatchSummary): string {
 }
 
 /**
- * 届いたイベントを、人に見せる結果へ直す。見せないイベントの位置は null にする。
+ * 届いたイベントを、人に見せる結果へ直す。人に見せる文の無いイベントは落とす。
  * 名前は適用後と適用前の盤面から引く。きぜつしたポケモンは適用後の盤面にもういない。
+ * 1 枚ずつ届くイベント（引く、トラッシュする、移す、サイドを取る）が続いたら、1 つにまとめる。
  */
 export function describeEvents(
   events: readonly PlayerEvent[],
   views: readonly (View | null)[],
   who: (player: Player) => string,
   cards: CardTable,
-): (Notice | null)[] {
-  let previous: Notice | null = null;
-  return events.map((event) => {
-    const notice = describeEvent(event, views, who, cards);
-    const repeated = notice?.key !== undefined && notice.key === previous?.key;
-    previous = notice;
-    return repeated ? { ...notice, repeated: true } : notice;
-  });
+): Notice[] {
+  const notices: Notice[] = [];
+  let start = 0;
+  while (start < events.length) {
+    const key = foldKey(events[start]!);
+    const folds = (event: PlayerEvent) => key !== undefined && foldKey(event) === key;
+    let end = start + 1;
+    while (end < events.length && folds(events[end]!)) end += 1;
+    const notice = describeRun(events.slice(start, end), views, who, cards);
+    if (notice !== null) notices.push(notice);
+    start = end;
+  }
+  return notices;
 }
 
-function describeEvent(
-  event: PlayerEvent,
+/** 結果として画面に出すもの。`self` を渡すと、その座席が自分でしたことは出さない。 */
+export function noticesToShow(notices: readonly Notice[], self?: Player): Notice[] {
+  return notices.filter((notice) => !notice.quiet && (self === undefined || notice.by !== self));
+}
+
+const ZONES: Record<Zone["kind"], string> = {
+  deck: "山札",
+  hand: "手札",
+  discard: "トラッシュ",
+  prizes: "サイド",
+  lostZone: "ロストゾーン",
+  active: "バトル場",
+  bench: "ベンチ",
+  stadium: "スタジアム",
+};
+
+function foldKey(event: PlayerEvent): string | undefined {
+  const zone = (at: Zone) => (at.kind === "stadium" ? at.kind : `${at.kind} ${at.player}`);
+  switch (event.kind) {
+    case "card-drawn":
+    case "card-drawn-hidden":
+      return `draw ${event.player}`;
+    case "card-discarded":
+      return `discard ${event.player}`;
+    case "card-moved":
+    case "card-moved-hidden":
+      return `${event.kind} ${zone(event.from)} ${zone(event.to)}`;
+    case "prize-taken":
+    case "prize-taken-hidden":
+      return `prize ${event.player}`;
+    default:
+      return undefined;
+  }
+}
+
+function describeRun(
+  run: readonly PlayerEvent[],
   views: readonly (View | null)[],
   who: (player: Player) => string,
   cards: CardTable,
 ): Notice | null {
-  const pokemon = (inPlayId: string) => pokemonName(inPlayId, views, who, cards) ?? "ポケモン";
+  const event = run[0]!;
+  const name = (defId: string) => nameOf(cards, defId);
+  /** 同じ名前のカードは「名前 n 枚」にまとめる。 */
+  const names = () => {
+    const counts = new Map<string, number>();
+    for (const each of run) {
+      for (const card of "card" in each ? [each.card] : "cards" in each ? each.cards : []) {
+        const named = name(card.defId);
+        counts.set(named, (counts.get(named) ?? 0) + 1);
+      }
+    }
+    return [...counts]
+      .map(([named, count]) => (count === 1 ? named : `${named} ${count} 枚`))
+      .join("・");
+  };
+  /** 場のポケモンの名前。`subject` と持ち主が違うときだけ、持ち主の名前を前に付ける。 */
+  const pokemon = (inPlayId: string, subject: Player | null = null, from = views) => {
+    const found = findPokemon(inPlayId, from);
+    if (found === null) return "ポケモン";
+    return found.player === subject
+      ? name(found.defId)
+      : `${who(found.player)}の${name(found.defId)}`;
+  };
+  const place = (zone: Zone, subject: Player | null) =>
+    zone.kind === "stadium" || zone.player === subject
+      ? ZONES[zone.kind]
+      : `${who(zone.player)}の${ZONES[zone.kind]}`;
+  const cause = event.source === null ? "" : `（${name(event.source.defId)}）`;
   switch (event.kind) {
     case "coin-flipped": {
       const heads = event.results.filter(Boolean).length;
@@ -286,14 +358,14 @@ function describeEvent(
             ? "オモテ"
             : "ウラ"
           : `オモテ ${heads} 回・ウラ ${tails} 回`;
-      const cause =
+      const why =
         event.source !== null
-          ? `（${nameOf(cards, event.source.defId)}）`
+          ? cause
           : event.window.kind === "pokemon-check"
             ? "（ポケモンチェック）"
             : "";
       return {
-        text: `${who(event.player)}のコイン${cause}: ${summary}`,
+        text: `${who(event.player)}のコイン${why}: ${summary}`,
         coins: { results: event.results, faces: ["オモテ", "ウラ"] },
       };
     }
@@ -325,48 +397,171 @@ function describeEvent(
     case "pokemon-knocked-out":
       return { text: `${pokemon(event.target)}がきぜつした`, tone: "attention" };
     // まとめて取ると 1 枚ごとのイベントが続けて並ぶ。選んで取るときは 1 枚ずつ別の局面で届くので、
-    // 枚数は `count`（今回取る総数）ではなく残りで伝え、続いたものは 1 つに畳む。
+    // 枚数は `count`（今回取る総数）ではなく残りで伝える。
     case "prize-taken":
     case "prize-taken-hidden": {
       const side = sidesOf(views[0] ?? null).find(([player]) => player === event.player)?.[1];
       const left = side === undefined ? "" : `（残り ${side.prizeCount} 枚）`;
-      return { text: `${who(event.player)}がサイドを取った${left}`, key: `prize-${event.player}` };
+      return { text: `${who(event.player)}がサイドを取った${left}` };
     }
     case "mulligan-taken":
       return { text: `${who(event.player)}の手札にたねポケモンが無く、引き直した` };
     case "turn-started":
       return { text: `${who(event.player)}の番`, tone: "turn" };
-    default:
+    case "card-drawn":
+    case "card-drawn-hidden":
+      return {
+        text: `${who(event.player)}がカードを ${run.length} 枚引いた${cause}`,
+        by: event.actor ?? event.player,
+      };
+    case "card-discarded": {
+      const by = event.actor ?? event.player;
+      const whose = by === event.player ? "" : `${who(event.player)}の`;
+      return { text: `${who(by)}が${whose}${names()}をトラッシュした${cause}`, by };
+    }
+    case "card-moved":
+    case "card-moved-hidden": {
+      const by = event.actor ?? (event.from.kind === "stadium" ? null : event.from.player);
+      const what = event.kind === "card-moved" ? names() : ` ${run.length} 枚`;
+      const text = `${what}を${place(event.from, by)}から${place(event.to, by)}へ移した${cause}`;
+      return by === null ? { text: text.trimStart() } : { text: `${who(by)}が${text}`, by };
+    }
+    case "cards-revealed":
+      if (event.reshow === true) return null;
+      return {
+        text: `${who(event.player)}が${place(event.zone, event.player)}の${names()}を${event.audience === "public" ? "見せた" : "見た"}${cause}`,
+        by: event.player,
+        quiet: true,
+      };
+    case "cards-revealed-hidden":
+      return {
+        text: `${who(event.player)}が${place(event.zone, event.player)}の ${event.count} 枚を見た${cause}`,
+        by: event.player,
+        quiet: true,
+      };
+    case "deck-shuffled":
+      return { text: `${who(event.player)}が山札を切った`, by: event.player, quiet: true };
+    case "card-name-declared":
+      return { text: `${who(event.player)}が${name(event.defId)}を宣言した`, by: event.player };
+    case "pokemon-played":
+      return {
+        text: `${who(event.player)}が${name(event.card.defId)}を${ZONES[event.to.kind]}に出した`,
+        card: event.card.defId,
+        by: event.player,
+      };
+    case "pokemon-played-hidden":
+      return {
+        text: `${who(event.player)}が${ZONES[event.to.kind]}にポケモンを裏向きで出した`,
+        by: event.player,
+      };
+    case "pokemon-evolved": {
+      // 適用後の盤面では、もう進化したあとの名前になっている。
+      const before = pokemon(event.target, event.player, [...views].reverse());
+      return {
+        text: `${who(event.player)}の${before}が${name(event.card.defId)}に進化した`,
+        card: event.card.defId,
+        by: event.player,
+      };
+    }
+    case "pokemon-devolved":
+      return {
+        text: `${pokemon(event.target)}が退化した${cause}`,
+        by: event.actor ?? event.player,
+      };
+    case "pokemon-replaced":
+    case "pokemon-top-card-replaced": {
+      const old = event.kind === "pokemon-replaced" ? event.oldCards.at(-1) : event.oldCard;
+      const from = old === undefined ? "ポケモン" : name(old.defId);
+      return {
+        text: `${who(event.player)}の${from}が${name(event.newCard.defId)}になった${cause}`,
+        card: event.newCard.defId,
+        by: event.actor ?? event.player,
+      };
+    }
+    case "trainer-played":
+    case "stadium-played":
+      return {
+        text: `${who(event.player)}が${name(event.card.defId)}を${event.kind === "trainer-played" ? "使った" : "出した"}`,
+        card: event.card.defId,
+        by: event.player,
+      };
+    case "stadium-effect-used":
+      return {
+        text: `${who(event.player)}が${name(event.card.defId)}の効果を使った`,
+        card: event.card.defId,
+        by: event.player,
+      };
+    case "energy-attached":
+    case "tool-attached":
+      return {
+        text: `${who(event.player)}が${pokemon(event.target, event.player)}に${name(event.card.defId)}をつけた${cause}`,
+        card: event.card.defId,
+        by: event.actor ?? event.player,
+      };
+    case "ability-used":
+    case "attack-declared": {
+      const found = findPokemon(event.sourceInPlay, views);
+      const brief = found === null ? undefined : cards[found.defId];
+      const ability = event.kind === "ability-used";
+      // `attackIndex` は宣言できるワザの表の番号で、印刷されたワザが前に並ぶ（`describe-move.ts` の `attackName`）。
+      const label = ability
+        ? brief?.abilities?.[event.abilityIndex]
+        : brief?.attacks?.[event.attackIndex];
+      const what = label === undefined ? (ability ? "特性" : "ワザ") : `「${label}」`;
+      return {
+        text: `${who(event.player)}の${pokemon(event.sourceInPlay, event.player)}が${what}を使った`,
+        ...(found === null ? {} : { card: found.defId }),
+        by: event.player,
+      };
+    }
+    case "hand-ability-used":
+      return { text: `${who(event.player)}が手札のカードの特性を使った`, by: event.player };
+    case "pokemon-retreated":
+      return {
+        text: `${who(event.player)}が${pokemon(event.from, event.player)}をにがし、${pokemon(event.to, event.player)}をバトル場に出した`,
+        by: event.player,
+      };
+    case "pokemon-switched":
+      return {
+        text: `${who(event.player)}の${pokemon(event.from, event.player)}と${pokemon(event.to, event.player)}が入れ替わった${cause}`,
+        by: event.actor ?? event.player,
+      };
+    case "pokemon-promoted":
+      return {
+        text: `${who(event.player)}が${pokemon(event.target, event.player)}をバトル場に出した`,
+        by: event.player,
+      };
+    // 手順の区切りと、ほかのイベントが言っていることの言い直し。先攻と決着は、別の知らせで出す。
+    case "game-started":
+    case "game-ended":
+    case "no-basic-declared":
+    case "attack-resolved":
+    case "attack-damage-stage4":
+    case "knockout-batch-started":
+    case "knockout-batch-completed":
+    case "turn-ended":
+    case "phase-changed":
+    case "pokemon-check-started":
+    case "pokemon-check-completed":
+    case "choice-requested":
+    case "choice-answered":
       return null;
+    default:
+      // エンジンにイベントが増えたら、ここで型が合わなくなる。記録にイベントの名前を出さないため。
+      return event satisfies never;
   }
 }
 
-/**
- * できごとの記録に足す行。人に見せる文が無いイベントは、不具合を調べるときのために名前で残す。
- * 畳んだ結果は足さない。
- */
-export function eventLines(
-  events: readonly PlayerEvent[],
-  notices: readonly (Notice | null)[],
-): string[] {
-  return events.flatMap((event, index) => {
-    const notice = notices[index];
-    return notice?.repeated ? [] : [notice?.text ?? event.kind];
-  });
-}
-
-/** 場のポケモンを「持ち主の名前」で呼ぶ。見つからなければ null。 */
-function pokemonName(
+/** 場のポケモンの持ち主と、いちばん上のカード。見つからなければ null。 */
+function findPokemon(
   inPlayId: string,
   views: readonly (View | null)[],
-  who: (player: Player) => string,
-  cards: CardTable,
-): string | null {
+): { player: Player; defId: string } | null {
   for (const view of views) {
     for (const [player, side] of sidesOf(view)) {
       for (const pokemon of [side.active, ...side.bench]) {
         if (pokemon == null || "concealed" in pokemon || pokemon.inPlayId !== inPlayId) continue;
-        return `${who(player)}の${nameOf(cards, pokemon.stack[pokemon.stack.length - 1]!.defId)}`;
+        return { player, defId: pokemon.stack[pokemon.stack.length - 1]!.defId };
       }
     }
   }

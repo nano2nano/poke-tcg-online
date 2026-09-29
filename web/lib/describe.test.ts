@@ -5,12 +5,16 @@ import {
   cardSubtitle,
   describeEvents,
   describeSummary,
+  noticesToShow,
   rejectText,
   seatClockText,
   seatEndText,
 } from "./describe.js";
 
-const cards: CardTable = { pikachu: { name: "ピカチュウ", kind: "pokemon", hp: 60 } };
+const cards: CardTable = {
+  pikachu: { name: "ピカチュウ", kind: "pokemon", hp: 60, attacks: ["でんきショック"] },
+  nanjamo: { name: "ナンジャモ", kind: "trainer", trainerKind: "supporter" },
+};
 const who = (player: Player) => ["あ", "い"][player]!;
 
 function pokemon(inPlayId: string) {
@@ -46,10 +50,9 @@ describe("describeEvents", () => {
   it("続けて取ったサイドは 1 つに畳み、取ったあとの残りの枚数で伝える", () => {
     const after = board([{ prizeCount: 4 }, {}]);
     const prize = event({ kind: "prize-taken-hidden", player: 0, count: 2 });
-    const [first, second] = describeEvents([prize, prize], [after, null], who, cards);
-    expect(first?.text).toContain("4");
-    expect(first?.repeated).toBeUndefined();
-    expect(second?.repeated).toBe(true);
+    const notices = describeEvents([prize, prize], [after, null], who, cards);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.text).toContain("4");
   });
 
   it("きぜつしたポケモンは、適用前の盤面から名前を引く", () => {
@@ -73,10 +76,62 @@ describe("describeEvents", () => {
     expect(capped?.hit).toBeUndefined();
   });
 
-  it("見せないイベントは null にする", () => {
-    expect(describeEvents([event({ kind: "pokemon-check-started" })], [null], who, cards)).toEqual([
-      null,
+  it("続けて引いたカードは 1 つに畳み、枚数と引かせたカードを書く", () => {
+    const source = { defId: "nanjamo", instanceId: "n1", label: "ナンジャモ" };
+    const drawn = event({ kind: "card-drawn-hidden", player: 1, count: 1, actor: 0, source });
+    const notices = describeEvents([drawn, drawn, drawn], [null], who, cards);
+    expect(notices.map((notice) => notice.text)).toEqual(["いがカードを 3 枚引いた（ナンジャモ）"]);
+    // 引かせたのは座席 0 なので、座席 1 の画面にも出す。
+    expect(noticesToShow(notices, 1)).toHaveLength(1);
+  });
+
+  it("自分でしたことは座席の画面の結果に出さず、記録には残す", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const notices = describeEvents(
+      [
+        event({ kind: "trainer-played", player: 0, card: { instanceId: "c1", defId: "nanjamo" } }),
+        event({ kind: "attack-declared", player: 0, sourceInPlay: "p0", attackIndex: 0 }),
+      ],
+      [view],
+      who,
+      cards,
+    );
+    expect(notices.map((notice) => notice.text)).toEqual([
+      "あがナンジャモを使った",
+      "あのピカチュウが「でんきショック」を使った",
     ]);
+    expect(notices.map((notice) => notice?.card)).toEqual(["nanjamo", "pikachu"]);
+    expect(noticesToShow(notices, 0)).toEqual([]);
+    expect(noticesToShow(notices, 1)).toHaveLength(2);
+  });
+
+  it("進化は、進化する前の名前を適用前の盤面から引く", () => {
+    const before = board([{ active: pokemon("p0") }, {}]);
+    const after = board([
+      { active: { inPlayId: "p0", stack: [{ instanceId: "c2", defId: "raichu" }] } },
+      {},
+    ]);
+    const [notice] = describeEvents(
+      [
+        event({
+          kind: "pokemon-evolved",
+          player: 0,
+          target: "p0",
+          card: { instanceId: "c2", defId: "raichu" },
+          from: { kind: "hand", player: 0 },
+        }),
+      ],
+      [after, before],
+      who,
+      cards,
+    );
+    expect(notice?.text).toBe("あのピカチュウがraichuに進化した");
+  });
+
+  it("見せる文の無いイベントは落とす", () => {
+    expect(describeEvents([event({ kind: "pokemon-check-started" })], [null], who, cards)).toEqual(
+      [],
+    );
   });
 });
 

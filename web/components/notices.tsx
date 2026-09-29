@@ -1,6 +1,6 @@
 /**
  * コイントスやダメージなどの結果を、画面の上の端に少しのあいだ重ねて出す。
- * ダメージと回復の数字は、そのポケモンの上に浮かべる。
+ * ダメージと回復の数字は、そのポケモンの上に浮かべる。出たカードは、盤面の左の端に大きく見せる。
  */
 
 import {
@@ -13,6 +13,7 @@ import {
 } from "react";
 import type { CoinToss, Hit, Notice, Tone } from "../lib/describe.js";
 import { SETTLE_MS } from "../lib/motion.js";
+import { CardFace } from "./board.js";
 import { useMotionOn } from "./motion-setting.js";
 
 /**
@@ -31,6 +32,8 @@ const STEP_MS = 400;
  */
 const COIN_SPIN_MS = 1_000;
 const COIN_GAP_MS = 150;
+/** 出たカードを大きく見せておく長さ。見せているあいだは、次の結果を出さない。 */
+const SHOWCASE_MS = 1_500;
 
 interface Shown {
   id: number;
@@ -43,9 +46,15 @@ interface Floating extends Hit {
   id: number;
 }
 
+interface Showcase {
+  id: number;
+  defId: string;
+}
+
 export interface NoticeFeed {
   notices: Shown[];
   hits: Floating[];
+  showcase: Showcase | null;
   /**
    * 同じタスクの中で続けて渡した結果は、1 つの局面の結果として順に出す。次の局面の結果が来たら、
    * 出しきっていない前の結果は待たせずに出す。`hit` を持つ結果は、盤面の上に数字を浮かべる。
@@ -56,17 +65,22 @@ export interface NoticeFeed {
 export function useNotices(): NoticeFeed {
   const [notices, setNotices] = useState<Shown[]>([]);
   const [hits, setHits] = useState<Floating[]>([]);
-  const [queue] = useState(() => createQueue(setNotices, setHits));
+  const [showcase, setShowcase] = useState<Showcase | null>(null);
+  const [queue] = useState(() => createQueue(setNotices, setHits, setShowcase));
   useEffect(() => queue.dispose, [queue]);
   // OS で動きを減らす設定にしている人にはカードを動かさないので、結果も数字も待たせずに出す。
   const animate = useMotionOn();
   useEffect(() => queue.setAnimate(animate), [queue, animate]);
-  return { notices, hits, show: queue.show };
+  return { notices, hits, showcase, show: queue.show };
 }
 
 type Setter<T> = (update: (current: T[]) => T[]) => void;
 
-function createQueue(setNotices: Setter<Shown>, setHits: Setter<Floating>) {
+function createQueue(
+  setNotices: Setter<Shown>,
+  setHits: Setter<Floating>,
+  setShowcase: (update: (current: Showcase | null) => Showcase | null) => void,
+) {
   let nextId = 0;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   /** まだ出していない結果。 */
@@ -110,7 +124,7 @@ function createQueue(setNotices: Setter<Shown>, setHits: Setter<Floating>) {
     else floating = later(wait, float);
   };
 
-  const reveal = ({ text, tone = "neutral", coins, hit }: Notice) => {
+  const reveal = ({ text, tone = "neutral", coins, hit, card }: Notice) => {
     const id = (nextId += 1);
     const shown: Shown = coins === undefined ? { id, text, tone } : { id, text, tone, coins };
     setNotices((current) => {
@@ -128,6 +142,11 @@ function createQueue(setNotices: Setter<Shown>, setHits: Setter<Floating>) {
     if (hit !== undefined) {
       settling.push({ ...hit, id });
       schedule();
+    }
+    if (card !== undefined) {
+      setShowcase(() => ({ id, defId: card }));
+      later(SHOWCASE_MS, () => setShowcase((current) => (current?.id === id ? null : current)));
+      return SHOWCASE_MS;
     }
     return coins === undefined ? STEP_MS : COIN_SPIN_MS + COIN_GAP_MS * (coins.results.length - 1);
   };
@@ -187,6 +206,7 @@ function createQueue(setNotices: Setter<Shown>, setHits: Setter<Floating>) {
       settling = [];
       setNotices(() => []);
       setHits(() => []);
+      setShowcase(() => null);
     },
   };
 }
@@ -213,6 +233,12 @@ export function NoticeLayer({
       {feed.hits.map((hit) => (
         <FloatingHit key={hit.id} hit={hit} board={board} />
       ))}
+      {/* 読み上げには結果の文が同じことを言う。 */}
+      {feed.showcase !== null && (
+        <div key={feed.showcase.id} className="showcase" aria-hidden="true">
+          <CardFace defId={feed.showcase.defId} />
+        </div>
+      )}
     </>
   );
 }

@@ -71,7 +71,6 @@ export function CardFace({
   gripRef,
   grippable,
   picked,
-  arriveFrom,
   onImageFailed,
 }: {
   defId: string;
@@ -89,8 +88,6 @@ export function CardFace({
   grippable?: boolean;
   /** タッチで押して、落とす先を選んでいるところか。 */
   picked?: boolean;
-  /** この局面で手札に入ったカードなら、来た場所。そこから動かして見せる。 */
-  arriveFrom?: ArrivalZone | undefined;
   onImageFailed?: () => void;
 }) {
   const { table, images } = useCardData();
@@ -108,10 +105,7 @@ export function CardFace({
   );
   const frame = use(BoardFrame);
   const moving = useMovingMark(face, frame);
-  useLayoutEffect(() => {
-    if (arriveFrom === undefined || face.current === null) return;
-    return arrive(face.current, arriveFrom);
-  }, [arriveFrom]);
+  useArrival(face, use(Arrivals).cards.get(instanceId ?? ""));
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -195,34 +189,58 @@ function useMovingMark(element: RefObject<HTMLElement | null>, frame: object | u
   };
 }
 
-/** 手札に入ったカードが、盤面のどこから来たか。 */
-type ArrivalZone = "prizes" | "deck";
+/**
+ * 前の局面で盤面のどこにも見えていなかったカードが、どちらの側のどこから来たか。山札とサイドのカードと、
+ * 伏せた手札のカードは射影にカードの ID が無いので、`layoutId` では動かせない。
+ */
+interface Arrival {
+  side: "near" | "far";
+  zone: "prizes" | "deck" | "hand";
+}
+
+interface BoardArrivals {
+  cards: ReadonlyMap<string, Arrival>;
+  /** 伏せた手札で、この局面に引いたカードの位置（何枚目から）と来た場所。 */
+  backs: Partial<Record<Arrival["side"], { from: number; zone: Arrival["zone"] }>>;
+}
+
+const Arrivals = createContext<BoardArrivals>({ cards: new Map(), backs: {} });
 
 /**
- * この局面で手札に入ったカードと、どこから来たか。山札とサイドのカードは射影にカードの ID が無く、
- * 前の局面で盤面のどこにも見えていないので、`layoutId` では動かせない。
+ * 局面が変わって盤面に新しく見えたカードと、来た場所を決める。サイドと山札のどちらか一方だけが減っていれば、
+ * 手札に入ったカードはそこから来たとみなす。伏せた手札が減り、山札もサイドも減っていなければ、場に新しく
+ * 見えたカードはその手札から出たとみなす。どちらとも決まらなければ動かさない。
  */
-const Arrivals = createContext<ReadonlyMap<string, ArrivalZone>>(new Map());
-
-/**
- * 局面が変わって手札に新しく見えたカードと、来た場所。サイドと山札のどちらか一方だけが減っていれば、
- * そこから来たとみなす。両方が減っていると、どのカードがどちらから来たか分からないので動かさない。
- */
-function handArrivals(
-  before: BoardSides,
-  after: Side | null,
-  side: "near" | "far",
-): [string, ArrivalZone][] {
-  const was = before[side];
-  if (was === null || after === null || !("hand" in after)) return [];
-  const [prizes, deck] = [after.prizeCount < was.prizeCount, after.deckCount < was.deckCount];
-  if (prizes === deck) return [];
-  const from: ArrivalZone = prizes ? "prizes" : "deck";
-  // 前の局面で盤面のどこかに見えていたカードは、`layoutId` でその場所から動く。
+function boardArrivals(before: BoardSides, after: BoardSides): BoardArrivals {
+  const cards = new Map<string, Arrival>();
+  const backs: BoardArrivals["backs"] = {};
   const shown = new Set(shownIds(before));
-  return after.hand
-    .filter((card) => !shown.has(card.instanceId))
-    .map((card) => [card.instanceId, from]);
+  const unseen = (list: readonly CardInstance[]) =>
+    list.filter((card) => !shown.has(card.instanceId));
+  for (const side of ["near", "far"] as const) {
+    const [was, now] = [before[side], after[side]];
+    if (was === null || now === null) continue;
+    const [prizes, deck] = [now.prizeCount < was.prizeCount, now.deckCount < was.deckCount];
+    const zone = prizes ? "prizes" : "deck";
+    if ("hand" in now) {
+      if (prizes !== deck) {
+        for (const card of unseen(now.hand)) cards.set(card.instanceId, { side, zone });
+      }
+      continue;
+    }
+    const drew = now.handCount - handCount(was);
+    if (drew > 0 && prizes !== deck) backs[side] = { from: handCount(was), zone };
+    if (drew < 0 && !prizes && !deck) {
+      for (const card of unseen([...fieldCards(now), ...stadiumCards(after.stadium)])) {
+        cards.set(card.instanceId, { side, zone: "hand" });
+      }
+    }
+  }
+  return { cards, backs };
+}
+
+function handCount(side: Side): number {
+  return "hand" in side ? side.hand.length : side.handCount;
 }
 
 interface BoardSides {
@@ -231,46 +249,57 @@ interface BoardSides {
   stadium: SpectatorView["stadium"];
 }
 
+/** 手札のほかで、1 人ぶんの場に見えているカード。 */
+function fieldCards(side: Side): CardInstance[] {
+  const pokemon = [side.active, ...side.bench].filter(
+    (each): each is Extract<Pokemon, { inPlayId: string }> => each !== null && "inPlayId" in each,
+  );
+  return [
+    ...side.discard,
+    ...side.lostZone,
+    ...pokemon.flatMap((each) => [...each.stack, ...each.attached]),
+  ];
+}
+
+function stadiumCards(stadium: SpectatorView["stadium"]): CardInstance[] {
+  if (stadium === null) return [];
+  return "instanceId" in stadium ? [stadium] : [stadium.left, stadium.right];
+}
+
 /** 盤面に見えているカードの ID。 */
 function shownIds({ near, far, stadium }: BoardSides): string[] {
   const sides = [near, far].filter((side) => side !== null);
-  const pokemon = sides
-    .flatMap((side) => [side.active, ...side.bench])
-    .filter(
-      (each): each is Extract<Pokemon, { inPlayId: string }> => each !== null && "inPlayId" in each,
-    );
-  const stadiums =
-    stadium === null ? [] : "instanceId" in stadium ? [stadium] : [stadium.left, stadium.right];
   return [
-    ...sides.flatMap((side) => [
-      ...("hand" in side ? side.hand : []),
-      ...side.discard,
-      ...side.lostZone,
-    ]),
-    ...pokemon.flatMap((each) => [...each.stack, ...each.attached]),
-    ...stadiums,
+    ...sides.flatMap((side) => [...("hand" in side ? side.hand : []), ...fieldCards(side)]),
+    ...stadiumCards(stadium),
   ].map((card) => card.instanceId);
 }
 
 /**
- * 手札に入ったカードの来た場所。描き始めたときに決め、そのあと局面が進んでも、動いている途中で止めない。
- * 演出を切っているときに入ったカードは、あとで演出を戻しても動かさない。
+ * 新しく見えたカードを、来た場所から動かす。来た場所は描き始めたときに決め、そのあと局面が進んでも、
+ * 動いている途中で止めない。演出を切っているときに見えたカードは、あとで演出を戻しても動かさない。
  */
-function useArrivalZone(instanceId: string): ArrivalZone | undefined {
-  const from = use(Arrivals).get(instanceId);
+function useArrival(element: RefObject<HTMLElement | null>, arrival: Arrival | undefined) {
   const on = useMotionOn();
-  const [arrival] = useState(() => (on ? from : undefined));
-  return arrival;
+  const [from] = useState(() => (on ? arrival : undefined));
+  useLayoutEffect(() => {
+    if (from === undefined || element.current === null) return;
+    return arrive(element.current, from);
+  }, [element, from]);
 }
 
 /**
- * 手札に入ったカードを、来た場所から動かす。Motion が動かす `transform` とぶつからないよう、
- * `translate` を Web Animations で動かす。
+ * Motion が動かす `transform` とぶつからないよう、`translate` を Web Animations で動かす。
+ * 向かいの側は、卓を挟んで見たとおりに返して描いている（`SideBoard` の `mirrored`）。
  */
-function arrive(card: HTMLElement, from: ArrivalZone): (() => void) | undefined {
-  const source = card
-    .closest('[data-zone="hand"]')
-    ?.parentElement?.querySelector(`.mat [data-zone="${from}"]`);
+function arrive(card: HTMLElement, { side, zone }: Arrival): (() => void) | undefined {
+  const mat = card
+    .closest(".board")
+    ?.querySelector(side === "far" ? ".mat.mirrored" : ".mat:not(.mirrored)");
+  const source =
+    zone === "hand"
+      ? mat?.parentElement?.querySelector(':scope > [data-zone="hand"]')
+      : mat?.querySelector(`[data-zone="${zone}"]`);
   if (source === null || source === undefined) return;
   const [start, end] = [source.getBoundingClientRect(), card.getBoundingClientRect()];
   const dx = start.left + start.width / 2 - (end.left + end.width / 2);
@@ -499,19 +528,14 @@ export function Board({
   children: ReactNode;
 }) {
   const frame = useMemo(() => ({ near, far, stadium }), [near, far, stadium]);
-  // 前に描いた局面と比べて、手札に入ったカードを決める。
-  const [shown, setShown] = useState(() => ({
+  // 前に描いた局面と比べて、新しく見えたカードを決める。
+  const [shown, setShown] = useState<{ sides: BoardSides; arrivals: BoardArrivals }>(() => ({
     sides: { near, far, stadium },
-    arrivals: new Map<string, ArrivalZone>(),
+    arrivals: { cards: new Map(), backs: {} },
   }));
   if (shown.sides.near !== near || shown.sides.far !== far || shown.sides.stadium !== stadium) {
-    setShown({
-      sides: { near, far, stadium },
-      arrivals: new Map([
-        ...handArrivals(shown.sides, near, "near"),
-        ...handArrivals(shown.sides, far, "far"),
-      ]),
-    });
+    const sides = { near, far, stadium };
+    setShown({ sides, arrivals: boardArrivals(shown.sides, sides) });
   }
   const body = <BoardBody frame={frame}>{children}</BoardBody>;
   return (
@@ -564,7 +588,7 @@ export const SideBoard = memo(function SideBoard({
   // ベンチの枠の数はスタジアムで変わり、射影には載っていない。空いた枠は描かない。
   const slots: readonly (Pokemon | null)[] = side.bench;
   const bench = slots.filter((pokemon) => pokemon !== null);
-  const handCount = "hand" in side ? side.hand.length : side.handCount;
+  const cardsInHand = handCount(side);
 
   const mat = (
     <div className={mirrored ? "mat mirrored" : "mat"}>
@@ -622,12 +646,14 @@ export const SideBoard = memo(function SideBoard({
     <Zone
       name="hand"
       label="手札"
-      count={handCount}
-      style={{ "--cards": String(handCount) } as CSSProperties}
+      count={cardsInHand}
+      style={{ "--cards": String(cardsInHand) } as CSSProperties}
     >
       {"hand" in side
         ? side.hand.map((card) => <HandCard key={card.instanceId} card={card} />)
-        : Array.from({ length: handCount }, (_, index) => <CardBack key={index} />)}
+        : Array.from({ length: cardsInHand }, (_, index) => (
+            <HiddenHandCard key={index} index={index} side={mirrored ? "far" : "near"} />
+          ))}
     </Zone>
   );
 
@@ -646,26 +672,18 @@ export const SideBoard = memo(function SideBoard({
 
 function HandCard({ card }: { card: CardInstance }) {
   const inDragArea = useInDragArea();
-  const arriveFrom = useArrivalZone(card.instanceId);
   return inDragArea ? (
-    <GripCard card={card} arriveFrom={arriveFrom} />
+    <GripCard card={card} />
   ) : (
     <CardFace
       defId={card.defId}
       instanceId={card.instanceId}
       zoom={{ title: "手札", defIds: [card.defId] }}
-      arriveFrom={arriveFrom}
     />
   );
 }
 
-function GripCard({
-  card,
-  arriveFrom,
-}: {
-  card: CardInstance;
-  arriveFrom: ArrivalZone | undefined;
-}) {
+function GripCard({ card }: { card: CardInstance }) {
   const { attach, grippable, picked } = useCardGrip(card.defId, card.instanceId);
   return (
     <CardFace
@@ -675,9 +693,19 @@ function GripCard({
       gripRef={attach}
       grippable={grippable}
       picked={picked}
-      arriveFrom={arriveFrom}
     />
   );
+}
+
+/** 伏せた手札の 1 枚。位置で描くので、この局面で引いたカードは後ろに増えた位置のものになる。 */
+function HiddenHandCard({ index, side }: { index: number; side: Arrival["side"] }) {
+  const back = useRef<HTMLDivElement>(null);
+  const drawn = use(Arrivals).backs[side];
+  useArrival(
+    back,
+    drawn !== undefined && index >= drawn.from ? { side, zone: drawn.zone } : undefined,
+  );
+  return <div ref={back} className="card back" />;
 }
 
 /** トレーナーズやスタジアムは、盤面の真ん中へ落として使う。 */
