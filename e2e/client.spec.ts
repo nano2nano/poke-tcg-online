@@ -642,6 +642,8 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
   await seatPair(a, b, room);
   await expect.poll(() => seenA()?.phase).toBe("setup");
   while (seenA()?.phase === "setup") await advance(a, b, seenA);
+  // 負荷の高い実行では、`seenA` が対戦の始まった局面を見たときに、`held.last` がまだ準備の局面のことがあった。
+  await expect.poll(() => held.last?.stateVersion).toBe(seenA()?.stateVersion);
 
   const view = held.last!.view;
   const target = view.self.active.inPlayId as string;
