@@ -714,6 +714,22 @@ test("拡大の中と背景にまたがって押しても、閉じない", async
   await expect(zoom).toBeHidden();
 });
 
+test("拡大の中身が長くて出たスクロールバーを押しても、閉じない", async ({ page }) => {
+  const hand = await replayHand(page);
+  // カード 1 枚でも収まらない高さにする。
+  await page.setViewportSize({ width: 1280, height: 240 });
+  await hand.first().click();
+  const zoom = page.locator("#card-zoom");
+  await expect(zoom).toBeVisible();
+  const scrolls = await zoom.evaluate((node) => node.scrollHeight > node.clientHeight);
+  expect(scrolls).toBe(true);
+  const box = await zoom.boundingBox();
+  if (box === null) throw new Error("拡大が出ていない");
+  // 縦のスクロールバーは右端の内側にある。
+  await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+  await expect(zoom).toBeVisible();
+});
+
 test("キーボードで開いたキーを押し続けても、拡大を開いたままにする", async ({ page }) => {
   const hand = await replayHand(page);
   await hand.first().focus();
