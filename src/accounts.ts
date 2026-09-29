@@ -355,15 +355,21 @@ const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}]/u;
 const JOINERS = new Set(["\u200c", "\u200d"]);
 
 function cleanName(displayName: string): string {
-  // 見えない字を落とすのは、表示名が画面と対局ログの両方へ出るためである。
+  return cleanText(displayName, MAX_DISPLAY_NAME) || "ななし";
+}
+
+/** 人が付けた名前から見えない字を落とし、`max` 文字で切る。何も残らなければ空文字。 */
+export function cleanText(text: string, max: number): string {
+  // 見えない字を落とすのは、名前が画面に出るためである。表示名は対局ログにも残る。
   // **切るのは文字の単位である。** UTF-16 の長さで切ると、絵文字が半分になったものが
   // そのままストアにも対局ログにも入る。
-  const cleaned = [...displayName.trim()]
-    .filter((char) => JOINERS.has(char) || !INVISIBLE.test(char))
-    .slice(0, MAX_DISPLAY_NAME)
-    .join("")
-    // 繋ぐ相手を失った端の繋ぎ字は、それだけでは字にならない。
-    .replace(/^[\u200c\u200d]+|[\u200c\u200d]+$/gu, "")
-    .trim();
-  return cleaned === "" ? "ななし" : cleaned;
+  return (
+    [...text.trim()]
+      .filter((char) => JOINERS.has(char) || !INVISIBLE.test(char))
+      .slice(0, max)
+      .join("")
+      // 繋ぐ相手を失った端の繋ぎ字は、それだけでは字にならない。
+      .replace(/^[\u200c\u200d]+|[\u200c\u200d]+$/gu, "")
+      .trim()
+  );
 }

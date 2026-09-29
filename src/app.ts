@@ -17,16 +17,19 @@ import { deckPresets, presetDeck, type BotLoad, type BotStore } from "./bots.js"
 import { Lobby } from "./lobby.js";
 import { ACCOUNT_NOT_FOUND, type AccountStore } from "./accounts.js";
 import type { MatchArchive } from "./archive.js";
+import { DECK_LIMIT, TOO_MANY_DECKS, type DeckStore } from "./decks.js";
 import { frameAt, isMatchId, replayability } from "./history.js";
 import { clientMessageSchema } from "./protocol.js";
 import {
   createAccountSchema,
   deckListSchema,
+  deleteDeckSchema,
   joinBotRequestSchema,
   watchBotsRequestSchema,
   joinRequestSchema,
   officialDeckSchema,
   replayRequestSchema,
+  saveDeckSchema,
   secretRequestSchema,
 } from "./requests.js";
 import { MatchRegistry } from "./registry.js";
@@ -70,6 +73,7 @@ const MALFORMED = "送られた中身の形が違う";
 export interface AppOptions {
   accounts: AccountStore;
   archive: MatchArchive;
+  decks: DeckStore;
   /** AI の重みの保存先（7.3 節）。無ければ AI とは対戦できない。 */
   bots?: BotStore | null;
   /** AI が手を指すまでの間。テストが待たずに済むように置く。 */
@@ -155,7 +159,7 @@ function readCount(name: string, value: string | undefined): number | null {
 
 export function createApp(options: AppOptions): App {
   const now = options.now ?? (() => Date.now());
-  const { accounts, archive } = options;
+  const { accounts, archive, decks } = options;
   const registry = new MatchRegistry();
   const lobby = new Lobby(registry, accounts, now);
   const limitOptions =
@@ -186,6 +190,7 @@ export function createApp(options: AppOptions): App {
           registry,
           accounts,
           archive,
+          decks,
           bots,
           hub,
           now,
@@ -278,6 +283,7 @@ interface RouteContext {
   registry: MatchRegistry;
   accounts: AccountStore;
   archive: MatchArchive;
+  decks: DeckStore;
   bots: BotStore | null;
   hub: MatchHub;
   now: () => number;
@@ -286,6 +292,7 @@ interface RouteContext {
 
 async function route(request: Request, origin: string, context: RouteContext): Promise<Response> {
   const { lobby, registry, accounts, archive, bots, hub, now, accountLimit } = context;
+  const deckStore = context.decks;
   const url = new URL(request.url);
 
   /**
@@ -389,6 +396,36 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const deck = parseBody(deckListSchema, await readBody(request));
     const errors = validateDeck(deck).map(describeViolation);
     return json(200, { ok: errors.length === 0, errors });
+  }
+  // 保存したデッキ（5.5 節）。どれも自分のデッキしか読み書きしない。
+  if (request.method === "POST" && url.pathname === "/api/decks") {
+    const { secret } = parseBody(secretRequestSchema, await readBody(request));
+    const account = await accounts.find(secret);
+    if (account === null) return accountNotFound();
+    return json(200, { decks: await deckStore.list(account.playerId) });
+  }
+  if (request.method === "POST" && url.pathname === "/api/decks/save") {
+    const { secret, ...deck } = parseBody(saveDeckSchema, await readBody(request));
+    const account = await accounts.find(secret);
+    if (account === null) return accountNotFound();
+    const outcome = await deckStore.save(account.playerId, deck, now());
+    if (outcome.kind === "not-found") return json(404, { error: "デッキが見つからない" });
+    if (outcome.kind === "full") {
+      return json(400, {
+        code: TOO_MANY_DECKS,
+        error: `保存できるデッキは ${DECK_LIMIT} 個まで。使わないデッキを消してからどうぞ。`,
+      });
+    }
+    return json(200, { deck: outcome.deck });
+  }
+  if (request.method === "POST" && url.pathname === "/api/decks/delete") {
+    const { secret, deckId } = parseBody(deleteDeckSchema, await readBody(request));
+    const account = await accounts.find(secret);
+    if (account === null) return accountNotFound();
+    if (!(await deckStore.remove(account.playerId, deckId))) {
+      return json(404, { error: "デッキが見つからない" });
+    }
+    return json(200, {});
   }
   if (request.method === "POST" && url.pathname === "/api/join") {
     const body = parseBody(joinRequestSchema, await readBody(request));

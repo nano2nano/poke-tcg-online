@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { AccountStore } from "../src/accounts.js";
+import type { DeckStore } from "../src/decks.js";
 import type { MatchArchive } from "../src/archive.js";
 import { concede } from "../src/match.js";
 import { ensureCards, newMatch } from "./helpers.js";
@@ -17,6 +18,7 @@ describe("/api/status", () => {
     const settling = new Promise<void>((resolve) => (settle = resolve));
     const app = createApp({
       accounts: {} as AccountStore,
+      decks: {} as DeckStore,
       archive: { settle: () => settling, settled: () => settling } as unknown as MatchArchive,
       accountLimit: null,
     });

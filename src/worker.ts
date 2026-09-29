@@ -28,6 +28,7 @@ import { MatchArchive } from "./archive.js";
 import { BotStore } from "./bots.js";
 import { cardImageRoute } from "./card-image.js";
 import { ensureSchema } from "./database.js";
+import { DeckStore } from "./decks.js";
 import { registerPoolCards } from "./engine.js";
 
 declare const WebSocketPair: typeof WebSocketPairConstructor;
@@ -75,6 +76,7 @@ export class Server {
     this.app = createApp({
       accounts,
       archive,
+      decks: new DeckStore(env.DB),
       bots: new BotStore(env.ARCHIVE),
       ...optionsFromVars(env),
     });
