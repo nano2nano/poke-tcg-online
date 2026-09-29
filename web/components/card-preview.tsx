@@ -60,19 +60,18 @@ export function CardPreview() {
       watch.disconnect();
       setShown(null);
     };
-    // 盤面は相手の手でも描き直され、載せていたカードが消えたり別のカードに替わったりする。マウスなら下に来た
-    // カードへ移り、閉じてから開き直す一瞬のちらつきを出さない。指で押している最中なら、押したカードはもう無いので閉じる。
+    // 盤面は相手の手でも描き直され、載せていたカードが消えたり、動いたり、別のカードに替わったりする。
+    // マウスなら下に来たカードへ移り、閉じてから開き直す一瞬のちらつきを出さない。マウスの下が替わったときに
+    // ブラウザが載せ直しを知らせるかどうかには頼らない。指で押している最中なら、押したカードが残っていれば
+    // そのまま出し、もう無ければ閉じる。
     const watch = new MutationObserver(() => {
       if (current === null) return;
-      if (current.card.isConnected) {
-        show(current.card, current.pointer);
+      if (current.pointer === "touch" || lastMouse === null) {
+        if (current.card.isConnected) show(current.card, current.pointer);
+        else hide();
         return;
       }
-      const under =
-        longPress === null && lastMouse !== null
-          ? document.elementFromPoint(lastMouse.x, lastMouse.y)
-          : null;
-      const card = previewable(under);
+      const card = previewable(document.elementFromPoint(lastMouse.x, lastMouse.y));
       if (card === null) hide();
       else show(card, "mouse");
     });
@@ -131,6 +130,11 @@ export function CardPreview() {
       if (current === null || !(target instanceof Node) || !target.contains(current.card)) return;
       if (box.current !== null) place(box.current, current.card, current.pointer);
     };
+    // 画面の大きさが変わると、いまの位置では画面からはみ出すことがある。
+    const resize = () => {
+      if (current !== null && box.current !== null)
+        place(box.current, current.card, current.pointer);
+    };
 
     document.addEventListener("pointerover", over);
     document.addEventListener("pointerout", out);
@@ -141,6 +145,7 @@ export function CardPreview() {
     document.addEventListener("click", click, { capture: true });
     document.addEventListener("contextmenu", menu);
     document.addEventListener("scroll", scroll, { capture: true, passive: true });
+    window.addEventListener("resize", resize);
     return () => {
       watch.disconnect();
       if (longPress !== null) clearTimeout(longPress.timer);
@@ -153,6 +158,7 @@ export function CardPreview() {
       document.removeEventListener("click", click, { capture: true });
       document.removeEventListener("contextmenu", menu);
       document.removeEventListener("scroll", scroll, { capture: true });
+      window.removeEventListener("resize", resize);
     };
   }, []);
 

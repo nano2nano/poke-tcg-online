@@ -1921,7 +1921,7 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
       BOARD_IMAGES,
     );
     await advance(a, b, seenA);
-    const drawn = String(seenA()?.stateVersion);
+    const drawn = seenA()?.stateVersion ?? -1;
     await expect
       .poll(() =>
         a.evaluate(
@@ -1936,7 +1936,8 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
             return {
               redrawn:
                 document.querySelector("#self .mat") !== old.mat ||
-                document.querySelector("#table")?.getAttribute("data-state-version") === version,
+                Number(document.querySelector("#table")?.getAttribute("data-state-version")) >=
+                  version,
               // 前にも後にも出ている枚数ぶん、前の要素が残っていない URL。
               recreated: [...new Set(old.urls)].filter(
                 (url) => copies(kept, url) < Math.min(copies(old.urls, url), copies(urls, url)),
@@ -2136,6 +2137,7 @@ function overlaps(a: Box, b: Box): boolean {
 test("カードにマウスを載せると横に大きく出て、外すと消える", async ({ browser, pageErrors }) => {
   const room = `のせる-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
+  const seenA = lastSeen(a);
   await Promise.all([a.goto("./"), b.goto("./")]);
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
@@ -2166,8 +2168,50 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   expect(shown.x + shown.width).toBeLessThanOrEqual(viewport.width);
   expect(shown.y + shown.height).toBeLessThanOrEqual(viewport.height);
 
+  // 相手の手で盤面が描き直されても、マウスの下にあるカードを出す。無ければ閉じる。自分の手を押すと
+  // マウスが動くので、相手が指せるところまで進めてから載せ直す。準備を出しただけでは、こちらの局面は動かない。
+  const opponentMove = b.locator("#moves button").first();
+  const opponentCanMove = () =>
+    opponentMove.waitFor({ timeout: 1_000 }).then(
+      () => true,
+      () => false,
+    );
+  for (let attempt = 0; !(await opponentCanMove()); attempt += 1) {
+    expect(attempt).toBeLessThan(20);
+    await advance(a, b, seenA);
+  }
+  await hand.last().hover();
+  await expect(preview).toBeVisible();
+  const hovered = (await hand.last().boundingBox()) as Box;
+  const point = { x: hovered.x + hovered.width / 2, y: hovered.y + hovered.height / 2 };
+  const mat = await a.evaluateHandle(() => document.querySelector("#self .mat"));
+  const before = seenA()?.stateVersion ?? -1;
+  expect(await playOne(b)).toBe(true);
+  await expect.poll(() => seenA()?.stateVersion ?? -1).toBeGreaterThan(before);
+  const drawn = seenA()?.stateVersion ?? -1;
+  await expect
+    .poll(() =>
+      a.evaluate(
+        ([old, version, { x, y }]) => {
+          const redrawn =
+            document.querySelector("#self .mat") !== old ||
+            Number(document.querySelector("#table")?.getAttribute("data-state-version")) >= version;
+          const atMouse = document.elementFromPoint(x, y)?.closest(".card[data-def-id]");
+          const box = document.querySelector<HTMLElement>("#card-preview");
+          const shownDefId =
+            box?.hidden === false ? box.querySelector(".card")?.getAttribute("data-def-id") : null;
+          return redrawn && (shownDefId ?? null) === (atMouse?.getAttribute("data-def-id") ?? null);
+        },
+        [mat, drawn, point] as const,
+      ),
+    )
+    .toBe(true);
+  await mat.dispose();
+
   await a.mouse.move(0, 0);
   await expect(preview).toBeHidden();
+  await hand.first().hover();
+  await expect(preview).toBeVisible();
 
   // 押して開く拡大の中では出さない。
   await hand.first().click();

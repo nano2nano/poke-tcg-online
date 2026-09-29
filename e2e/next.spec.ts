@@ -661,6 +661,35 @@ test("載せているカードが描き直しで少し動いたら、プレビ�
   await expect.poll(offset).toBeCloseTo(before, 0);
 });
 
+test("載せているあいだに画面が低くなっても、プレビューを画面に収める", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1600 });
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
+  await page.route("**/api/card-image/*", () => {});
+  await page.goto(`${BASEPATH}/`);
+  await page.fill("#card-search", "エネルギー");
+  const add = page.locator("#card-results .card-row button.add");
+  for (let i = 0; i < 3; i++) await add.nth(i).click();
+  const card = page.locator("#deck-cards .card-row .card").last();
+  const preview = page.locator("#card-preview");
+  await card.hover();
+  await expect(preview).toBeVisible();
+
+  // カードは見えたまま、プレビューの下端より低くする。
+  const under = await card.boundingBox();
+  const shown = await preview.boundingBox();
+  if (under === null || shown === null) throw new Error("カードかプレビューが出ていない");
+  const height = Math.ceil(under.y + under.height) + 20;
+  expect(shown.y + shown.height).toBeGreaterThan(height);
+  await page.setViewportSize({ width: 1280, height });
+  await expect
+    .poll(async () => {
+      const box = await preview.boundingBox();
+      return box === null ? Infinity : box.y + box.height;
+    })
+    .toBeLessThanOrEqual(height);
+});
+
 test("載せているあいだに画像が読めなかったと分かったら、プレビューに説明を書き添える", async ({
   page,
 }) => {
