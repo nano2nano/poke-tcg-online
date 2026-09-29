@@ -329,7 +329,6 @@ function describeRun(
 ): Notice | null {
   const event = run[0]!;
   const name = (defId: string) => nameOf(cards, defId);
-  /** 同じ名前のカードは「名前 n 枚」にまとめる。 */
   const names = () => {
     const counts = new Map<string, number>();
     for (const each of run) {

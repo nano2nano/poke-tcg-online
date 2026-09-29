@@ -32,7 +32,7 @@ const STEP_MS = 400;
  */
 const COIN_SPIN_MS = 1_000;
 const COIN_GAP_MS = 150;
-/** 出たカードを大きく見せておく長さ。見せているあいだは、次の結果を出さない。 */
+/** 出たカードを大きく見せておく長さ。見せているあいだは、同じ局面の次の結果を出さない。 */
 const SHOWCASE_MS = 1_500;
 
 interface Shown {
