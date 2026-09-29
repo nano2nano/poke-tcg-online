@@ -32,13 +32,11 @@ import {
 import { MatchRegistry } from "./registry.js";
 import { RateLimit, type RateLimitOptions } from "./ratelimit.js";
 
-export { ACCOUNT_NOT_FOUND };
-
 /** 持ち時間のスイープ。手番側が考えている限り時計は進むので、定期に見る必要がある。 */
 export const TICK_MS = 5_000;
 
 /** 要求の本文と、WebSocket の 1 通の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
-export const MAX_BODY_BYTES = 64 * 1024;
+const MAX_BODY_BYTES = 64 * 1024;
 
 /**
  * この長さのあいだ 1 通も来ない接続を切る（3.5 節）。画面は 20 秒ごとに `ping` を送る。
@@ -65,7 +63,7 @@ export const DEFAULT_ACCOUNT_LIMIT: RateLimitOptions = {
 };
 
 /** 作る間隔が短すぎることの合図。 */
-export const TOO_MANY_ACCOUNTS = "too-many-accounts";
+const TOO_MANY_ACCOUNTS = "too-many-accounts";
 
 const MALFORMED = "送られた中身の形が違う";
 

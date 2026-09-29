@@ -11,7 +11,7 @@ import type { CardTable } from "./cards.js";
 import { deckCards, storedDeck } from "./deck.js";
 import { sha256Hex, storedSeat, toHex, type StoredSeat } from "./seat.js";
 
-export type { BotEntry, DeckList, DeckPreset };
+export type { DeckList, DeckPreset };
 
 /** 組んだデッキ。組んでいなければサンプルデッキ。規則には照らさない。 */
 export async function builtDeck(): Promise<{ deck: DeckList; sample: boolean }> {

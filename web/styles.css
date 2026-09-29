@@ -315,10 +315,6 @@ button.secondary {
 .mat.mirrored > .piles {
   flex-direction: column-reverse;
 }
-/* 盤面を右の欄と並べる横に広い画面でだけ出す。狭い画面では見出しの説明が同じことを言っている。 */
-.table-hint {
-  display: none;
-}
 .field {
   display: flex;
   flex-direction: column;
@@ -679,12 +675,9 @@ button.secondary {
     max-width: none;
     padding: 8px 16px;
   }
-  /* 見出しの説明は盤面を押し下げるので出さず、カードを大きく出す方法だけを右の欄に残す。 */
+  /* 見出しの説明は盤面を押し下げるので出さない。 */
   body:has(> .table:not([hidden])) > header {
     display: none;
-  }
-  .table-hint {
-    display: block;
   }
   /*
    * 対戦のあいだは、下に続くリプレイの欄を出さない。出すとページがスクロールでき、盤面の上でホイールを回すと

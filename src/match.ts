@@ -345,7 +345,7 @@ interface SetupStep {
   defId: CardDefId | null;
 }
 
-export interface SetupPlan {
+interface SetupPlan {
   /** 座席が選んだインスタンス。画面へ返して、出したものを見せる。 */
   active: string;
   bench: string[];

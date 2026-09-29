@@ -296,11 +296,11 @@ export function CardCaption({ defId }: { defId: string }) {
   );
 }
 
-export function CardBack() {
+function CardBack() {
   return <div className="card back" />;
 }
 
-export function EmptySlot() {
+function EmptySlot() {
   return <div className="card empty" />;
 }
 
@@ -315,7 +315,7 @@ interface ZoneProps {
   children: ReactNode;
 }
 
-export function Zone({ drop, ...props }: ZoneProps) {
+function Zone({ drop, ...props }: ZoneProps) {
   const inDragArea = useInDragArea();
   return drop !== undefined && inDragArea ? (
     <DropZone spot={drop} {...props} />
