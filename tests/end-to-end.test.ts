@@ -238,6 +238,9 @@ describe("入れなかった理由", () => {
     "/api/replay",
     "/api/account",
     "/api/account/me",
+    "/api/decks",
+    "/api/decks/save",
+    "/api/decks/delete",
   ];
 
   /**
@@ -274,6 +277,9 @@ describe("入れなかった理由", () => {
         JSON.stringify({ text: 7 }),
         JSON.stringify({ matchId: 7, ply: "さいしょ" }),
         JSON.stringify({ cards: [{ cardId: 7, count: 1 }] }),
+        JSON.stringify({ secret, name: 7, cards: [] }),
+        JSON.stringify({ secret, name: "で", cards: [{ defId: 7, count: "1" }] }),
+        JSON.stringify({ secret, deckId: 7 }),
       ];
 
       for (const body of malformed) {

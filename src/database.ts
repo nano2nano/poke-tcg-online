@@ -1,7 +1,7 @@
 /**
- * D1 の表（`docs/spec/battle-server.md` 6.5 節、7.2 節）。
+ * D1 の表（`docs/spec/battle-server.md` 5.5 節、6.5 節、7.2 節）。
  *
- * プレイヤーと、対局ログの索引を置く。対局ログそのものは R2 にある（`src/archive.ts`）。
+ * プレイヤーと、プレイヤーが保存したデッキと、対局ログの索引を置く。対局ログそのものは R2 にある（`src/archive.ts`）。
  *
  * 表を作るのは Durable Object が起きたときである。`wrangler d1 migrations` にしないのは、
  * 出す手順を `wrangler deploy` 1 つに保つためである。
@@ -45,6 +45,17 @@ const MIGRATIONS: readonly (readonly string[])[] = [
     "CREATE INDEX matches_by_seat1 ON matches (seat1_player, ended_at DESC)",
     "CREATE INDEX matches_by_day ON matches (ended_day)",
     "CREATE TABLE archive_state (name TEXT PRIMARY KEY, value TEXT NOT NULL)",
+  ],
+  [
+    // `cards` は `[{ defId, count }]` の JSON。中身で探すことが無いので、行に分けない。
+    `CREATE TABLE decks (
+      deck_id TEXT PRIMARY KEY,
+      player_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      cards TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    "CREATE INDEX decks_by_player ON decks (player_id, updated_at DESC)",
   ],
 ];
 

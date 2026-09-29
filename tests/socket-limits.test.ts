@@ -10,6 +10,7 @@ import { WebSocket } from "ws";
 import { startWorker, type TestWorker } from "./worker.js";
 import { createApp, SILENCE_LIMIT_MS, type AppSocket } from "../src/app.js";
 import type { AccountStore } from "../src/accounts.js";
+import type { DeckStore } from "../src/decks.js";
 import type { MatchArchive } from "../src/archive.js";
 import { concede } from "../src/match.js";
 import { ensureCards, legalDecks, newMatch } from "./helpers.js";
@@ -106,6 +107,7 @@ describe("黙ったままの接続", () => {
     // 接続と定期処理しか使わないので、保存先は持たせない。
     const app = createApp({
       accounts: {} as AccountStore,
+      deckStore: {} as DeckStore,
       archive: {} as MatchArchive,
       now: () => nowMs,
       accountLimit: null,

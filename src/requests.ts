@@ -97,3 +97,30 @@ export const officialDeckSchema = z.object({
     )
     .max(DECK_SIZE),
 });
+
+/**
+ * デッキを保存する要求（5.5 節）。組みかけでも保存できるので、60 枚ちょうどかは見ない。
+ * 合計の上限は、一覧を読むたびに照らす検査を軽く保つためのものである。
+ * 同じカードを 2 行に分けると、行をカードで引く画面がどちらかを落とす。
+ */
+export const saveDeckSchema = z
+  .object({
+    secret: z.string(),
+    deckId: z.string().optional(),
+    name: z.string().max(200),
+    cards: z
+      .array(z.object({ defId: z.string().max(100), count: z.int().min(1).max(DECK_SIZE) }))
+      .refine((cards) => cards.reduce((sum, { count }) => sum + count, 0) <= DECK_SIZE)
+      .refine((cards) => new Set(cards.map(({ defId }) => defId)).size === cards.length),
+  })
+  .transform((body) => ({
+    secret: body.secret,
+    name: body.name,
+    cards: body.cards,
+    ...(body.deckId === undefined ? {} : { deckId: body.deckId }),
+  }));
+
+export const deleteDeckSchema = z.object({
+  secret: z.string(),
+  deckId: z.string(),
+});
