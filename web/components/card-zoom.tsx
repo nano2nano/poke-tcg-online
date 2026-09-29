@@ -6,6 +6,8 @@ import { CardCaption, CardFace } from "./board.js";
 export function CardZoom({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<ZoomTarget | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
+  // 中で押し始めて背景で離したクリック（文字を選ぶときなど）も、dialog そのものに届く。
+  const pressedBackdrop = useRef(false);
 
   useLayoutEffect(() => {
     const shown = dialog.current;
@@ -22,8 +24,13 @@ export function CardZoom({ children }: { children: ReactNode }) {
         ref={dialog}
         onClose={() => setTarget(null)}
         // 枠の外（背景）を押しても閉じる。中身は内側の要素が覆っているので、dialog そのものに当たるのは背景だけである。
+        onPointerDown={(event) => {
+          pressedBackdrop.current = event.target === event.currentTarget;
+        }}
         onClick={(event) => {
-          if (event.target === event.currentTarget) event.currentTarget.close();
+          if (event.target === event.currentTarget && pressedBackdrop.current) {
+            event.currentTarget.close();
+          }
         }}
       >
         <div className="card-zoom-body">

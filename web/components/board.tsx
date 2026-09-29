@@ -9,8 +9,8 @@ import {
   memo,
   useEffectEvent,
   useLayoutEffect,
+  useReducer,
   useRef,
-  useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -52,24 +52,24 @@ export function CardFace({
   const { table, images } = useCardData();
   const card = table[defId];
   const src = imageUrl(images, card?.cardID);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const shown = src !== null && src !== failedSrc ? src : null;
+  // 読めなかった画像は `imageUrl` が覚えているので、描き直せば名前の面になる。
+  const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
   const face = useRef<HTMLDivElement>(null);
   const zoomable = useZoomable(zoom);
-  const failed = useEffectEvent((failedUrl: string) => {
-    setFailedSrc(failedUrl);
+  const failed = useEffectEvent(() => {
+    noteFailedImage();
     onImageFailed?.();
   });
   // ほかの部品のクリーンアップで手放された要素を拾い、描画より前に付けるため `useLayoutEffect` にする。
   // `useEffect` では、名前の面が一瞬見える。
   useLayoutEffect(() => {
-    if (shown === null || face.current === null) return;
-    const image = takeImage(shown, () => failed(shown));
+    if (src === null || face.current === null) return;
+    const image = takeImage(src, failed);
     face.current.append(image);
     return () => releaseImage(image);
-  }, [shown]);
+  }, [src]);
   // 画像の無い小さな面は名前も読めないので、出さない。
-  if (thumb === true && shown === null) return null;
+  if (thumb === true && src === null) return null;
   const classes = ["card", thumb === true && "thumb", zoom !== undefined && "zoomable"];
   return (
     <div

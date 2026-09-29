@@ -690,6 +690,56 @@ test("載せているあいだに画面が低くなっても、プレビュー�
     .toBeLessThanOrEqual(height);
 });
 
+test("拡大の中で押し始めて背景で離しても、閉じない", async ({ page }) => {
+  const hand = await replayHand(page);
+  const zoom = page.locator("#card-zoom");
+  await hand.first().click();
+  await expect(zoom).toBeVisible();
+
+  // 説明の文字を選ぼうとして、枠の外まで引っぱる。
+  const title = await page.locator("#card-zoom-title").boundingBox();
+  if (title === null) throw new Error("見出しが出ていない");
+  await page.mouse.move(title.x + 2, title.y + title.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(2, 2);
+  await page.mouse.up();
+  await expect(zoom).toBeVisible();
+
+  await page.mouse.click(2, 2);
+  await expect(zoom).toBeHidden();
+});
+
+test.describe("タッチ端末", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+
+  test("長押しを指をずらしてやめたら、次にキーボードで押したボタンを止めない", async ({ page }) => {
+    await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+    // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
+    await page.route("**/api/card-image/*", () => {});
+    await page.goto(`${BASEPATH}/`);
+    await page.fill("#card-search", "エネルギー");
+    const thumb = page.locator("#card-results .card-row .card").first();
+    await expect(thumb).toBeVisible();
+    const box = await thumb.boundingBox();
+    if (box === null) throw new Error("小さな面が出ていない");
+
+    // Playwright の `tap` は置いてすぐ離すので、CDP で指を置く。
+    const cdp = await page.context().newCDPSession(page);
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    await expect(page.locator("#card-preview")).toBeVisible();
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: point.x, y: point.y + 30 }],
+    });
+    await expect(page.locator("#card-preview")).toBeHidden();
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+
+    await page.locator("#card-results .card-row button.add").first().press("Enter");
+    await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+  });
+});
+
 test("載せているあいだに画像が読めなかったと分かったら、プレビューに説明を書き添える", async ({
   page,
 }) => {

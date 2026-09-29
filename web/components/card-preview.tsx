@@ -108,10 +108,15 @@ export function CardPreview() {
       if (event.pointerType !== "touch") lastMouse = { x: event.clientX, y: event.clientY };
       if (longPress?.pointerId !== event.pointerId) return;
       const moved = Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y);
-      if (moved > LONG_PRESS_SLOP_PX) endLongPress();
+      if (moved <= LONG_PRESS_SLOP_PX) return;
+      // やめた長押しを離してもクリックは来ない。残すと、キーボードで押したボタンのクリックを止めてしまう。
+      swallowClick = false;
+      endLongPress();
     };
     const up = (event: PointerEvent) => {
-      if (longPress?.pointerId === event.pointerId) endLongPress();
+      if (longPress?.pointerId !== event.pointerId) return;
+      if (event.type === "pointercancel") swallowClick = false;
+      endLongPress();
     };
     const click = (event: MouseEvent) => {
       if (!swallowClick) return;
