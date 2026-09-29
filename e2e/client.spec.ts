@@ -1841,10 +1841,12 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
   await expect(a.locator("#card-zoom")).toBeHidden();
 
   // キーボードでも開ける。
-  await hand.first().press("Enter");
-  await expect(a.locator("#card-zoom")).toBeVisible();
-  await a.keyboard.press("Escape");
-  await expect(a.locator("#card-zoom")).toBeHidden();
+  for (const key of ["Enter", " "]) {
+    await hand.first().press(key);
+    await expect(a.locator("#card-zoom")).toBeVisible();
+    await a.keyboard.press("Escape");
+    await expect(a.locator("#card-zoom")).toBeHidden();
+  }
 
   await close();
 });

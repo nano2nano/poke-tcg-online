@@ -21,12 +21,17 @@ export function useZoomable(target: ZoomTarget | undefined) {
     tabIndex: 0,
     role: "button",
     onClick: () => open(target),
+    // ボタンと同じく、Enter は押したとき、スペースは離したときに開く。開くと「閉じる」に移るので、
+    // 同じキーの続き（Enter の keypress、スペースの keyup）が「閉じる」を押さないようにする。
     onKeyDown: (event: KeyboardEvent) => {
       if (event.target !== event.currentTarget) return;
       if (event.key !== "Enter" && event.key !== " ") return;
-      // スペースで画面が送られないようにする。
+      // Enter の keypress を出させない。スペースでは画面が送られないようにする。
       event.preventDefault();
-      open(target);
+      if (event.key === "Enter") open(target);
+    },
+    onKeyUp: (event: KeyboardEvent) => {
+      if (event.target === event.currentTarget && event.key === " ") open(target);
     },
   };
 }
