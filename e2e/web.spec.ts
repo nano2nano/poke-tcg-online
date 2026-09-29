@@ -1118,6 +1118,130 @@ test("画面で演出を切ると、結果を待たせずに出し、切った�
   await expect(page.locator("#motion-toggle")).not.toBeChecked();
 });
 
+/** 手札に 1 枚足し、`counts` の枚数を 1 枚ずつ減らした局面。 */
+function drawnFrom(view: PlayerView, ...counts: ("prizeCount" | "deckCount")[]) {
+  const next = structuredClone(view);
+  next.self.hand.push({ ...next.self.hand[0]!, instanceId: "手札に入ったカード" });
+  for (const count of counts) next.self[count] -= 1;
+  return next;
+}
+
+/** 手札のカードが 1 枚増えるまで待ち、最後のカード（増えたカード）を返す。 */
+async function newestHandCard(page: Page, next: PlayerView) {
+  const hand = page.locator('#self [data-zone="hand"] .card');
+  await expect(hand).toHaveCount(next.self.hand.length);
+  return hand.last();
+}
+
+/** 手札に入ったカードの動きを始めに戻して止め、そのときのカードの中心と `from` の中心の隔たり。 */
+async function arrivalGap(card: Locator, from: string) {
+  await expect(card).toHaveAttribute("data-moving", "arriving");
+  return card.evaluate((node, zone) => {
+    for (const animation of node.getAnimations()) {
+      animation.pause();
+      animation.currentTime = 0;
+    }
+    const source = document.querySelector(`#self .mat [data-zone="${zone}"]`);
+    if (source === null) throw new Error("来た場所が描けていない");
+    const [start, at] = [source.getBoundingClientRect(), node.getBoundingClientRect()];
+    return Math.hypot(
+      start.left + start.width / 2 - (at.left + at.width / 2),
+      start.top + start.height / 2 - (at.top + at.height / 2),
+    );
+  }, from);
+}
+
+const animationsOf = (card: Locator) => card.evaluate((node) => node.getAnimations().length);
+
+test("サイドを取ると、取ったカードをサイドから手札へ動かす", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const next = drawnFrom(view, "prizeCount");
+  send([], next);
+  expect(await arrivalGap(await newestHandCard(page, next), "prizes")).toBeLessThan(2);
+});
+
+test("山札から引くと、引いたカードを山札から手札へ動かし、動き終えたら印を外す", async ({
+  page,
+}) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const next = drawnFrom(view, "deckCount");
+  send([], next);
+  const card = await newestHandCard(page, next);
+  expect(await arrivalGap(card, "deck")).toBeLessThan(2);
+  await card.evaluate((node) => node.getAnimations().forEach((animation) => animation.finish()));
+  await expect(card).not.toHaveAttribute("data-moving");
+});
+
+test("動いている途中で次の局面が届いても、手札へ入るカードを止めない", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const next = drawnFrom(view, "deckCount");
+  send([], next);
+  const card = await newestHandCard(page, next);
+  await expect(card).toHaveAttribute("data-moving", "arriving");
+  // 動き終えても消えるので、途中で止めておく。消えるのは、次の局面で取り消したときだけになる。
+  await card.evaluate((node) => node.getAnimations().forEach((animation) => animation.pause()));
+  const later = structuredClone(next);
+  later.opponent.handCount += 1;
+  send([], later);
+  await expect(page.locator('#opponent [data-zone="hand"]')).toHaveAttribute(
+    "data-count",
+    String(later.opponent.handCount),
+  );
+  expect(await animationsOf(card)).toBe(1);
+});
+
+test("サイドと山札が一緒に減ると、どちらから来たか分からないので動かさない", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const next = drawnFrom(view, "prizeCount", "deckCount");
+  send([], next);
+  expect(await animationsOf(await newestHandCard(page, next))).toBe(0);
+});
+
+test("前の局面で盤面に見えていたカードが手札に入っても、山札からは動かさない", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const next = drawnFrom(view, "deckCount");
+  // 手札に入るカードを、前の局面ではトラッシュに置いておく。
+  const before = structuredClone(view);
+  before.self.discard.push(next.self.hand.at(-1)!);
+  send([], before);
+  await expect(page.locator('#self [data-zone="discard"] .card[data-def-id]')).toHaveCount(1);
+  send([], next);
+  expect(await animationsOf(await newestHandCard(page, next))).toBe(0);
+});
+
+test("前の局面でスタジアムに見えていたカードが手札に入っても、山札からは動かさない", async ({
+  page,
+}) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const next = drawnFrom(view, "deckCount");
+  const before = structuredClone(view);
+  before.stadium = next.self.hand.at(-1)!;
+  send([], before);
+  await expect(page.locator('[data-zone="stadium"] .card[data-def-id]')).toHaveCount(1);
+  send([], next);
+  expect(await animationsOf(await newestHandCard(page, next))).toBe(0);
+});
+
+test("画面で演出を切っていたら、引いたカードを動かさずに手札に置く", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  await page.uncheck("#motion-toggle");
+  const next = drawnFrom(view, "deckCount");
+  send([], next);
+  const card = await newestHandCard(page, next);
+  expect(await card.getAttribute("data-moving")).toBeNull();
+  expect(await animationsOf(card)).toBe(0);
+  // あとで演出を戻しても、前に入ったカードを動かし直さない。
+  await page.check("#motion-toggle");
+  expect(await animationsOf(card)).toBe(0);
+});
+
 /** 準備を終え、最初の番の手を持つ座席から見た盤面と、その手。 */
 function firstTurn(): { view: PlayerView; moves: Move[] } {
   ensureCards();

@@ -11,10 +11,9 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { useReducedMotion } from "motion/react";
 import type { CoinToss, Hit, Notice, Tone } from "../lib/describe.js";
 import { SETTLE_MS } from "../lib/motion.js";
-import { useAnimate } from "./motion-setting.js";
+import { useMotionOn } from "./motion-setting.js";
 
 /**
  * 同時に出しておく結果の数。溢れたら古いものから消すが、コインは残す。1 つの手でもコイン、
@@ -60,8 +59,7 @@ export function useNotices(): NoticeFeed {
   const [queue] = useState(() => createQueue(setNotices, setHits));
   useEffect(() => queue.dispose, [queue]);
   // OS で動きを減らす設定にしている人にはカードを動かさないので、結果も数字も待たせずに出す。
-  const reduced = useReducedMotion() === true;
-  const animate = useAnimate() && !reduced;
+  const animate = useMotionOn();
   useEffect(() => queue.setAnimate(animate), [queue, animate]);
   return { notices, hits, show: queue.show };
 }

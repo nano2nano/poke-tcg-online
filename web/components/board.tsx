@@ -16,6 +16,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type CSSProperties,
   type ReactNode,
   type RefObject,
@@ -32,7 +33,7 @@ import {
   pokemonSpot,
   type DropSpot,
 } from "../lib/card-drops.js";
-import { SETTLE_MS } from "../lib/motion.js";
+import { MOVE_SECONDS, SETTLE_MS } from "../lib/motion.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 import {
   CardDragArea,
@@ -42,6 +43,7 @@ import {
   useTapArea,
   type CardDrops,
 } from "./card-drag.js";
+import { useMotionOn } from "./motion-setting.js";
 
 type Pokemon = NonNullable<Side["active"]>;
 
@@ -69,6 +71,7 @@ export function CardFace({
   gripRef,
   grippable,
   picked,
+  arriveFrom,
   onImageFailed,
 }: {
   defId: string;
@@ -86,6 +89,8 @@ export function CardFace({
   grippable?: boolean;
   /** タッチで押して、落とす先を選んでいるところか。 */
   picked?: boolean;
+  /** この局面で手札に入ったカードなら、来た場所。そこから動かして見せる。 */
+  arriveFrom?: ArrivalZone | undefined;
   onImageFailed?: () => void;
 }) {
   const { table, images } = useCardData();
@@ -103,6 +108,10 @@ export function CardFace({
   );
   const frame = use(BoardFrame);
   const moving = useMovingMark(face, frame);
+  useLayoutEffect(() => {
+    if (arriveFrom === undefined || face.current === null) return;
+    return arrive(face.current, arriveFrom);
+  }, [arriveFrom]);
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -184,6 +193,97 @@ function useMovingMark(element: RefObject<HTMLElement | null>, frame: object | u
     },
     onLayoutAnimationComplete: settle,
   };
+}
+
+/** 手札に入ったカードが、盤面のどこから来たか。 */
+type ArrivalZone = "prizes" | "deck";
+
+/**
+ * この局面で手札に入ったカードと、どこから来たか。山札とサイドのカードは射影にカードの ID が無く、
+ * 前の局面で盤面のどこにも見えていないので、`layoutId` では動かせない。
+ */
+const Arrivals = createContext<ReadonlyMap<string, ArrivalZone>>(new Map());
+
+/**
+ * 局面が変わって手札に新しく見えたカードと、来た場所。サイドと山札のどちらか一方だけが減っていれば、
+ * そこから来たとみなす。両方が減っていると、どのカードがどちらから来たか分からないので動かさない。
+ */
+function handArrivals(
+  before: BoardSides,
+  after: Side | null,
+  side: "near" | "far",
+): [string, ArrivalZone][] {
+  const was = before[side];
+  if (was === null || after === null || !("hand" in after)) return [];
+  const [prizes, deck] = [after.prizeCount < was.prizeCount, after.deckCount < was.deckCount];
+  if (prizes === deck) return [];
+  const from: ArrivalZone = prizes ? "prizes" : "deck";
+  // 前の局面で盤面のどこかに見えていたカードは、`layoutId` でその場所から動く。
+  const shown = new Set(shownIds(before));
+  return after.hand
+    .filter((card) => !shown.has(card.instanceId))
+    .map((card) => [card.instanceId, from]);
+}
+
+interface BoardSides {
+  near: Side | null;
+  far: Side | null;
+  stadium: SpectatorView["stadium"];
+}
+
+/** 盤面に見えているカードの ID。 */
+function shownIds({ near, far, stadium }: BoardSides): string[] {
+  const sides = [near, far].filter((side) => side !== null);
+  const pokemon = sides
+    .flatMap((side) => [side.active, ...side.bench])
+    .filter(
+      (each): each is Extract<Pokemon, { inPlayId: string }> => each !== null && "inPlayId" in each,
+    );
+  const stadiums =
+    stadium === null ? [] : "instanceId" in stadium ? [stadium] : [stadium.left, stadium.right];
+  return [
+    ...sides.flatMap((side) => [
+      ...("hand" in side ? side.hand : []),
+      ...side.discard,
+      ...side.lostZone,
+    ]),
+    ...pokemon.flatMap((each) => [...each.stack, ...each.attached]),
+    ...stadiums,
+  ].map((card) => card.instanceId);
+}
+
+/**
+ * 手札に入ったカードの来た場所。描き始めたときに決め、そのあと局面が進んでも、動いている途中で止めない。
+ * 演出を切っているときに入ったカードは、あとで演出を戻しても動かさない。
+ */
+function useArrivalZone(instanceId: string): ArrivalZone | undefined {
+  const from = use(Arrivals).get(instanceId);
+  const on = useMotionOn();
+  const [arrival] = useState(() => (on ? from : undefined));
+  return arrival;
+}
+
+/**
+ * 手札に入ったカードを、来た場所から動かす。Motion が動かす `transform` とぶつからないよう、
+ * `translate` を Web Animations で動かす。
+ */
+function arrive(card: HTMLElement, from: ArrivalZone): (() => void) | undefined {
+  const source = card
+    .closest('[data-zone="hand"]')
+    ?.parentElement?.querySelector(`.mat [data-zone="${from}"]`);
+  if (source === null || source === undefined) return;
+  const [start, end] = [source.getBoundingClientRect(), card.getBoundingClientRect()];
+  const dx = start.left + start.width / 2 - (end.left + end.width / 2);
+  const dy = start.top + start.height / 2 - (end.top + end.height / 2);
+  card.setAttribute("data-moving", "arriving");
+  const animation = card.animate([{ translate: `${dx}px ${dy}px` }, { translate: "0 0" }], {
+    duration: MOVE_SECONDS * 1_000,
+    easing: "ease-out",
+  });
+  const settle = () => card.removeAttribute("data-moving");
+  animation.addEventListener("finish", settle);
+  animation.addEventListener("cancel", settle);
+  return () => animation.cancel();
 }
 
 /** 名前と、種類やワザの説明。画像が無くても、何のカードか読めるようにする。 */
@@ -399,17 +499,33 @@ export function Board({
   children: ReactNode;
 }) {
   const frame = useMemo(() => ({ near, far, stadium }), [near, far, stadium]);
+  // 前に描いた局面と比べて、手札に入ったカードを決める。
+  const [shown, setShown] = useState(() => ({
+    sides: { near, far, stadium },
+    arrivals: new Map<string, ArrivalZone>(),
+  }));
+  if (shown.sides.near !== near || shown.sides.far !== far || shown.sides.stadium !== stadium) {
+    setShown({
+      sides: { near, far, stadium },
+      arrivals: new Map([
+        ...handArrivals(shown.sides, near, "near"),
+        ...handArrivals(shown.sides, far, "far"),
+      ]),
+    });
+  }
   const body = <BoardBody frame={frame}>{children}</BoardBody>;
   return (
     <LayoutGroup id={name}>
       <BoardFrame value={frame}>
-        {drops === undefined ? (
-          body
-        ) : (
-          <CardDragArea drops={drops} overlay={heldCard}>
-            {body}
-          </CardDragArea>
-        )}
+        <Arrivals value={shown.arrivals}>
+          {drops === undefined ? (
+            body
+          ) : (
+            <CardDragArea drops={drops} overlay={heldCard}>
+              {body}
+            </CardDragArea>
+          )}
+        </Arrivals>
       </BoardFrame>
     </LayoutGroup>
   );
@@ -530,18 +646,26 @@ export const SideBoard = memo(function SideBoard({
 
 function HandCard({ card }: { card: CardInstance }) {
   const inDragArea = useInDragArea();
+  const arriveFrom = useArrivalZone(card.instanceId);
   return inDragArea ? (
-    <GripCard card={card} />
+    <GripCard card={card} arriveFrom={arriveFrom} />
   ) : (
     <CardFace
       defId={card.defId}
       instanceId={card.instanceId}
       zoom={{ title: "手札", defIds: [card.defId] }}
+      arriveFrom={arriveFrom}
     />
   );
 }
 
-function GripCard({ card }: { card: CardInstance }) {
+function GripCard({
+  card,
+  arriveFrom,
+}: {
+  card: CardInstance;
+  arriveFrom: ArrivalZone | undefined;
+}) {
   const { attach, grippable, picked } = useCardGrip(card.defId, card.instanceId);
   return (
     <CardFace
@@ -551,6 +675,7 @@ function GripCard({ card }: { card: CardInstance }) {
       gripRef={attach}
       grippable={grippable}
       picked={picked}
+      arriveFrom={arriveFrom}
     />
   );
 }
