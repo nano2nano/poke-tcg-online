@@ -23,7 +23,7 @@ export const DECK_SIZE = 60;
 export const SAME_NAME_LIMIT = 4;
 
 /** ACE SPEC のカードはデッキに 1 枚しか入れられない。 */
-export const ACE_SPEC_LIMIT = 1;
+const ACE_SPEC_LIMIT = 1;
 
 export type DeckViolation =
   | { kind: "size"; actual: number }
@@ -73,16 +73,6 @@ export function validateDeck(deck: DeckList): DeckViolation[] {
   if (unimplemented.length > 0) violations.push({ kind: "unimplemented", defIds: unimplemented });
 
   return violations;
-}
-
-/**
- * 未実装の `defId` を、重複を保ったまま返す（1 枚につき 1 要素）。
- * 実際に人が組もうとしたデッキでの出現回数が、実装の優先順位を決める材料になる
- * （エンジン側 `docs/design/card-data-foundation.md` の「読み込まれたデッキから
- * 遅延的に積み上げる」運用）。
- */
-export function unimplementedOccurrences(deck: DeckList): CardDefId[] {
-  return listUnimplementedDefIds(deck);
 }
 
 export function describeViolation(violation: DeckViolation): string {

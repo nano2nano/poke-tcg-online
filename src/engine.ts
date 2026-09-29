@@ -20,7 +20,6 @@ export {
   playerView,
   projectEvents,
   spectatorView,
-  IllegalMoveError,
 } from "../engine/src/index.js";
 
 /**
@@ -36,7 +35,6 @@ export {
 export type { CardDef } from "../engine/src/cards.js";
 
 export type {
-  ApplyResult,
   CardDefId,
   CardInstance,
   Choice,

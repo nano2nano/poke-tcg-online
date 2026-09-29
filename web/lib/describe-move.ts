@@ -65,7 +65,7 @@ function topName(pokemon: Pokemon, cards: CardTable): string {
  * 場のポケモンを、いる場所と合わせて書く。ベンチに同じ名前が並ぶときは左からの番号を足す。
  * `withSide` が偽なら、自分の側では「自分の」を省く。自分の番の手は自分の場にしか向かない。
  */
-export function pokemonLabel(inPlayId: string, { view, cards }: MoveContext, withSide: boolean) {
+function pokemonLabel(inPlayId: string, { view, cards }: MoveContext, withSide: boolean) {
   const found = pokemonAt(inPlayId, view);
   if (found === null) return inPlayId;
   const name = topName(found.pokemon, cards);

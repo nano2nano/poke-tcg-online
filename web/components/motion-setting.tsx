@@ -29,7 +29,7 @@ const MotionSetting = createContext<{ animate: boolean; setAnimate: (animate: bo
 });
 
 /** 演出を出すか。画面の設定で切ったときだけ false になる。OS の設定は `MotionConfig` と CSS が見る。 */
-export function useAnimate(): boolean {
+function useAnimate(): boolean {
   return use(MotionSetting).animate;
 }
 

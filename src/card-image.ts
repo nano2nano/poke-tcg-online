@@ -28,7 +28,7 @@ const IMAGE_PATH =
  */
 const lookups = new Map<string, Promise<string | null>>();
 
-export type PageFetcher = (url: string) => Promise<Response>;
+type PageFetcher = (url: string) => Promise<Response>;
 
 export interface CardImageOptions {
   fetcher?: PageFetcher;

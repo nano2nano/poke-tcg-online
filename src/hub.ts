@@ -75,19 +75,19 @@ export interface HubOptions {
  * AI が手を指すまでの間（7.3 節）。AI が手を選ぶ時間は人が画面を追う時間よりずっと短いので、
  * 間を置かないと番が回ってきた瞬間に何手も進み、人は画面で何が起きたかを追えない。
  */
-export const BOT_DELAY_MS = 700;
+const BOT_DELAY_MS = 700;
 
 /**
  * AI どうしの対戦で、AI が手を指すまでの間（7.4 節）。見る速さは画面が届いた局面を溜めて決めるので、
  * ここは画面のいちばん速い送りより短ければよい。長くすると、画面が速く送ったときに届くのを待つ。
  */
-export const WATCH_DELAY_MS = 200;
+const WATCH_DELAY_MS = 200;
 
 /**
  * AI どうしの対戦で、見る人が繋ぐのを待つ上限（7.4 節）。繋ぐ前に動かすと、見る人は最初の数手を見られない。
  * 誰も繋がなくても、これを過ぎたら動かし始める。止めたままにすると、持ち時間が尽きるまで対戦が残る。
  */
-export const WATCH_START_MS = 30_000;
+const WATCH_START_MS = 30_000;
 
 export class MatchHub {
   /** 対戦 ID → 座席 → 接続。1 座席に 1 本だけ持つ。 */
@@ -600,11 +600,6 @@ export class MatchHub {
   private openViews(match: Match): { seatViews?: [PlayerView, PlayerView] } {
     return botsOnly(match) ? { seatViews: [viewFor(match, 0), viewFor(match, 1)] } : {};
   }
-}
-
-/** 手番側かどうか。テストと配信層が同じ判定を使う。 */
-export function isToMove(match: Match, seat: Player): boolean {
-  return toMove(match) === seat;
 }
 
 function send(socket: SeatSocket, message: ServerMessage): void {

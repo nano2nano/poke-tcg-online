@@ -17,7 +17,7 @@ import {
 } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
 
-export type ReplayFailure =
+type ReplayFailure =
   | { kind: "schema-too-old"; recorded: number; oldest: number }
   | { kind: "card-data-mismatch"; expected: string; actual: string }
   | { kind: "seed-commitment" }

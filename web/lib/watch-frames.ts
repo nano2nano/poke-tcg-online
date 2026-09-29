@@ -42,7 +42,7 @@ export const STEP_CHOICES: readonly { ms: number; label: string }[] = [
  * 人が選ぶまでの速さ。AI どうしの対戦はサーバが人の目より速く指すので 1 手ずつ間を置き、
  * 人が座る対戦は指されたときに見せる。
  */
-export function defaultStepMs(open: boolean): number {
+function defaultStepMs(open: boolean): number {
   return open ? 1_000 : 0;
 }
 

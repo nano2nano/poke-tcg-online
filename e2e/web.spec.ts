@@ -39,9 +39,9 @@ test("画面を開くとロビーが描け、アセットに無いパスでも�
   expect(errors).toEqual([]);
 });
 
-test("画面を入れ替える前に `/next/` で配った観戦のリンクは、`/` で開き直す", async ({ page }) => {
-  await page.goto("/next/?watch=e2e-old-link");
-  await expect(page).toHaveURL(/\/\?watch=e2e-old-link$/);
+test("`/` のほかのパスは、検索の部分を残して `/` で開き直す", async ({ page }) => {
+  await page.goto("/no-such-page?watch=e2e-link");
+  await expect(page).toHaveURL(/\/\?watch=e2e-link$/);
   await expect(page.locator("#watch")).toBeVisible();
 });
 
