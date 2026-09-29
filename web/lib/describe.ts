@@ -302,20 +302,22 @@ const ZONES: Record<Zone["kind"], string> = {
   stadium: "スタジアム",
 };
 
+/** 畳んだ文は先頭のイベントの `actor` と `source` で書くので、それが違うイベントは畳まない。 */
 function foldKey(event: PlayerEvent): string | undefined {
   const zone = (at: Zone) => (at.kind === "stadium" ? at.kind : `${at.kind} ${at.player}`);
+  const cause = `${event.actor} ${event.source?.instanceId}`;
   switch (event.kind) {
     case "card-drawn":
     case "card-drawn-hidden":
-      return `draw ${event.player}`;
+      return `draw ${event.player} ${cause}`;
     case "card-discarded":
-      return `discard ${event.player}`;
+      return `discard ${event.player} ${cause}`;
     case "card-moved":
     case "card-moved-hidden":
-      return `${event.kind} ${zone(event.from)} ${zone(event.to)}`;
+      return `${event.kind} ${zone(event.from)} ${zone(event.to)} ${cause}`;
     case "prize-taken":
     case "prize-taken-hidden":
-      return `prize ${event.player}`;
+      return `prize ${event.player} ${cause}`;
     default:
       return undefined;
   }
@@ -353,7 +355,11 @@ function describeRun(
     zone.kind === "stadium" || zone.player === subject
       ? ZONES[zone.kind]
       : `${who(zone.player)}の${ZONES[zone.kind]}`;
-  const cause = event.source === null ? "" : `（${name(event.source.defId)}）`;
+  // どうぐは、つけたカード自身を `source` に持つ。
+  const cause =
+    event.source === null || ("card" in event && event.card.instanceId === event.source.instanceId)
+      ? ""
+      : `（${name(event.source.defId)}）`;
   // 自分でしたことかは、誰の番に起きたかで決める。`actor` は効果を受けた側を指すことがある（入れ替えなど）。
   const byTurn = (player: Player) => (event.window.kind === "turn" ? event.window.player : player);
   switch (event.kind) {
@@ -552,7 +558,8 @@ function describeRun(
     case "pokemon-promoted":
       return {
         text: `${who(event.player)}が${pokemon(event.target, event.player)}をバトル場に出した`,
-        by: byTurn(event.player),
+        // きぜつのあとは、相手の番でもポケモンの持ち主が選ぶ。
+        by: event.player,
       };
     // 手順の区切りと、ほかのイベントが言っていることの言い直し。先攻と決着は、別の知らせで出す。
     case "game-started":

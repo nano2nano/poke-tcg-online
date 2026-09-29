@@ -103,6 +103,43 @@ describe("describeEvents", () => {
     expect(notices.map((notice) => notice.text)).toEqual(["あがナンジャモを使った"]);
   });
 
+  it("続いたイベントでも、起こした効果が違えば畳まない", () => {
+    const card = { instanceId: "c1", defId: "pikachu" };
+    const from = { kind: "active", player: 1 };
+    const notices = describeEvents(
+      [
+        event({ kind: "card-discarded", player: 1, actor: null, card, from }),
+        event({ kind: "card-discarded", player: 1, actor: 0, card, from }),
+      ],
+      [null],
+      who,
+      cards,
+    );
+    expect(notices).toHaveLength(2);
+  });
+
+  it("どうぐのように、つけたカード自身が効果の出どころなら、出どころを添えない", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const card = { instanceId: "c1", defId: "nanjamo" };
+    const source = { defId: "nanjamo", instanceId: "c1", label: "ナンジャモ" };
+    const [notice] = describeEvents(
+      [
+        event({
+          kind: "tool-attached",
+          player: 0,
+          card,
+          target: "p0",
+          from: { kind: "hand", player: 0 },
+          source,
+        }),
+      ],
+      [view],
+      who,
+      cards,
+    );
+    expect(notice?.text).toBe("あがピカチュウにナンジャモをつけた");
+  });
+
   it("きぜつしたポケモンをトラッシュしたことは、記録にだけ残す", () => {
     const card = { instanceId: "c1", defId: "pikachu" };
     const notices = describeEvents(

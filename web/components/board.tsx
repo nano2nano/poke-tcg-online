@@ -208,7 +208,7 @@ const Arrivals = createContext<BoardArrivals>({ cards: new Map(), backs: {} });
 
 /**
  * 局面が変わって盤面に新しく見えたカードと、来た場所を決める。サイドと山札のどちらか一方だけが減っていれば、
- * 手札に入ったカードはそこから来たとみなす。伏せた手札が減り、山札もサイドも減っていなければ、場に新しく
+ * 手札に入ったカードはそこから来たとみなす。伏せた手札が減り、山札もサイドも変わっていなければ、場に新しく
  * 見えたカードはその手札から出たとみなす。どちらとも決まらなければ動かさない。
  */
 function boardArrivals(before: BoardSides, after: BoardSides): BoardArrivals {
@@ -229,9 +229,14 @@ function boardArrivals(before: BoardSides, after: BoardSides): BoardArrivals {
       }
       continue;
     }
-    const drew = now.handCount - handCount(was);
-    if (drew > 0 && prizes !== deck) backs[side] = { from: handCount(was), zone };
-    if (drew < 0 && !prizes && !deck) {
+    const change = now.handCount - handCount(was);
+    if (change > 0 && prizes !== deck) {
+      // 手札から出たカードがあると、手札の増えた数は引いた数より少ない。減った山札かサイドの数だけ動かす。
+      const drawn = prizes ? was.prizeCount - now.prizeCount : was.deckCount - now.deckCount;
+      backs[side] = { from: Math.max(now.handCount - drawn, 0), zone };
+    }
+    // 観戦で戻って見るときは、手札が減って山札が増えることがある。
+    if (change < 0 && now.deckCount === was.deckCount && now.prizeCount === was.prizeCount) {
       played.push(side);
       for (const card of unseen(fieldCards(now)))
         cards.set(card.instanceId, { side, zone: "hand" });
@@ -704,14 +709,22 @@ function GripCard({ card }: { card: CardInstance }) {
   );
 }
 
-/** 伏せた手札の 1 枚。位置で描くので、この局面で引いたカードは後ろに増えた位置のものになる。 */
+/**
+ * 伏せた手札の 1 枚。位置で描くので、前の局面からあった要素も、引いたカードの位置になれば動かす。
+ * 動いている途中で次の局面が届いても止めない。
+ */
 function HiddenHandCard({ index, side }: { index: number; side: Arrival["side"] }) {
   const back = useRef<HTMLDivElement>(null);
   const drawn = use(Arrivals).backs[side];
-  useArrival(
-    back,
-    drawn !== undefined && index >= drawn.from ? { side, zone: drawn.zone } : undefined,
-  );
+  const on = useMotionOn();
+  // 演出を切っているときに引いたカードは、あとで演出を戻しても動かさない。
+  const start = useEffectEvent((element: HTMLElement, zone: Arrival["zone"]) => {
+    if (on) arrive(element, { side, zone });
+  });
+  useLayoutEffect(() => {
+    if (drawn === undefined || index < drawn.from || back.current === null) return;
+    start(back.current, drawn.zone);
+  }, [drawn, index]);
   return <div ref={back} className="card back" />;
 }
 

@@ -1211,8 +1211,9 @@ test("サイドと山札が一緒に減ると、どちらから来たか分か�
 test("相手が山札から引くと、伏せた手札に増えたカードを相手の山札から動かす", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
+  // 1 枚を手札から出し、2 枚引いた局面。
   const next = structuredClone(view);
-  next.opponent.handCount += 2;
+  next.opponent.handCount += 1;
   next.opponent.deckCount -= 2;
   send([], next);
   const hand = page.locator('#opponent [data-zone="hand"] .card');
@@ -1223,7 +1224,7 @@ test("相手が山札から引くと、伏せた手札に増えたカードを�
   expect(await animationsOf(hand.nth(-3))).toBe(0);
 });
 
-/** 相手が手札のエネルギーを、相手のバトル場のポケモンにつけた局面とイベント。 */
+/** 相手が自分の番に、手札のエネルギーを相手のバトル場のポケモンにつけた局面とイベント。 */
 function opponentAttaches(view: PlayerView) {
   const next = structuredClone(view);
   const active = next.opponent.active;
@@ -1234,6 +1235,7 @@ function opponentAttaches(view: PlayerView) {
   const player = 1 - view.viewer;
   const event = {
     kind: "energy-attached",
+    window: { kind: "turn", player },
     actor: player,
     player,
     card,
@@ -1265,7 +1267,8 @@ test("自分でしたことは、記録に残すが結果には出さず、大�
   const send = await seatWithEvents(page, view);
   const { next, event } = opponentAttaches(view);
   const logged = await page.locator("#events li").count();
-  send([{ ...event, actor: view.viewer, player: view.viewer }], next);
+  const self = { kind: "turn", player: view.viewer };
+  send([{ ...event, window: self, actor: view.viewer, player: view.viewer }], next);
   await expect(page.locator("#events li")).toHaveCount(logged + 1);
   await page.clock.runFor(100);
   await expect(page.locator("#results .result")).toHaveCount(0);
