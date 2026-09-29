@@ -71,6 +71,16 @@ export function newMatch(seedNonce: string, nowMs = 0): Match {
   });
 }
 
+/** 対戦の準備を、どちらも最初の合法手で済ませる。最初の番の手を持つ局面になる。 */
+export function finishSetup(match: Match): void {
+  while (match.state.phase === "setup") {
+    const mover = toMove(match);
+    if (mover === null) throw new Error("準備のあいだに手番の座席が無い");
+    const result = submitMove(match, mover, match.version, legalMoves(match.state)[0]!, 0);
+    if (!result.ok) throw new Error(`準備の手が通らない: ${JSON.stringify(result)}`);
+  }
+}
+
 export interface PlayOptions {
   /** 1 手ごとに呼ぶ。漏洩の検査はここに差し込む。 */
   inspect?: (match: Match, seat: Player) => void;
