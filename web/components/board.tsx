@@ -14,6 +14,7 @@ import {
   useRef,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { LayoutGroup, motion } from "motion/react";
 import type { CardInstance, SpectatorView } from "../../src/engine.js";
@@ -65,8 +66,7 @@ export function CardFace({
   // 読めなかった画像は `imageUrl` が覚えているので、描き直せば名前の面になる。
   const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
   const face = useRef<HTMLDivElement>(null);
-  const settling = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(settling.current), []);
+  const moving = useMovingMark(face);
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -102,10 +102,6 @@ export function CardFace({
       {pickable === false && <span className="visually-hidden">（選べません）</span>}
     </>
   );
-  const settle = () => {
-    clearTimeout(settling.current);
-    face.current?.removeAttribute("data-moving");
-  };
   // 一覧や拡大のカードは動かさない。デッキを組む画面では数百枚になる。
   if (instanceId === undefined) return <div {...props}>{children}</div>;
   return (
@@ -113,20 +109,35 @@ export function CardFace({
       {...props}
       layoutId={instanceId}
       // 倒すのは動かさずに描く。プレビューは描いた直後のカードの大きさで置き場所を決める。
-      style={{ rotate: posture === undefined ? 0 : (POSTURE_ANGLES[posture] ?? 0) }}
-      // 動いているあいだはほかのカードの上に描く。プレビューは収まった合図で置き直す。
-      onLayoutAnimationStart={() => {
-        face.current?.setAttribute("data-moving", "");
-        // Motion は動きを途中で打ち切ると（画面の幅が変わったときなど）終わりを知らせないので、
-        // 長さが過ぎたら外す。
-        clearTimeout(settling.current);
-        settling.current = setTimeout(settle, MOVE_SECONDS * 1_000 + 100);
-      }}
-      onLayoutAnimationComplete={settle}
+      style={{ rotate: POSTURE_ANGLES[posture ?? ""] ?? 0 }}
+      {...moving}
     >
       {children}
     </motion.div>
   );
+}
+
+/**
+ * 動いているあいだ要素に `data-moving` を付ける。CSS はほかのカードの上に描き、プレビューは外れたときに
+ * 置き直す。
+ */
+function useMovingMark(element: RefObject<HTMLElement | null>) {
+  const settling = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(settling.current), []);
+  const settle = () => {
+    clearTimeout(settling.current);
+    element.current?.removeAttribute("data-moving");
+  };
+  return {
+    onLayoutAnimationStart: () => {
+      element.current?.setAttribute("data-moving", "");
+      // Motion は動きを途中で打ち切ると（画面の幅が変わったときなど）終わりを知らせないので、
+      // 長さが過ぎたら外す。
+      clearTimeout(settling.current);
+      settling.current = setTimeout(settle, MOVE_SECONDS * 1_000 + 100);
+    },
+    onLayoutAnimationComplete: settle,
+  };
 }
 
 /** 名前と、種類やワザの説明。画像が無くても、何のカードか読めるようにする。 */
@@ -210,6 +221,8 @@ function ShownPokemon({
   aimed: AimedSet;
 }) {
   const { table } = useCardData();
+  const self = useRef<HTMLDivElement>(null);
+  const moving = useMovingMark(self);
   const top = pokemon.stack[pokemon.stack.length - 1]!;
   const posture = pokemon.conditions.find((condition) =>
     Object.hasOwn(POSTURE_ANGLES, condition.kind),
@@ -221,8 +234,12 @@ function ShownPokemon({
       ...pokemon.attached.map((card) => card.defId),
     ],
   });
+  // ダメージの印やついているカードも、ポケモンと一緒に動かす。
   return (
-    <div
+    <motion.div
+      ref={self}
+      layoutId={`pokemon ${pokemon.inPlayId}`}
+      {...moving}
       className={aimed.has(pokemon.inPlayId) ? "pokemon aimed zoomable" : "pokemon zoomable"}
       {...zoomable}
       data-in-play-id={pokemon.inPlayId}
@@ -250,7 +267,7 @@ function ShownPokemon({
           ))}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }
 

@@ -438,9 +438,11 @@ button.secondary {
 .card[data-type="dragon"] {
   --type: #b7950b;
 }
-/* 動いているカードは、ほかのカードやダメージの印より上に描く。ついているカードは枠ごと上げる。 */
+/* 動いているカードは、ほかのカードやダメージの印より上に描く。ついているカードとスタジアムは枠ごと上げる。 */
 .card[data-moving],
-.attached:has(> .card[data-moving]) {
+.pokemon[data-moving],
+.attached:has(> .card[data-moving]),
+.board-center:has(.card[data-moving]) {
   z-index: 3;
 }
 .card.back {

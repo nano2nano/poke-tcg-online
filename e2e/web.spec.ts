@@ -653,7 +653,7 @@ async function openPlacing(page: Page, before: PlayerView[], after: PlayerView[]
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   const zone = page.locator('#replay-self [data-zone="active"]');
-  await expect(zone.locator(".card.empty")).toBeVisible();
+  await expect(page.locator('#replay-self [data-zone="hand"] .card').first()).toBeVisible();
   const now = await page.evaluate(() => Date.now());
   await page.clock.pauseAt(now + 1_000);
 
@@ -692,6 +692,32 @@ test("動いている途中で画面の幅が変わっても、動き終えた�
   await page.setViewportSize({ width: size.width - 40, height: size.height });
   await page.clock.runFor(1_000);
   await expect(card).not.toHaveAttribute("data-moving");
+});
+
+test("ベンチへ下がるポケモンは、ダメージの印も一緒に動く", async ({ page }) => {
+  const [, placed] = placingActive();
+  const damaged = structuredClone(placed);
+  const active = damaged[0]!.self.active;
+  if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
+  active.damage = 60;
+  const benched = structuredClone(damaged);
+  benched[0]!.self.bench = [benched[0]!.self.active];
+  benched[0]!.self.active = null;
+  await openPlacing(page, damaged, benched);
+  await page.click("#replay-next");
+  const pokemon = page.locator('#replay-self [data-zone="bench"] .pokemon');
+  await expect(pokemon).toBeVisible();
+  await page.clock.runFor(20);
+  const [card, badge] = [
+    await pokemon.locator(".card").boundingBox(),
+    await pokemon.locator(".damage").boundingBox(),
+  ];
+  if (card === null || badge === null) throw new Error("カードか印が描けていない");
+  const middle = { x: badge.x + badge.width / 2, y: badge.y + badge.height / 2 };
+  expect(middle.x).toBeGreaterThan(card.x);
+  expect(middle.x).toBeLessThan(card.x + card.width);
+  expect(middle.y).toBeGreaterThan(card.y);
+  expect(middle.y).toBeLessThan(card.y + card.height);
 });
 
 test("OS で動きを減らす設定にしていたら、カードを動かさずに場に置く", async ({ page }) => {
