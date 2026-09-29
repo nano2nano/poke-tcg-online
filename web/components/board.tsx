@@ -5,11 +5,19 @@
  * （`docs/spec/battle-server.md` 1 節の S-1）。
  */
 
-import { memo, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  memo,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type { CardInstance, SpectatorView } from "../../src/engine.js";
 import { imageUrl, releaseImage, takeImage } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
-import { cardSubtitle, conditionName, describeCard, type Side } from "../lib/describe.js";
+import { cardSubtitle, conditionName, describeCard, nameOf, type Side } from "../lib/describe.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 
 type Pokemon = NonNullable<Side["active"]>;
@@ -30,6 +38,7 @@ export function CardFace({
   pickable,
   thumb,
   zoom,
+  onImageFailed,
 }: {
   defId: string;
   posture?: string | undefined;
@@ -38,6 +47,7 @@ export function CardFace({
   /** 一覧の行に添える小さな面。 */
   thumb?: boolean;
   zoom?: ZoomTarget;
+  onImageFailed?: () => void;
 }) {
   const { table, images } = useCardData();
   const card = table[defId];
@@ -46,10 +56,14 @@ export function CardFace({
   const shown = src !== null && src !== failedSrc ? src : null;
   const face = useRef<HTMLDivElement>(null);
   const zoomable = useZoomable(zoom);
+  const failed = useEffectEvent((failedUrl: string) => {
+    setFailedSrc(failedUrl);
+    onImageFailed?.();
+  });
   // 描き直しの片付けより後、画面に出る前に付ける。後だと、名前の面が一瞬見える。
   useLayoutEffect(() => {
     if (shown === null || face.current === null) return;
-    const image = takeImage(shown, () => setFailedSrc(shown));
+    const image = takeImage(shown, () => failed(shown));
     face.current.append(image);
     return () => releaseImage(image);
   }, [shown]);
@@ -74,6 +88,16 @@ export function CardFace({
       {card !== undefined && <span className="visually-hidden">{describeCard(card)}</span>}
       {pickable === false && <span className="visually-hidden">（選べません）</span>}
     </div>
+  );
+}
+
+/** 名前と、種類やワザの説明。画像が無くても、何のカードか読めるようにする。 */
+export function CardCaption({ defId }: { defId: string }) {
+  const { table } = useCardData();
+  return (
+    <>
+      <strong>{nameOf(table, defId)}</strong> {describeCard(table[defId])}
+    </>
   );
 }
 
@@ -144,7 +168,7 @@ function ShownPokemon({
   const top = pokemon.stack[pokemon.stack.length - 1]!;
   const posture = pokemon.conditions.find((condition) => POSTURES.has(condition.kind))?.kind;
   const zoomable = useZoomable({
-    title: table[top.defId]?.name ?? top.defId,
+    title: nameOf(table, top.defId),
     defIds: [
       ...pokemon.stack.map((card) => card.defId).reverse(),
       ...pokemon.attached.map((card) => card.defId),

@@ -609,6 +609,78 @@ function gate(): [Promise<void>, () => void] {
   return [promise, release];
 }
 
+/** リプレイを開いて、盤面の手札のカードを返す。 */
+async function replayHand(page: Page) {
+  await mockHistory(page, async () => "ok");
+  await page.goto(`${BASEPATH}/`);
+  await page.click("#history-button");
+  await page.locator("#history-list button").first().click();
+  const hand = page.locator('#replay [data-zone="hand"] .card[data-def-id]');
+  await expect(hand.first()).toBeVisible();
+  return hand;
+}
+
+test("載せているカードが別のカードに描き替わったら、プレビューも替える", async ({ page }) => {
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  await hand.first().hover();
+  await expect(preview).toBeVisible();
+  const other = await page.evaluate(
+    (shown) =>
+      [...document.querySelectorAll<HTMLElement>("#replay .card[data-def-id]")]
+        .map((card) => card.dataset.defId)
+        .find((defId) => defId !== shown),
+    await hand.first().getAttribute("data-def-id"),
+  );
+  if (other === undefined) throw new Error("盤面に別のカードが無い");
+
+  // 同じ位置の要素のまま中身だけ替わる描き直しと同じにする。
+  await hand.first().evaluate((node, defId) => {
+    if (node instanceof HTMLElement) node.dataset.defId = defId;
+  }, other);
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", other);
+});
+
+test("載せているカードが描き直しで少し動いたら、プレビューも付いていく", async ({ page }) => {
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  const card = hand.first();
+  await card.hover();
+  await expect(preview).toBeVisible();
+  const offset = async (): Promise<number> =>
+    ((await preview.boundingBox())?.y ?? 0) - ((await card.boundingBox())?.y ?? 0);
+  const before = await offset();
+  const top = (await card.boundingBox())?.y ?? 0;
+
+  // 描き直しでカードが少し下へずれる。マウスの下は同じカードのままなので、載せ直しの合図は来ない。
+  await card.evaluate((node) => {
+    if (node instanceof HTMLElement) node.style.translate = "0 6px";
+    document.body.append(document.createElement("div"));
+  });
+  expect((await card.boundingBox())?.y).toBeCloseTo(top + 6, 0);
+  await expect.poll(offset).toBeCloseTo(before, 0);
+});
+
+test("載せているあいだに画像が読めなかったと分かったら、プレビューに説明を書き添える", async ({
+  page,
+}) => {
+  const [held, release] = gate();
+  await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+  await page.route("**/api/card-image/*", async (route) => {
+    await held;
+    await route.fulfill({ status: 502, body: "" });
+  });
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  await hand.first().hover();
+  await expect(preview).toBeVisible();
+  await expect(preview.locator("p")).toHaveCount(0);
+
+  release();
+  await expect(preview.locator("p")).toBeVisible();
+  await expect(preview.locator("p")).not.toBeEmpty();
+});
+
 test("閉じて別の対戦を開いたあとに、閉じた対戦を開けなかった答えが届いても、開いている方を閉じない", async ({
   page,
 }) => {

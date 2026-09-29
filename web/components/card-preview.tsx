@@ -1,8 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import { imageUrl } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
-import { describeCard, nameOf } from "../lib/describe.js";
-import { CardFace } from "./board.js";
+import { CardCaption, CardFace } from "./board.js";
 
 /** 長押しとみなすまでの時間。 */
 const LONG_PRESS_MS = 400;
@@ -29,6 +28,8 @@ export function CardPreview() {
   const [shown, setShown] = useState<Shown | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const { table, images } = useCardData();
+  // 画像が読めなかったと分かったら、名前の面に書き添えるため描き直す。
+  const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
 
   useEffect(() => {
     let current: Shown | null = null;
@@ -39,7 +40,11 @@ export function CardPreview() {
 
     const show = (card: HTMLElement, pointer: Pointer) => {
       const defId = card.dataset.defId ?? "";
-      if (current?.card === card && current.defId === defId) return;
+      if (current?.card === card && current.defId === defId) {
+        // 同じカードでも、描き直しで動いていることがある。
+        if (box.current !== null) place(box.current, card, current.pointer);
+        return;
+      }
       current = { card, defId, pointer };
       setShown(current);
       watch.observe(document.body, {
@@ -168,10 +173,10 @@ export function CardPreview() {
       hidden={shown === null}
       ref={box}
     >
-      {defId !== undefined && <CardFace defId={defId} />}
+      {defId !== undefined && <CardFace defId={defId} onImageFailed={noteFailedImage} />}
       {defId !== undefined && !withImage && (
         <p>
-          <strong>{nameOf(table, defId)}</strong> {describeCard(table[defId])}
+          <CardCaption defId={defId} />
         </p>
       )}
     </div>

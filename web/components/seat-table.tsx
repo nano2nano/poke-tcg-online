@@ -436,10 +436,6 @@ function RevealedDeck({
   );
 }
 
-function shownInMulligan(defId: string) {
-  return { title: "見せた手札", defIds: [defId] };
-}
-
 /**
  * 引き直すときに見せた手札を、見せた順に並べる。準備のあいだに増えたら開き、対戦が始まったら畳む。
  * 相手が引き直したことは、相手に番が回る前に起きるので、できごとの欄だけでは見落とす。
@@ -473,10 +469,13 @@ function Mulligans({ state: { mulligans, view } }: { state: SeatState }) {
             <div key={index} className="mulligan" data-side={own ? "self" : "opponent"}>
               {`${own ? "自分" : "相手"}（${counts[player]} 回目）`}
               <div className="zone hand">
-                {cards.map((defId, at) => (
-                  // oxlint-disable-next-line react/no-array-index-key -- 同じカードが何枚も並ぶので、位置のほかに見分けがない。
-                  <CardFace key={at} defId={defId} zoom={shownInMulligan(defId)} />
-                ))}
+                {cards.map((defId, at) => {
+                  const zoom = { title: "見せた手札", defIds: [defId] };
+                  return (
+                    // oxlint-disable-next-line react/no-array-index-key -- 同じカードが何枚も並ぶので、位置のほかに見分けがない。
+                    <CardFace key={at} defId={defId} zoom={zoom} />
+                  );
+                })}
               </div>
             </div>
           );

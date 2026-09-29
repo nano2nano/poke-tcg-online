@@ -2179,7 +2179,7 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   await close();
 });
 
-test("載せていたカードが消えたら、閉じずにマウスの下に来たカードへ移る", async ({ page }) => {
+test("載せていたカードが動いたら、閉じずにマウスの下に来たカードへ移る", async ({ page }) => {
   // 行が消えてページが縮んでも送られない高さにして、下の行がそのまま上がってくるようにする。
   await page.setViewportSize({ width: 1280, height: 1600 });
   await withCardImages(page, (route) =>
@@ -2188,14 +2188,13 @@ test("載せていたカードが消えたら、閉じずにマウスの下に�
   await page.goto("./");
   await page.fill("#card-search", "エネルギー");
   const add = page.locator("#card-results .card-row button.add");
-  await add.nth(0).click();
-  await add.nth(1).click();
+  for (let i = 0; i < 3; i++) await add.nth(i).click();
   const rows = page.locator("#deck-cards .card-row");
-  await expect(rows).toHaveCount(2);
-  const next = await rows.nth(1).getAttribute("data-def-id");
+  await expect(rows).toHaveCount(3);
+  const last = await rows.nth(2).getAttribute("data-def-id");
 
   const preview = page.locator("#card-preview");
-  await rows.nth(0).locator(".card").hover();
+  await rows.nth(1).locator(".card").hover();
   await expect(preview).toBeVisible();
   const hides = await preview.evaluateHandle((node) => {
     const seen = { count: 0 };
@@ -2205,16 +2204,18 @@ test("載せていたカードが消えたら、閉じずにマウスの下に�
     return seen;
   });
 
-  // マウスを動かさずに消す。下の行が上がってきて、マウスの下に来る。
+  // マウスを動かさずに上の行を消す。載せていた行は上へずれ、その下の行がマウスの下に来る。
   await rows.nth(0).locator("button.remove").press("Enter");
-  await expect(rows).toHaveCount(1);
-  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", next as string);
+  await expect(rows).toHaveCount(2);
+  await expect(preview.locator(".card")).toHaveAttribute("data-def-id", last as string);
   expect(await hides.evaluate((seen) => seen.count)).toBe(0);
 
-  // 下にカードが無くなったら閉じる。
-  await rows.nth(0).locator("button.remove").press("Enter");
-  await expect(rows).toHaveCount(0);
+  // 下にカードが無くなったら閉じる。閉じたあとも、載せ直せばまた出る。
+  await rows.nth(1).locator("button.remove").press("Enter");
+  await expect(rows).toHaveCount(1);
   await expect(preview).toBeHidden();
+  await page.locator("#card-results .card-row .card").first().hover();
+  await expect(preview).toBeVisible();
 });
 
 test("一覧を送ると、プレビューもカードに付いていく", async ({ page }) => {

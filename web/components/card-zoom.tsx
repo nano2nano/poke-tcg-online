@@ -1,14 +1,11 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { useCardData } from "../lib/cards.js";
-import { describeCard, nameOf } from "../lib/describe.js";
 import { ZoomContext, type ZoomTarget } from "../lib/zoom.js";
-import { CardFace } from "./board.js";
+import { CardCaption, CardFace } from "./board.js";
 
 /** 押したカードを大きく出す枠。盤面のどの画面からでも開けるよう、ルートに 1 つ置く。 */
 export function CardZoom({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<ZoomTarget | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  const { table } = useCardData();
 
   useLayoutEffect(() => {
     const shown = dialog.current;
@@ -37,7 +34,7 @@ export function CardZoom({ children }: { children: ReactNode }) {
               <figure key={index}>
                 <CardFace defId={defId} />
                 <figcaption>
-                  <strong>{nameOf(table, defId)}</strong> {describeCard(table[defId])}
+                  <CardCaption defId={defId} />
                 </figcaption>
               </figure>
             ))}
