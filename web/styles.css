@@ -438,6 +438,10 @@ button.secondary {
 .card[data-type="dragon"] {
   --type: #b7950b;
 }
+/* 動いているカードは、ほかのカードやダメージの印より上に描く。 */
+.card[data-moving] {
+  z-index: 3;
+}
 .card.back {
   background: repeating-linear-gradient(45deg, #2c4a8a 0 6px, #24407a 6px 12px);
   border-color: #1b2f5c;

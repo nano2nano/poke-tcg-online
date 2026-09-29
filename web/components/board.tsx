@@ -79,26 +79,38 @@ export function CardFace({
   // 画像の無い小さな面は名前も読めないので、出さない。
   if (thumb === true && src === null) return null;
   const classes = ["card", thumb === true && "thumb", zoom !== undefined && "zoomable"];
-  return (
-    <motion.div
-      ref={face}
-      {...(instanceId === undefined ? {} : { layoutId: instanceId })}
-      initial={false}
-      animate={{ rotate: posture === undefined ? 0 : (POSTURE_ANGLES[posture] ?? 0) }}
-      className={classes.filter(Boolean).join(" ")}
-      {...zoomable}
-      data-def-id={defId}
-      data-kind={card?.kind ?? ""}
-      data-type={card?.type}
-      data-half={card?.stadiumHalf}
-      data-posture={posture}
-      data-pickable={pickable === undefined ? undefined : String(pickable)}
-    >
+  const props = {
+    ref: face,
+    className: classes.filter(Boolean).join(" "),
+    ...zoomable,
+    "data-def-id": defId,
+    "data-kind": card?.kind ?? "",
+    "data-type": card?.type,
+    "data-half": card?.stadiumHalf,
+    "data-pickable": pickable === undefined ? undefined : String(pickable),
+  };
+  const children = (
+    <>
       <span className="card-name">{card?.name ?? defId}</span>
       <span className="card-sub">{cardSubtitle(card)}</span>
       {/* 読み上げでは、同じ名前の別のカードを見分けられるよう、種類と収録まで読む。 */}
       {card !== undefined && <span className="visually-hidden">{describeCard(card)}</span>}
       {pickable === false && <span className="visually-hidden">（選べません）</span>}
+    </>
+  );
+  // 一覧や拡大のカードは動かさない。デッキを組む画面では数百枚になる。
+  if (instanceId === undefined) return <div {...props}>{children}</div>;
+  return (
+    <motion.div
+      {...props}
+      layoutId={instanceId}
+      initial={false}
+      animate={{ rotate: posture === undefined ? 0 : (POSTURE_ANGLES[posture] ?? 0) }}
+      // 動いているあいだはほかのカードの上に描く。プレビューは収まった合図で置き直す。
+      onLayoutAnimationStart={() => face.current?.setAttribute("data-moving", "")}
+      onLayoutAnimationComplete={() => face.current?.removeAttribute("data-moving")}
+    >
+      {children}
     </motion.div>
   );
 }
@@ -202,7 +214,7 @@ function ShownPokemon({
       data-in-play-id={pokemon.inPlayId}
       data-damage={pokemon.damage}
     >
-      {/* 進化したら、上に重ねたカードを手札から動かして見せる。 */}
+      {/* 上のカードが替わったら別の要素として描き、手札に見えていたカードならそこから動かす。 */}
       <CardFace
         key={top.instanceId}
         defId={top.defId}
@@ -235,7 +247,10 @@ function ShownPokemon({
 export function Board({ name, children }: { name: string; children: ReactNode }) {
   return (
     <LayoutGroup id={name}>
-      <div className="board">{children}</div>
+      {/* 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。 */}
+      <motion.div className="board" layoutScroll>
+        {children}
+      </motion.div>
     </LayoutGroup>
   );
 }

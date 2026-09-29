@@ -50,7 +50,7 @@ export function CardPreview() {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["data-def-id"],
+        attributeFilter: ["data-def-id", "data-moving"],
       });
     };
     const hide = () => {

@@ -549,14 +549,14 @@ function opening(): PlayerView[] {
   return openingViews;
 }
 
-/** 一覧とリプレイの答えを差し替える。盤面は開始局面のまま、手数だけを返す。 */
+/** 一覧とリプレイの答えを差し替える。盤面は `viewsFor` がなければ開始局面のまま、手数だけを返す。 */
 async function mockHistory(
   page: Page,
   frameFor: (matchId: string, ply: number) => Promise<"fail" | "ok">,
   /** 再現できない地点。サーバと同じく、その先を頼まれたときだけ知らせる。 */
   diverged: number | null = null,
+  viewsFor: (ply: number) => PlayerView[] = opening,
 ): Promise<void> {
-  const views = opening();
   const summary = (matchId: string, opponentName: string) => ({
     matchId,
     startedAt: "2026-09-28T00:00:00Z",
@@ -582,7 +582,7 @@ async function mockHistory(
           matchId,
           ply: beyond ? diverged : ply,
           moveCount: 10,
-          views,
+          views: viewsFor(beyond ? diverged : ply),
           playedMove: null,
           beforeViews: null,
           events: [[], []],
@@ -628,68 +628,36 @@ function placingActive(): [PlayerView[], PlayerView[]] {
   ensureCards();
   const match = newMatch("motion-place");
   const views = () => [viewFor(match, 0), viewFor(match, 1)];
-  let before = views();
-  while (viewFor(match, 0).self.active === null) {
-    before = views();
+  while (match.state.phase === "setup") {
+    const before = views();
     const mover = toMove(match) as Player;
     expect(submitMove(match, mover, match.version, legalMoves(match.state)[0]!, 0).ok).toBe(true);
+    if (viewFor(match, 0).self.active !== null) return [before, views()];
   }
-  return [before, views()];
+  throw new Error("バトル場にポケモンを出さないまま準備が終わった");
 }
 
 /**
- * 1 手だけのリプレイを開き、時計を止めて 1 手進める。`after` は進めたあとの両座席の局面。
- * 返すのは、自分のバトル場と、そこに出たカード。
+ * リプレイを開き、`before` の局面を描いたところで時計を止める。1 手進めると `after` を描く。
+ * 返すのは、自分のバトル場に出たカードがその枠に収まっているかを調べる関数。
  */
-async function stepPlacing(page: Page, before: PlayerView[], after: PlayerView[]) {
+async function openPlacing(page: Page, before: PlayerView[], after: PlayerView[]) {
   await page.clock.install();
-  await page.route("**/api/matches", (route) =>
-    route.fulfill({
-      json: {
-        matches: [
-          {
-            matchId: "a",
-            startedAt: "2026-09-28T00:00:00Z",
-            endedAt: "2026-09-28T00:10:00Z",
-            seat: 0,
-            opponentName: "あ",
-            outcome: "win",
-            matchResult: { kind: "concede", winner: 0, conceded: 1 },
-            moveCount: 1,
-          },
-        ],
-      },
-    }),
+  await mockHistory(
+    page,
+    async () => "ok",
+    null,
+    (ply) => (ply === 0 ? before : after),
   );
-  await page.route("**/api/replay", (route) => {
-    const { ply } = route.request().postDataJSON() as { ply: number };
-    return route.fulfill({
-      json: {
-        frame: {
-          matchId: "a",
-          ply,
-          moveCount: 1,
-          views: ply === 0 ? before : after,
-          playedMove: null,
-          beforeViews: null,
-          events: [[], []],
-          engineCommitDiffers: false,
-          divergedAt: null,
-        },
-      },
-    });
-  });
   await page.goto("/");
   await page.click("#history-button");
   await page.locator("#history-list button").first().click();
   const zone = page.locator('#replay-self [data-zone="active"]');
   await expect(zone.locator(".card.empty")).toBeVisible();
-
   const now = await page.evaluate(() => Date.now());
   await page.clock.pauseAt(now + 1_000);
-  await page.click("#replay-next");
+
   const card = zone.locator(".card[data-def-id]");
-  await expect(card).toBeVisible();
   const inZone = async (): Promise<boolean> => {
     const [box, area] = [await card.boundingBox(), await zone.boundingBox()];
     if (box === null || area === null) return false;
@@ -701,18 +669,24 @@ async function stepPlacing(page: Page, before: PlayerView[], after: PlayerView[]
 
 test("手札のカードを場に出すと、手札の位置から動いて場に収まる", async ({ page }) => {
   const [before, after] = placingActive();
-  const { inZone } = await stepPlacing(page, before, after);
+  const { card, inZone } = await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
   // 動き始めは、手札にあった位置に描く。
   await page.clock.runFor(20);
   expect(await inZone()).toBe(false);
+  await expect(card).toHaveAttribute("data-moving");
   await page.clock.runFor(1_000);
   expect(await inZone()).toBe(true);
+  await expect(card).not.toHaveAttribute("data-moving");
 });
 
 test("OS で動きを減らす設定にしていたら、カードを動かさずに場に置く", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const [before, after] = placingActive();
-  const { inZone } = await stepPlacing(page, before, after);
+  const { card, inZone } = await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
   await page.clock.runFor(20);
   expect(await inZone()).toBe(true);
 });
@@ -723,7 +697,9 @@ test("ねむりのポケモンは、カードを左へ倒して描く", async ({
   const active = asleep[0]!.self.active;
   if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
   active.conditions = [{ kind: "asleep" }] as typeof active.conditions;
-  const { card } = await stepPlacing(page, before, asleep);
+  const { card } = await openPlacing(page, before, asleep);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
   await page.clock.runFor(1_000);
   // 左へ 90 度倒すと、変換の行列は (0, -1, 1, 0) になる。
   const matrix = await card.evaluate((node) => getComputedStyle(node).transform);
@@ -768,6 +744,25 @@ test("載せているカードが描き直しで少し動いたら、プレビ�
     document.body.append(document.createElement("div"));
   });
   expect((await card.boundingBox())?.y).toBeCloseTo(top + 6, 0);
+  await expect.poll(offset).toBeCloseTo(before, 0);
+});
+
+test("載せているカードが動き終えたら、収まった位置でプレビューを置き直す", async ({ page }) => {
+  const hand = await replayHand(page);
+  const preview = page.locator("#card-preview");
+  const card = hand.first();
+  await card.hover();
+  await expect(preview).toBeVisible();
+  const offset = async (): Promise<number> =>
+    ((await preview.boundingBox())?.y ?? 0) - ((await card.boundingBox())?.y ?? 0);
+  const before = await offset();
+
+  // 動いているあいだは位置が決まらないので、動き終えた合図（`data-moving` を外す）で置き直す。
+  await card.evaluate((node) => node.setAttribute("data-moving", ""));
+  await card.evaluate((node) => {
+    if (node instanceof HTMLElement) node.style.translate = "0 6px";
+  });
+  await card.evaluate((node) => node.removeAttribute("data-moving"));
   await expect.poll(offset).toBeCloseTo(before, 0);
 });
 
