@@ -439,13 +439,13 @@ button.secondary {
   --type: #b7950b;
 }
 /*
- * 動いているカードは、ほかのカードやダメージの印より上に描く。ついているカードとスタジアムは枠ごと上げる。
- * 手札の中で詰めて動くだけのカードは上げない。手札から出ていくカードより上に描いてしまう。
+ * 別の場所から来たカードは、ほかのカードやダメージの印より上に描く。ついているカードとスタジアムは
+ * 枠ごと上げる。同じ場所の中で詰めて動くだけのカードは上げない。来たカードより上に描いてしまう。
  */
-.card[data-moving]:not(.zone.hand > .card),
-.pokemon[data-moving],
-.attached:has(> .card[data-moving]),
-.board-center:has(.card[data-moving]) {
+.card[data-moving="arriving"],
+.pokemon[data-moving="arriving"],
+.attached:has(> .card[data-moving="arriving"]),
+.board-center:has(.card[data-moving="arriving"]) {
   z-index: 3;
 }
 .card.back {

@@ -69,8 +69,8 @@ export function CardFace({
   // 読めなかった画像は `imageUrl` が覚えているので、描き直せば名前の面になる。
   const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
   const face = useRef<HTMLDivElement>(null);
-  const moving = useMovingMark(face);
   const frame = use(BoardFrame);
+  const moving = useMovingMark(face, frame);
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -123,19 +123,26 @@ export function CardFace({
 }
 
 /**
- * 動いているあいだ要素に `data-moving` を付ける。CSS はほかのカードの上に描き、プレビューは外れたときに
- * 置き直す。
+ * 動いているあいだ要素に `data-moving` を付ける。この局面で別の場所から来たものは `arriving`、同じ
+ * 場所の中で詰めて動くだけのものは `shifting` にする。CSS は来たものをほかのカードの上に描き、
+ * プレビューは外れたときに置き直す。
  */
-function useMovingMark(element: RefObject<HTMLElement | null>) {
+function useMovingMark(element: RefObject<HTMLElement | null>, frame: object | undefined) {
   const settling = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(settling.current), []);
+  const mountedIn = useRef(frame);
+  const latest = useRef(frame);
+  useLayoutEffect(() => {
+    latest.current = frame;
+  });
   const settle = () => {
     clearTimeout(settling.current);
     element.current?.removeAttribute("data-moving");
   };
   return {
     onLayoutAnimationStart: () => {
-      element.current?.setAttribute("data-moving", "");
+      const arriving = mountedIn.current === latest.current;
+      element.current?.setAttribute("data-moving", arriving ? "arriving" : "shifting");
       // Motion は動きを途中で打ち切ると（画面の幅が変わったときなど）終わりを知らせないので、
       // 長さが過ぎたら外す。
       clearTimeout(settling.current);
@@ -227,8 +234,8 @@ function ShownPokemon({
 }) {
   const { table } = useCardData();
   const self = useRef<HTMLDivElement>(null);
-  const moving = useMovingMark(self);
   const frame = use(BoardFrame);
+  const moving = useMovingMark(self, frame);
   const top = pokemon.stack[pokemon.stack.length - 1]!;
   const posture = pokemon.conditions.find((condition) =>
     Object.hasOwn(POSTURE_ANGLES, condition.kind),

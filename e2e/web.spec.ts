@@ -781,6 +781,23 @@ test("何手か前に見えていたカードが出てきても、前の場所�
   expect(await inZone()).toBe(true);
 });
 
+test("場から手札へもどるカードも、ほかのカードの上に描く", async ({ page }) => {
+  const [, placed] = placingActive();
+  const back = structuredClone(placed);
+  const active = back[0]!.self.active;
+  if (active === null || "concealed" in active || !("hand" in back[0]!.self)) {
+    throw new Error("バトル場にポケモンがいないか、手札が見えない");
+  }
+  back[0]!.self.hand.push(...active.stack.map((card) => ({ ...card, identified: false })));
+  back[0]!.self.active = null;
+  await openPlacing(page, placed, back);
+  await page.click("#replay-next");
+  const card = page.locator('#replay-self [data-zone="hand"] .card[data-def-id]').last();
+  await page.clock.runFor(20);
+  await expect(card).toHaveAttribute("data-moving", "arriving");
+  expect(await card.evaluate((node) => getComputedStyle(node).zIndex)).toBe("3");
+});
+
 test("OS で動きを減らす設定にしていたら、カードを動かさずに場に置く", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const [before, after] = placingActive();
