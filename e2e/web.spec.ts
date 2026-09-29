@@ -1306,6 +1306,108 @@ test.describe("タッチ端末の座席", () => {
     await page.waitForTimeout(200);
     expect(sent).toEqual([]);
   });
+
+  test("カードを押してから光った先を押すと、その手を指す。同じカードをもう 1 度押すと大きく出す", async ({
+    page,
+  }) => {
+    const turn = firstTurn();
+    const { move, index } = attaching(turn);
+    const { sent } = await mockSeat(page, turn.view, turn.moves);
+    await page.goto("/");
+    const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+    const target = page.locator(`#self .pokemon[data-in-play-id="${move.target}"]`);
+    await expect(card).toHaveAttribute("data-grippable");
+
+    await card.tap();
+    await expect(card).toHaveAttribute("data-picked");
+    await expect(target).toHaveAttribute("data-drop", "ready");
+    await expect(page.locator('#self [data-zone="bench"]')).not.toHaveAttribute("data-drop");
+    await expect(page.locator("#card-zoom")).toBeHidden();
+    await card.tap();
+    await expect(card).not.toHaveAttribute("data-picked");
+    await expect(target).not.toHaveAttribute("data-drop");
+    await expect(page.locator("#card-zoom")).toBeVisible();
+    await page.locator("#card-zoom-close").tap();
+
+    await card.tap();
+    await target.tap();
+    await expect.poll(() => sent.length).toBe(1);
+    expect(sent[0]).toMatchObject({ type: "AttachEnergy", target: move.target });
+    await expect(page.locator("#card-zoom")).toBeHidden();
+  });
+
+  test("カードを押してから落とせない先を押すと、放すだけで何も指さない", async ({ page }) => {
+    const turn = firstTurn();
+    const { index } = attaching(turn);
+    const { sent } = await mockSeat(page, turn.view, turn.moves);
+    await page.goto("/");
+    const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+
+    await card.tap();
+    await expect(card).toHaveAttribute("data-picked");
+    // 相手のポケモンは押せば大きく出すが、選んでいるあいだに押したときは放すだけにする。
+    await page.locator("#opponent .pokemon").first().tap();
+    await expect(card).not.toHaveAttribute("data-picked");
+    await expect(page.locator("#self [data-drop]")).toHaveCount(0);
+    await expect(page.locator("#card-zoom")).toBeHidden();
+    await page.waitForTimeout(200);
+    expect(sent).toEqual([]);
+
+    // 盤面の外を押したときと Esc でも放す。
+    await card.tap();
+    await expect(card).toHaveAttribute("data-picked");
+    await page.getByText("指せる手", { exact: true }).tap();
+    await expect(card).not.toHaveAttribute("data-picked");
+    await card.tap();
+    await expect(card).toHaveAttribute("data-picked");
+    await page.keyboard.press("Escape");
+    await expect(card).not.toHaveAttribute("data-picked");
+
+    // ボタンで手を指したら、選んでいたカードも放す。
+    await card.tap();
+    await expect(card).toHaveAttribute("data-picked");
+    await page.locator("#moves button").last().tap();
+    await expect.poll(() => sent.length).toBe(1);
+    await expect(card).not.toHaveAttribute("data-picked");
+  });
+
+  test("カードを選んでいるあいだに指せる手が無くなったら、カードを放す", async ({ page }) => {
+    const turn = firstTurn();
+    const { index } = attaching(turn);
+    const { send } = await mockSeat(page, turn.view, turn.moves);
+    await page.goto("/");
+    const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+
+    await card.tap();
+    await expect(card).toHaveAttribute("data-picked");
+    send([]);
+    await expect(page.locator("#moves button")).toHaveCount(0);
+    await expect(card).not.toHaveAttribute("data-picked");
+  });
+
+  test("ベンチに出すカードを押してからベンチのポケモンを押しても、ベンチに出す手を指す", async ({
+    page,
+  }) => {
+    const turn = firstTurn();
+    const { index } = attaching(turn);
+    const view = structuredClone(turn.view);
+    const { copy } = anotherPokemon([view], 0);
+    view.self.bench = [copy];
+    const hand = "hand" in view.self ? view.self.hand : [];
+    // 盤面の判断はしないので、手札のどのカードでも、サーバが出した手のとおりに落とせる。
+    const bench: Move = {
+      type: "PlayBasic",
+      player: view.viewer,
+      cardInstanceId: hand[index]!.instanceId,
+      to: { kind: "bench", player: view.viewer, index: 1 },
+    };
+    const { sent } = await mockSeat(page, view, [bench]);
+    await page.goto("/");
+
+    await page.locator('#self [data-zone="hand"] .card').nth(index).tap();
+    await page.locator(`#self .pokemon[data-in-play-id="${copy.inPlayId}"]`).tap();
+    await expect.poll(() => sent).toEqual([bench]);
+  });
 });
 
 test("載せているカードが別のカードに描き替わったら、プレビューも替える", async ({ page }) => {
