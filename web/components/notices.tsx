@@ -4,7 +4,6 @@
  */
 
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -12,7 +11,10 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
+import { useReducedMotion } from "motion/react";
 import type { CoinToss, Hit, Notice, Tone } from "../lib/describe.js";
+import { SETTLE_MS } from "../lib/motion.js";
+import { useAnimate } from "./motion-setting.js";
 
 /**
  * 同時に出しておく結果の数。溢れたら古いものから消すが、コインは残す。1 つの手でもコイン、
@@ -22,6 +24,14 @@ const NOTICE_LIMIT = 5;
 const NOTICE_MS = 4_000;
 /** コインは回り終えてから読むので、そのぶん長く残す。 */
 const COIN_NOTICE_MS = 6_000;
+/** 1 つの局面の結果を、この間を置いて 1 つずつ出す。 */
+const STEP_MS = 400;
+/**
+ * コインの結果の次は、コインが回り終えてから出す。回っているあいだに次の結果を重ねない。
+ * 回る長さと 1 枚ずつずらす間は、`styles.css` の `.coin-inner` と揃える。
+ */
+const COIN_SPIN_MS = 1_000;
+const COIN_GAP_MS = 150;
 
 interface Shown {
   id: number;
@@ -37,58 +47,150 @@ interface Floating extends Hit {
 export interface NoticeFeed {
   notices: Shown[];
   hits: Floating[];
-  /** `hit` を持つ結果は、次に描いた盤面の上に数字を浮かべる。 */
+  /**
+   * 同じタスクの中で続けて渡した結果は、1 つの局面の結果として順に出す。次の局面の結果が来たら、
+   * 出しきっていない前の結果は待たせずに出す。`hit` を持つ結果は、盤面の上に数字を浮かべる。
+   */
   show: (notice: Notice) => void;
 }
 
 export function useNotices(): NoticeFeed {
   const [notices, setNotices] = useState<Shown[]>([]);
   const [hits, setHits] = useState<Floating[]>([]);
-  const nextId = useRef(0);
-  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const [queue] = useState(() => createQueue(setNotices, setHits));
+  useEffect(() => queue.dispose, [queue]);
+  // OS で動きを減らす設定にしている人にはカードを動かさないので、結果も数字も待たせずに出す。
+  const reduced = useReducedMotion() === true;
+  const animate = useAnimate() && !reduced;
+  useEffect(() => queue.setAnimate(animate), [queue, animate]);
+  return { notices, hits, show: queue.show };
+}
 
-  useEffect(() => {
-    const pending = timers.current;
-    return () => {
-      for (const timer of pending) clearTimeout(timer);
-    };
-  }, []);
+type Setter<T> = (update: (current: T[]) => T[]) => void;
 
-  const later = useCallback((ms: number, task: () => void) => {
+function createQueue(setNotices: Setter<Shown>, setHits: Setter<Floating>) {
+  let nextId = 0;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  /** まだ出していない結果。 */
+  let waiting: Notice[] = [];
+  let stepping: ReturnType<typeof setTimeout> | undefined;
+  /** 文は出したが、カードが動き終えるのを待っている数字。 */
+  let settling: Floating[] = [];
+  let floating: ReturnType<typeof setTimeout> | undefined;
+  let settledAt = 0;
+  let inBatch = false;
+  let animate = true;
+
+  const later = (ms: number, task: () => void) => {
     const timer = setTimeout(() => {
-      timers.current.delete(timer);
+      timers.delete(timer);
       task();
     }, ms);
-    timers.current.add(timer);
-  }, []);
+    timers.add(timer);
+    return timer;
+  };
+  const cancel = (timer: ReturnType<typeof setTimeout> | undefined) => {
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    timers.delete(timer);
+  };
 
-  const show = useCallback(
-    ({ text, tone = "neutral", coins, hit }: Notice) => {
-      const id = (nextId.current += 1);
-      const shown: Shown = coins === undefined ? { id, text, tone } : { id, text, tone, coins };
-      setNotices((current) => {
-        const next = [...current, shown];
-        while (next.length > NOTICE_LIMIT) {
-          const older = next.filter((notice) => notice !== shown);
-          const drop = older.find((notice) => notice.coins === undefined) ?? older[0]!;
-          next.splice(next.indexOf(drop), 1);
-        }
-        return next;
-      });
-      later(coins === undefined ? NOTICE_MS : COIN_NOTICE_MS, () =>
-        setNotices((current) => current.filter((notice) => notice.id !== id)),
-      );
-      if (hit !== undefined) {
-        setHits((current) => [...current, { ...hit, id }]);
-        later(NOTICE_MS, () =>
-          setHits((current) => current.filter((floating) => floating.id !== id)),
-        );
+  const float = () => {
+    cancel(floating);
+    floating = undefined;
+    const ready = settling;
+    settling = [];
+    setHits((current) => [...current, ...ready]);
+    for (const { id } of ready) {
+      later(NOTICE_MS, () => setHits((current) => current.filter((hit) => hit.id !== id)));
+    }
+  };
+  const schedule = () => {
+    if (settling.length === 0 || floating !== undefined) return;
+    const wait = settledAt - performance.now();
+    if (wait <= 0) float();
+    else floating = later(wait, float);
+  };
+
+  const reveal = ({ text, tone = "neutral", coins, hit }: Notice) => {
+    const id = (nextId += 1);
+    const shown: Shown = coins === undefined ? { id, text, tone } : { id, text, tone, coins };
+    setNotices((current) => {
+      const next = [...current, shown];
+      while (next.length > NOTICE_LIMIT) {
+        const older = next.filter((notice) => notice !== shown);
+        const drop = older.find((notice) => notice.coins === undefined) ?? older[0]!;
+        next.splice(next.indexOf(drop), 1);
       }
-    },
-    [later],
-  );
+      return next;
+    });
+    later(coins === undefined ? NOTICE_MS : COIN_NOTICE_MS, () =>
+      setNotices((current) => current.filter((notice) => notice.id !== id)),
+    );
+    if (hit !== undefined) {
+      settling.push({ ...hit, id });
+      schedule();
+    }
+    return coins === undefined ? STEP_MS : COIN_SPIN_MS + COIN_GAP_MS * (coins.results.length - 1);
+  };
 
-  return { notices, hits, show };
+  const step = () => {
+    const next = waiting.shift();
+    if (next === undefined) {
+      stepping = undefined;
+      return;
+    }
+    stepping = later(reveal(next), step);
+  };
+
+  const flush = () => {
+    cancel(stepping);
+    stepping = undefined;
+    const rest = waiting;
+    waiting = [];
+    for (const notice of rest) reveal(notice);
+  };
+
+  const skip = () => {
+    settledAt = 0;
+    flush();
+    float();
+  };
+
+  return {
+    show: (notice: Notice) => {
+      if (!inBatch) {
+        // 新しい局面が届いた。前の局面の結果の残りはすぐ出し、数字は新しい局面のカードが
+        // 動き終えるまで待たせる。
+        inBatch = true;
+        queueMicrotask(() => (inBatch = false));
+        settledAt = animate ? performance.now() + SETTLE_MS : 0;
+        cancel(floating);
+        floating = undefined;
+        flush();
+        schedule();
+      }
+      waiting.push(notice);
+      if (!animate) flush();
+      else if (stepping === undefined) step();
+    },
+    /** 演出を切ったら、待たせている結果と数字もすぐ出す。 */
+    setAnimate: (next: boolean) => {
+      animate = next;
+      if (!next) skip();
+    },
+    /** 出している結果を消す時計も止めるので、結果も消す。effect をやり直すと、同じ列をまた使う。 */
+    dispose: () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      stepping = undefined;
+      floating = undefined;
+      waiting = [];
+      settling = [];
+      setNotices(() => []);
+      setHits(() => []);
+    },
+  };
 }
 
 /** `board` は数字を浮かべる先のポケモンを探す範囲。同じ画面に盤面が 2 つあっても取り違えない。 */
@@ -140,24 +242,35 @@ function Coins({ results, faces }: CoinToss) {
 }
 
 /**
- * 置き場所は、結果と同じ局面で描いた盤面から測る。前の盤面のポケモンは、入れ替えやきぜつで
- * 別の場所にいることがある。ポケモンがもう盤面にいなければ出さない。
+ * 置き場所は、数字を浮かべるときに描いている盤面から測る。前の盤面のポケモンは、入れ替えやきぜつで
+ * 別の場所にいることがある。ポケモンがもう盤面にいなければ出さない。ポケモンが動いている途中なら、
+ * 動き終えてから測る。
  */
 function FloatingHit({ hit, board }: { hit: Floating; board: RefObject<HTMLElement | null> }) {
   const self = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     const span = self.current;
-    if (span === null) return;
-    const pokemon = board.current?.querySelector(
-      `.pokemon[data-in-play-id="${CSS.escape(hit.target)}"]`,
-    );
-    if (pokemon == null) {
+    const area = board.current;
+    if (span === null || area === null) return;
+    /** 置けたか、置く先がもう無ければ true を返す。 */
+    const place = () => {
+      const pokemon = area.querySelector(`.pokemon[data-in-play-id="${CSS.escape(hit.target)}"]`);
       span.hidden = true;
-      return;
-    }
-    const rect = pokemon.getBoundingClientRect();
-    span.style.left = `${rect.left + rect.width / 2}px`;
-    span.style.top = `${rect.top + rect.height / 3}px`;
+      if (pokemon === null) return true;
+      if (pokemon.hasAttribute("data-moving")) return false;
+      const rect = pokemon.getBoundingClientRect();
+      span.style.left = `${rect.left + rect.width / 2}px`;
+      span.style.top = `${rect.top + rect.height / 3}px`;
+      span.hidden = false;
+      return true;
+    };
+    if (place()) return;
+    // 待つあいだに、次の局面でポケモンが別の要素に描き直されることもある。盤面ごと見て探し直す。
+    const observer = new MutationObserver(() => {
+      if (place()) observer.disconnect();
+    });
+    observer.observe(area, { subtree: true, childList: true, attributeFilter: ["data-moving"] });
+    return () => observer.disconnect();
   }, [hit, board]);
   return (
     <span ref={self} className="hit" data-tone={hit.tone} aria-hidden="true">

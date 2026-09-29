@@ -16,6 +16,7 @@ import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
 import { Board, CardFace, NOTHING_AIMED, SideBoard, Stadium } from "./board.js";
 import { EventLog } from "./event-log.js";
+import { MotionToggle } from "./motion-setting.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
 /**
@@ -146,6 +147,7 @@ export function SeatTable({
           >
             投了する
           </button>
+          <MotionToggle id="motion-toggle" />
           <EventLog id="event-log" listId="events" events={events} />
           <p className="note">
             観戦のリンク（渡された人は、両者の手札の中身を除いた盤面を見られます）

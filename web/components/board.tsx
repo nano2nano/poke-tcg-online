@@ -24,7 +24,7 @@ import type { CardInstance, SpectatorView } from "../../src/engine.js";
 import { imageUrl, releaseImage, takeImage } from "../lib/card-images.js";
 import { useCardData } from "../lib/cards.js";
 import { cardSubtitle, conditionName, describeCard, nameOf, type Side } from "../lib/describe.js";
-import { MOVE_SECONDS } from "../lib/motion.js";
+import { SETTLE_MS } from "../lib/motion.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 
 type Pokemon = NonNullable<Side["active"]>;
@@ -146,7 +146,7 @@ function useMovingMark(element: RefObject<HTMLElement | null>, frame: object | u
       // Motion は動きを途中で打ち切ると（画面の幅が変わったときなど）終わりを知らせないので、
       // 長さが過ぎたら外す。
       clearTimeout(settling.current);
-      settling.current = setTimeout(settle, MOVE_SECONDS * 1_000 + 100);
+      settling.current = setTimeout(settle, SETTLE_MS);
     },
     onLayoutAnimationComplete: settle,
   };

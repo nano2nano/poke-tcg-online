@@ -1,7 +1,7 @@
 /** 画面（`web/`）のテストの続き。1 つのファイルが長くなりすぎないよう、`client.spec.ts` から分けている。 */
 
 import { createHash } from "node:crypto";
-import { expect, test, type Page, type WebSocket } from "@playwright/test";
+import { expect, test, type Page, type WebSocket, type WebSocketRoute } from "@playwright/test";
 import type { Bot } from "../src/bots.js";
 import { legalMoves, loadGeneratedCards, type Player, type PlayerView } from "../src/engine.js";
 import { MatchHub } from "../src/hub.js";
@@ -843,6 +843,17 @@ test("OS で動きを減らす設定にしていたら、カードを動かさ�
   expect(await inZone()).toBe(true);
 });
 
+test("画面で演出を切っていたら、カードを動かさずに場に置く", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("poke-motion", "off"));
+  const [before, after] = placingActive();
+  const { card, inZone } = await openPlacing(page, before, after);
+  await expect(page.locator("#replay-motion-toggle")).not.toBeChecked();
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
+  await page.clock.runFor(20);
+  expect(await inZone()).toBe(true);
+});
+
 test("ねむりのポケモンは、カードを左へ倒して描く", async ({ page }) => {
   const [before, after] = placingActive();
   const asleep = structuredClone(after);
@@ -856,6 +867,225 @@ test("ねむりのポケモンは、カードを左へ倒して描く", async ({
   // 左へ 90 度倒すと、変換の行列は (0, -1, 1, 0) になる。
   const matrix = await card.evaluate((node) => getComputedStyle(node).transform);
   expect(matrix).toMatch(/^matrix\(0, -1, 1, 0, /);
+});
+
+/**
+ * 覚えている座席で画面を開き、サーバの代わりに `view` の局面を送って、時計を止める。
+ * 返す関数は、同じ局面にイベントを載せて、続けて局面を送る。
+ */
+async function seatWithEvents(page: Page, view: PlayerView) {
+  await page.clock.install();
+  await page.addInitScript(() => {
+    localStorage.setItem("poke-seat", JSON.stringify({ seat: 0, seatToken: "演出の座席" }));
+  });
+  const moves = { legalMoves: null, setup: null, deckPlacement: null, answerDestinations: null };
+  const clock = { bankMs: [600_000, 600_000], moveRemainingMs: null, toMove: null };
+  let version = 1;
+  let socket: WebSocketRoute | null = null;
+  await page.routeWebSocket(
+    (url) => url.searchParams.has("seatToken"),
+    (route) => {
+      socket = route;
+      // 座席からは何も送らなくても、繋がったらサーバが局面一式を送る。
+      route.send(
+        JSON.stringify({
+          t: "sync",
+          matchId: "演出の対戦",
+          seat: 0,
+          stateVersion: version,
+          view,
+          ...moves,
+          revealedDeck: null,
+          mulligans: [],
+          firstPlayer: 0,
+          clock,
+          seedCommit: "0".repeat(64),
+          spectatorToken: "演出の観戦",
+        }),
+      );
+    },
+  );
+  await page.goto("/");
+  await expect(page.locator("#self .mat")).toBeVisible();
+  const now = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(now + 1_000);
+  // 先攻を知らせる結果を消しておく。
+  await page.clock.runFor(10_000);
+  await expect(page.locator("#results .result")).toHaveCount(0);
+
+  const header = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
+  return (events: Record<string, unknown>[], next: PlayerView = view) => {
+    version += 1;
+    socket!.send(
+      JSON.stringify({
+        t: "delta",
+        stateVersion: version,
+        events: events.map((event) => ({ ...header, actor: null, source: null, ...event })),
+        view: next,
+        ...moves,
+        revealedDeck: null,
+        clock,
+      }),
+    );
+  };
+}
+
+function activeOf(view: PlayerView) {
+  const active = view.self.active;
+  if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
+  return active;
+}
+
+const damageTo = (target: string) => ({
+  kind: "damage-dealt",
+  target,
+  amount: 30,
+  beforeDamage: 0,
+  afterDamage: 30,
+  cause: { kind: "damage-counter" },
+});
+
+test("1 つの局面の結果は順に出し、次の局面が届いたら残りを待たせずに出す", async ({ page }) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  const results = page.locator("#results .result");
+  const hits = page.locator(".hit");
+
+  send([
+    { kind: "coin-flipped", player: 0, results: [true] },
+    damageTo(activeOf(view).inPlayId),
+    { kind: "turn-started", player: 1 },
+  ]);
+  await expect(results).toHaveCount(1);
+  await expect(results.first()).toContainText("コイン");
+  // コインの次は、コインが回り終えてから出す。
+  await page.clock.runFor(900);
+  await expect(results).toHaveCount(1);
+  await expect(hits).toHaveCount(0);
+  await page.clock.runFor(200);
+  await expect(results).toHaveCount(2);
+  await expect(results.last()).toContainText("30 ダメージ");
+  await expect(hits).toHaveCount(1);
+
+  // 番の交代はまだ待っている。次の局面が届いたら、それを待たせずに出してから、次の局面の結果を出す。
+  send([{ kind: "turn-started", player: 0 }]);
+  await expect(results).toHaveCount(4);
+  await expect(results.nth(2)).toContainText("相手の番");
+  await expect(results.nth(3)).toContainText("あなたの番");
+});
+
+test("ダメージの数字は、ポケモンが動き終えてからその位置に浮かべる", async ({ page }) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  const benched = structuredClone(view);
+  benched.self.bench = [structuredClone(activeOf(view))];
+  benched.self.active = null;
+
+  send([damageTo(activeOf(view).inPlayId)], benched);
+  await expect(page.locator("#results .result")).toHaveCount(1);
+  const pokemon = page.locator('#self [data-zone="bench"] .pokemon');
+  await page.clock.runFor(20);
+  await expect(pokemon).toHaveAttribute("data-moving");
+  await page.clock.runFor(200);
+  await expect(page.locator(".hit")).toHaveCount(0);
+  await page.clock.runFor(300);
+  const hit = page.locator(".hit");
+  await expect(hit).toBeVisible();
+  const [box, spot] = [await pokemon.boundingBox(), await hit.boundingBox()];
+  if (box === null || spot === null) throw new Error("ポケモンか数字が描けていない");
+  const middle = spot.x + spot.width / 2;
+  expect(middle).toBeGreaterThan(box.x);
+  expect(middle).toBeLessThan(box.x + box.width);
+});
+
+test("数字を浮かべるときにポケモンがまだ動いていたら、止まるまで出さない", async ({ page }) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  const pokemon = page.locator('#self [data-zone="active"] .pokemon');
+  // 描くのが遅れて、動かす長さを過ぎてもまだ動いているところ。
+  await pokemon.evaluate((node) => node.setAttribute("data-moving", "shifting"));
+
+  send([damageTo(activeOf(view).inPlayId)]);
+  await page.clock.runFor(1_000);
+  const hit = page.locator(".hit");
+  await expect(hit).toBeAttached();
+  await expect(hit).toBeHidden();
+  await pokemon.evaluate((node) => node.removeAttribute("data-moving"));
+  await expect(hit).toBeVisible();
+});
+
+test("数字を待たせているあいだにポケモンが別の場所へ移ったら、移った先に浮かべる", async ({
+  page,
+}) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  await page
+    .locator('#self [data-zone="active"] .pokemon')
+    .evaluate((node) => node.setAttribute("data-moving", "shifting"));
+  send([damageTo(activeOf(view).inPlayId)]);
+  await page.clock.runFor(1_000);
+  await expect(page.locator(".hit")).toBeHidden();
+
+  // 次の局面でベンチへ下がると、ポケモンは別の要素に描き直される。
+  const benched = structuredClone(view);
+  benched.self.bench = [structuredClone(activeOf(view))];
+  benched.self.active = null;
+  send([], benched);
+  await page.clock.runFor(1_000);
+  const [box, spot] = [
+    await page.locator('#self [data-zone="bench"] .pokemon').boundingBox(),
+    await page.locator(".hit").boundingBox(),
+  ];
+  if (box === null || spot === null) throw new Error("ポケモンか数字が描けていない");
+  const middle = spot.x + spot.width / 2;
+  expect(middle).toBeGreaterThan(box.x);
+  expect(middle).toBeLessThan(box.x + box.width);
+});
+
+test("OS で動きを減らす設定にしていたら、結果と数字を待たせずに出す", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  send([
+    { kind: "coin-flipped", player: 0, results: [true] },
+    damageTo(activeOf(view).inPlayId),
+    { kind: "turn-started", player: 1 },
+  ]);
+  await expect(page.locator("#results .result")).toHaveCount(3);
+  await expect(page.locator(".hit")).toBeVisible();
+});
+
+test("画面で演出を切ると、結果を待たせずに出し、切ったことを覚えておく", async ({ page }) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  const results = page.locator("#results .result");
+  send([
+    { kind: "coin-flipped", player: 0, results: [true] },
+    damageTo(activeOf(view).inPlayId),
+    { kind: "turn-started", player: 1 },
+  ]);
+  await expect(results).toHaveCount(1);
+
+  // 待たせている結果と数字も、切ったらすぐ出す。
+  await page.uncheck("#motion-toggle");
+  await expect(results).toHaveCount(3);
+  await expect(page.locator(".hit")).toBeVisible();
+  expect(await results.first().evaluate((node) => getComputedStyle(node).animationName)).toBe(
+    "none",
+  );
+
+  send([damageTo(activeOf(view).inPlayId), { kind: "turn-started", player: 0 }]);
+  await expect(results).toHaveCount(5);
+  await expect(page.locator(".hit")).toHaveCount(2);
+
+  await page.reload();
+  await expect(page.locator("#motion-toggle")).not.toBeChecked();
 });
 
 test("載せているカードが別のカードに描き替わったら、プレビューも替える", async ({ page }) => {
