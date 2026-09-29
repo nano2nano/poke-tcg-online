@@ -16,7 +16,7 @@ export interface DeckEntry {
   count: number;
 }
 
-/** 組んだデッキを置く localStorage のキー。いまの画面と同じキーにして、組んだデッキをそのまま使う。 */
+/** 組んだデッキを置く localStorage のキー。作り直す前の画面と同じキーにして、組んだデッキをそのまま使う。 */
 const DECK_KEY = "poke-deck";
 /** `src/deck.ts` の値を import すると、エンジンのカード定義まで画面に入る。 */
 export const DECK_SIZE = 60;

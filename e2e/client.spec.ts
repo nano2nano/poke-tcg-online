@@ -642,6 +642,8 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
   await seatPair(a, b, room);
   await expect.poll(() => seenA()?.phase).toBe("setup");
   while (seenA()?.phase === "setup") await advance(a, b, seenA);
+  // 負荷の高い実行では、`seenA` が対戦の始まった局面を見たときに、`held.last` がまだ準備の局面のことがあった。
+  await expect.poll(() => held.last?.stateVersion === seenA()?.stateVersion).toBe(true);
 
   const view = held.last!.view;
   const target = view.self.active.inPlayId as string;
@@ -1912,11 +1914,9 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
   await expect(a.locator("#self .card img").first()).toBeVisible();
 
   for (let move = 0; move < 3; move += 1) {
-    // 描き直すまで待つ。描き直す前に比べると、前の要素どうしを比べて通ってしまう。いまの画面は場（`.mat`）ごと
-    // 作り直し、`/next/` は要素を残したまま描いた局面の版を卓に書く。
+    // 描き直すまで待つ。描き直す前に比べると、前の要素どうしを比べて通ってしまう。描いた局面の版は卓に書いてある。
     const previous = await a.evaluateHandle(
       (selector) => ({
-        mat: document.querySelector("#self .mat"),
         images: new WeakSet(document.querySelectorAll(selector)),
         urls: [...document.querySelectorAll(selector)].map((image) => image.getAttribute("src")),
       }),
@@ -1938,9 +1938,8 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
               .map((image) => image.getAttribute("src"));
             return {
               redrawn:
-                document.querySelector("#self .mat") !== old.mat ||
                 Number(document.querySelector("#table")?.getAttribute("data-state-version")) >=
-                  version,
+                version,
               // 前にも後にも出ている枚数ぶん、前の要素が残っていない URL。
               recreated: [...new Set(old.urls)].filter(
                 (url) => copies(kept, url) < Math.min(copies(old.urls, url), copies(urls, url)),
@@ -2187,7 +2186,6 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   await expect(preview).toBeVisible();
   const hovered = (await hand.last().boundingBox()) as Box;
   const point = { x: hovered.x + hovered.width / 2, y: hovered.y + hovered.height / 2 };
-  const mat = await a.evaluateHandle(() => document.querySelector("#self .mat"));
   const hides = await preview.evaluateHandle((node) => {
     const seen = { count: 0 };
     new MutationObserver(() => {
@@ -2203,9 +2201,8 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   await expect
     .poll(() =>
       a.evaluate(
-        ([old, version, { x, y }]) => {
+        ([version, { x, y }]) => {
           const redrawn =
-            document.querySelector("#self .mat") !== old ||
             Number(document.querySelector("#table")?.getAttribute("data-state-version")) >= version;
           const atMouse = document.elementFromPoint(x, y)?.closest(".card[data-def-id]");
           const box = document.querySelector<HTMLElement>("#card-preview");
@@ -2213,11 +2210,10 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
             box?.hidden === false ? box.querySelector(".card")?.getAttribute("data-def-id") : null;
           return redrawn && (shownDefId ?? null) === (atMouse?.getAttribute("data-def-id") ?? null);
         },
-        [mat, drawn, point] as const,
+        [drawn, point] as const,
       ),
     )
     .toBe(true);
-  await mat.dispose();
   // マウスの下にカードが残っていれば、描き直しのあいだも閉じない。
   if (await preview.isVisible()) expect(await hides.evaluate((seen) => seen.count)).toBe(0);
 

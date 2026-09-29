@@ -13,16 +13,7 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true,
-    "allowJs": true
+    "noEmit": true
   },
-  "include": [
-    "src",
-    "public/match-state.js",
-    "tests",
-    "tools",
-    "playwright.config.ts",
-    "playwright.next.config.ts",
-    "vite.config.ts"
-  ]
+  "include": ["src", "tests", "tools", "playwright.config.ts", "vite.config.ts"]
 }

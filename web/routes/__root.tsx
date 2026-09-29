@@ -12,9 +12,13 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "ポケカ オンライン対戦" },
     ],
-    links: [{ rel: "stylesheet", href: styles }],
+    links: [
+      { rel: "stylesheet", href: styles },
+      // 目印は要らないが、無いとブラウザが毎回 `/favicon.ico` を取りに行く。空の 1 枚を埋めておく。
+      { rel: "icon", href: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>" },
+    ],
   }),
-  // SSR をしないルートでも、文書の骨組みとスクリプトの読み込みはサーバが返す。
+  // SSR はしないが、文書の骨組みとスクリプトの読み込みはビルドが `index.html` へ書き出す。
   shellComponent: Document,
   component: Root,
 });

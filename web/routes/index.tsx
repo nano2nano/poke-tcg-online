@@ -64,11 +64,11 @@ function Seat() {
         <SeatTable key={seated.seatToken} seated={seated} onLeave={leave} />
       ) : (
         <>
-          <header id="next-home">
+          <header id="home">
             <h1>ポケカ オンライン対戦</h1>
             <p className="note">
-              新しい画面を作っているところです。カードを大きく出す操作は、まだ{" "}
-              <a href="/">いまの画面</a> にしかありません。
+              盤面は卓と同じ配置で描き、指せる手はサーバが送ってきたものをそのまま並べます。
+              カードにマウスを載せる（タッチ端末では長押しする）と大きく出ます。押すと、進化前やついているカードもまとめて出ます。
             </p>
           </header>
           <Lobby status={status} remembered={remembered} onSeated={sit} onResume={resume} />

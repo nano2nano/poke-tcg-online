@@ -4,7 +4,6 @@ import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { embedCardData } from "./tools/embed-card-data.js";
 import { cardIdsOf, engineIdentity } from "./tools/engine-identity.js";
-import { BASEPATH } from "./web/basepath.js";
 
 const identity = engineIdentity();
 
@@ -18,7 +17,11 @@ export default defineConfig({
   plugins: [
     embedCardData(identity),
     cloudflare({ viteEnvironment: { name: "ssr" } }),
-    tanstackStart({ srcDirectory: "web", router: { basepath: BASEPATH } }),
+    // 画面の骨組みをビルドで `index.html` に書き出し、ページは Worker を通さず静的アセットで返す。
+    tanstackStart({
+      srcDirectory: "web",
+      spa: { enabled: true, prerender: { outputPath: "/index.html" } },
+    }),
     viteReact(),
   ],
 });
