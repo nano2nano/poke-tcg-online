@@ -291,7 +291,7 @@ export function noticesToShow(notices: readonly Notice[], self?: Player): Notice
   return notices.filter((notice) => !notice.quiet && (self === undefined || notice.by !== self));
 }
 
-const ZONES: Record<Zone["kind"], string> = {
+export const ZONES: Record<Zone["kind"], string> = {
   deck: "山札",
   hand: "手札",
   discard: "トラッシュ",

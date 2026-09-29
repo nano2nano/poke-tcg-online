@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
@@ -86,9 +86,26 @@ export function SeatTable({
   const onPlay = (move: Move) => {
     if (!seating.awaiting) playMove(seating, listed.offered, move);
   };
+  // 描き直すたびに作り直す `onPlay` を渡すと、盤面のポケモンを全部描き直す。いまの値はここから読む。
+  const latestPlay = useRef(onPlay);
+  useLayoutEffect(() => {
+    latestPlay.current = onPlay;
+  });
+  const pokemonChoices = useMemo(() => {
+    const moves = pokemonMoves(listed.buttons);
+    if (disabled || moves.size === 0) return null;
+    return {
+      targets: new Set(moves.keys()),
+      choose: (inPlayId: string) => {
+        const move = moves.get(inPlayId);
+        if (move !== undefined) latestPlay.current(move);
+      },
+    };
+  }, [listed, disabled]);
   const cardChoice =
-    state.ended === null && view?.phase !== "setup" && isCardChoice(listed.buttons);
-  const pokemonChoices = pokemonChoicesOf(listed.buttons, disabled ? null : onPlay);
+    state.ended === null &&
+    view?.phase !== "setup" &&
+    isCardChoice(listed.buttons, state.revealedDeck !== null);
 
   useEffect(() => {
     if (left !== null) onLeave(left.text, left.resumable);
@@ -460,33 +477,29 @@ function answerCard(move: Move, context: MoveContext): string | null {
   return answer.kind === "card" ? (locateCard(answer.card, context)?.defId ?? null) : null;
 }
 
-/** 効果でカードを選ぶ選択か。カードを選ぶ答えと、選ぶのをやめる答えだけが並ぶ。 */
-function isCardChoice(buttons: readonly ListedMove[]): boolean {
+/**
+ * 効果でカードを選ぶ選択か。カードを選ぶ答えと、選ぶのをやめる答えだけが並ぶ。山札を見ているなら、
+ * 選べるカードが 1 枚も無くても、無いことを山札で確かめられるよう選ぶ画面を出す。
+ */
+function isCardChoice(buttons: readonly ListedMove[], revealing: boolean): boolean {
   const answers = buttons.map(({ move }) =>
     move.type === "AnswerChoice" ? move.answer.kind : null,
   );
   return (
-    answers.some((kind) => kind === "card" || kind === "cardDef") &&
+    (revealing || answers.some((kind) => kind === "card" || kind === "cardDef")) &&
     answers.every((kind) => kind === "card" || kind === "cardDef" || kind === "decline")
   );
 }
 
-/** 効果で選べるポケモンと、盤面で押したときに指す手。選べるポケモンが無ければ null。 */
-function pokemonChoicesOf(buttons: readonly ListedMove[], onPlay: ((move: Move) => void) | null) {
+/** 効果で選べるポケモンと、盤面でそのポケモンを押したときに指す手。 */
+function pokemonMoves(buttons: readonly ListedMove[]): Map<string, Move> {
   const moves = new Map<string, Move>();
   for (const { move } of buttons) {
     if (move.type === "AnswerChoice" && move.answer.kind === "inPlay") {
       moves.set(move.answer.target, move);
     }
   }
-  if (moves.size === 0 || onPlay === null) return null;
-  return {
-    targets: new Set(moves.keys()),
-    choose: (inPlayId: string) => {
-      const move = moves.get(inPlayId);
-      if (move !== undefined) onPlay(move);
-    },
-  };
+  return moves;
 }
 
 /**
@@ -517,11 +530,13 @@ function ChoiceSheet({
   const { revealedDeck, deckPlacement: placement } = state;
   const source = state.view?.choices.at(-1)?.context?.source ?? null;
   const prompt = placement !== null ? placementPrompt(placement, table) : choicePrompt(context);
-  const picks = buttons.flatMap((button) => {
+  const picks: { defId: string; button: ListedMove }[] = [];
+  const others: ListedMove[] = [];
+  for (const button of buttons) {
     const defId = answerCard(button.move, context);
-    return defId === null ? [] : [{ defId, button }];
-  });
-  const others = buttons.filter((button) => answerCard(button.move, context) === null);
+    if (defId === null) others.push(button);
+    else picks.push({ defId, button });
+  }
   // 山札を並べるときは、同じカードを 1 枚にまとめて枚数を添え、種類と名前で並べ直す。サーバの並びは見せた順で、
   // 探すときの手がかりにならない。
   const counts = new Map<string, number>();
@@ -552,12 +567,7 @@ function ChoiceSheet({
         : `山札 ${deckCount} 枚のうち、見た ${revealedDeck.length} 枚`;
 
   return (
-    <section
-      id="choice-sheet"
-      className="choice-sheet"
-      aria-label="カードを選ぶ"
-      data-folded={folded ? "" : undefined}
-    >
+    <section id="choice-sheet" className="choice-sheet" aria-label="カードを選ぶ">
       <div className="choice-head">
         {source !== null && (
           <CardFace defId={source.defId} zoom={{ title: source.label, defIds: [source.defId] }} />
@@ -569,9 +579,10 @@ function ChoiceSheet({
           {folded ? "選ぶカードを出す" : "盤面を見る"}
         </button>
       </div>
-      {!folded && (
-        <div id="moves" className="choice-body">
-          {heading !== null && <h3>{heading}</h3>}
+      {/* たたんでも、選ぶのをやめるボタンは残す。 */}
+      <div id="moves" className="choice-body">
+        {!folded && heading !== null && <h3>{heading}</h3>}
+        {!folded && (
           <div
             id={revealedDeck === null ? undefined : "revealed-deck"}
             className="choice-cards"
@@ -605,22 +616,22 @@ function ChoiceSheet({
               );
             })}
           </div>
-          {others.length > 0 && (
-            <div className="moves">
-              {others.map(({ move, key, label }) => (
-                <button
-                  key={key}
-                  disabled={disabled}
-                  aria-disabled={awaiting}
-                  onClick={() => onPlay(move)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+        )}
+        {others.length > 0 && (
+          <div className="moves">
+            {others.map(({ move, key, label }) => (
+              <button
+                key={key}
+                disabled={disabled}
+                aria-disabled={awaiting}
+                onClick={() => onPlay(move)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

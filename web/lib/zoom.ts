@@ -13,14 +13,18 @@ export interface ZoomTarget {
 
 export const ZoomContext = createContext<(target: ZoomTarget) => void>(() => {});
 
-/** 押すかキーで選ぶと `target` を大きく出す要素の属性。 */
-export function useZoomable(target: ZoomTarget | undefined) {
-  const open = useContext(ZoomContext);
+/**
+ * 押すかキーで選ぶと `target` を大きく出す要素の属性。`instead` を渡すと、大きく出す代わりにそれを呼ぶ
+ * （効果で選べるポケモンを押して選ぶときなど）。
+ */
+export function useZoomable(target: ZoomTarget | undefined, instead?: () => void) {
+  const zoom = useContext(ZoomContext);
   if (target === undefined) return {};
+  const open = instead ?? (() => zoom(target));
   return {
     tabIndex: 0,
     role: "button",
-    onClick: () => open(target),
+    onClick: open,
     // ボタンと同じく、Enter は押したとき、スペースは離したときに開く。開くと「閉じる」に移るので、
     // 同じキーの続き（Enter の keypress、スペースの keyup）が「閉じる」を押さないようにする。
     onKeyDown: (event: KeyboardEvent) => {
@@ -29,10 +33,10 @@ export function useZoomable(target: ZoomTarget | undefined) {
       // Enter の keypress を出させない。スペースでは画面が送られないようにする。
       event.preventDefault();
       // 「閉じる」で Enter を押し続けると、閉じて戻ったこの要素にくり返しが届く。開き直さない。
-      if (event.key === "Enter" && !event.repeat) open(target);
+      if (event.key === "Enter" && !event.repeat) open();
     },
     onKeyUp: (event: KeyboardEvent) => {
-      if (event.target === event.currentTarget && event.key === " ") open(target);
+      if (event.target === event.currentTarget && event.key === " ") open();
     },
   };
 }

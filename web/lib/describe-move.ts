@@ -5,7 +5,7 @@
  * 出したカードはもう手札に無い。指せる手を並べるときは、今の盤面がその直前にあたる。
  */
 
-import type { ChoiceAnswer, Move, Player } from "../../src/engine.js";
+import type { ChoiceAnswer, Move, Player, Zone } from "../../src/engine.js";
 import type { ReplayFrame } from "../../src/history.js";
 import type { AnswerDestination, DeckPlacementView, SetupView } from "../../src/match.js";
 import type { CardTable } from "./cards.js";
@@ -16,6 +16,7 @@ import {
   printedAttack,
   readerView,
   sidesOf,
+  ZONES,
   type ReaderView,
   type Side,
 } from "./describe.js";
@@ -392,16 +393,16 @@ function placementPlace(placement: DeckPlacementView): string {
   return placement.nth === 1 ? "山札のいちばん上" : `山札の上から ${placement.nth} 枚目`;
 }
 
-/** 選んだカードの行き先の言い方。エンジンの `ChoiceDestination` で引く。 */
-const PICK_PURPOSES: Record<string, string> = {
-  hand: "手札に加える",
-  bench: "ベンチに出す",
-  attach: "つける",
-  discard: "トラッシュする",
-  deckTop: "山札の上に置く",
-  deckBottom: "山札の下に置く",
-  lostZone: "ロストゾーンに置く",
-  prizes: "サイドに置く",
+/** エンジンが選択に書いた行き先（`ChoiceDestination`）を、`DESTINATION_PHRASES` の行き先で引く。 */
+const CHOICE_DESTINATIONS: Record<string, string> = {
+  hand: "hand",
+  bench: "bench",
+  attach: "attached",
+  discard: "discard",
+  deckTop: "deck",
+  deckBottom: "deck",
+  lostZone: "lostZone",
+  prizes: "prizes",
 };
 
 /**
@@ -423,7 +424,8 @@ export function choicePrompt(context: MoveContext): string {
   let what: string;
   if (prompt.kind === "selectInPlay") what = "ポケモンを選んでください";
   else if (prompt.kind === "selectCard" || prompt.kind === "selectFromHiddenZone") {
-    const purpose = PICK_PURPOSES[shape.destination ?? ""] ?? "";
+    const purpose =
+      DESTINATION_PHRASES[CHOICE_DESTINATIONS[shape.destination ?? ""] ?? ""]?.("") ?? "";
     what = `${pickedFrom(prompt, context)}${purpose}カードを選んでください`;
   } else what = "選んでください";
   const unit = prompt.kind === "selectInPlay" ? "匹" : "枚";
@@ -435,11 +437,11 @@ export function choicePrompt(context: MoveContext): string {
   return `${source.label}：${what}${left}。${picked === "" ? "" : `選んだカード: ${picked}`}`;
 }
 
-const ZONE_NAMES: Record<string, string> = {
-  hand: "手札",
-  deck: "山札",
-  discard: "トラッシュ",
-  lost: "ロストゾーン",
+/** `locateCard` のゾーンのうち、カードを選び出せるもの。 */
+const LOCATED_ZONES: Partial<Record<Located["zone"], Zone["kind"]>> = {
+  hand: "hand",
+  discard: "discard",
+  lost: "lostZone",
 };
 
 type Prompt = NonNullable<ReaderView["choices"][number]["prompt"]>;
@@ -449,10 +451,8 @@ function pickedFrom(
   prompt: Extract<Prompt, { kind: "selectCard" | "selectFromHiddenZone" }>,
   context: MoveContext,
 ): string {
-  const zoneName = (own: boolean, zone: string) => {
-    const name = ZONE_NAMES[zone];
-    return name === undefined ? null : `${own ? "" : "相手の"}${name}`;
-  };
+  const zoneName = (own: boolean, zone: Zone["kind"] | undefined) =>
+    zone === undefined ? null : `${own ? "" : "相手の"}${ZONES[zone]}`;
   let names: (string | null)[];
   if (prompt.kind === "selectFromHiddenZone") {
     const { zone } = prompt;
@@ -460,7 +460,7 @@ function pickedFrom(
   } else {
     names = prompt.candidates.map((id) => {
       const found = locateCard(id, context);
-      return found === null ? null : zoneName(found.own, found.zone);
+      return found === null ? null : zoneName(found.own, LOCATED_ZONES[found.zone]);
     });
   }
   const [name, ...rest] = new Set(names);

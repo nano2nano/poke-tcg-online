@@ -2875,9 +2875,15 @@ test("山札全体を見て選ぶあいだは、見ている山札を並べ、�
   await expect(page.locator("#moves button")).toHaveCount(2);
   await expect(deck.locator("button.choice-card")).toHaveCount(2);
 
+  // 選べるカードが無くても、無いことを山札で確かめられるよう並べる。
+  sync.legalMoves = [{ type: "AnswerChoice", player: 0, choiceId, answer: { kind: "decline" } }];
+  await openWith(page, sync);
+  await expect(shown).toHaveCount(4);
+  await expect(page.locator("#moves button")).toHaveCount(1);
+
   sync.revealedDeck = null;
   await openWith(page, sync);
-  await expect(page.locator("#moves button")).toHaveCount(2);
+  await expect(page.locator("#moves button")).toHaveCount(1);
   await expect(deck).toBeHidden();
 });
 
@@ -2930,8 +2936,10 @@ test("効果でカードを選ぶあいだは、候補を盤面の上に大き�
   await expect(tiles).toHaveCount(2);
   await expect(tiles.nth(1).locator(".card")).toHaveAttribute("data-def-id", hand[2]!.defId);
 
+  // たたんでも、選ぶのをやめるボタンは残す。
   await page.click("#choice-fold");
-  await expect(page.locator("#moves")).toBeHidden();
+  await expect(tiles).toHaveCount(0);
+  await expect(sheet.locator("#moves button")).toHaveCount(1);
   await page.click("#choice-fold");
   await tiles.nth(1).click();
   await expect.poll(() => sent.length).toBe(1);
@@ -2974,6 +2982,14 @@ test("効果でポケモンを選ぶあいだは、盤面の候補を押すと�
   await pokemon(second).click();
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0]!.move).toEqual(sync.legalMoves[1]);
+  await expect(page.locator("#card-zoom")).toBeHidden();
+
+  // キーボードでも、押したときと同じく選ぶ。
+  const typed = await openWith(page, sync);
+  await pokemon(first).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => typed.length).toBe(1);
+  expect(typed[0]!.move).toEqual(sync.legalMoves[0]);
   await expect(page.locator("#card-zoom")).toBeHidden();
 });
 

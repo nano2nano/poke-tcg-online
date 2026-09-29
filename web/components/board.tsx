@@ -470,16 +470,19 @@ function PokemonBox({
   const posture = pokemon.conditions.find((condition) =>
     Object.hasOwn(POSTURE_ANGLES, condition.kind),
   )?.kind;
-  const zoomable = useZoomable({
-    title: nameOf(table, top.defId),
-    defIds: [
-      ...pokemon.stack.map((card) => card.defId).reverse(),
-      ...pokemon.attached.map((card) => card.defId),
-    ],
-  });
   // 効果で選べるポケモンは、押すと拡大せずに選ぶ。印刷の文字はマウスを載せるか長押しで読める。
   const choices = use(PokemonChoices);
   const choosable = choices?.targets.has(pokemon.inPlayId) === true;
+  const zoomable = useZoomable(
+    {
+      title: nameOf(table, top.defId),
+      defIds: [
+        ...pokemon.stack.map((card) => card.defId).reverse(),
+        ...pokemon.attached.map((card) => card.defId),
+      ],
+    },
+    choosable ? () => choices?.choose(pokemon.inPlayId) : undefined,
+  );
   // ダメージの印やついているカードも、ポケモンと一緒に動かす。
   return (
     <motion.div
@@ -489,7 +492,6 @@ function PokemonBox({
       {...moving}
       className={aimed.has(pokemon.inPlayId) ? "pokemon aimed zoomable" : "pokemon zoomable"}
       {...zoomable}
-      {...(choosable && { onClick: () => choices?.choose(pokemon.inPlayId) })}
       data-choosable={choosable ? "" : undefined}
       data-in-play-id={pokemon.inPlayId}
       data-damage={pokemon.damage}
