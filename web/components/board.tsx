@@ -6,10 +6,13 @@
  */
 
 import {
+  createContext,
   memo,
+  use,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   type CSSProperties,
@@ -67,6 +70,7 @@ export function CardFace({
   const [, noteFailedImage] = useReducer((count: number) => count + 1, 0);
   const face = useRef<HTMLDivElement>(null);
   const moving = useMovingMark(face);
+  const frame = use(BoardFrame);
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -108,6 +112,7 @@ export function CardFace({
     <motion.div
       {...props}
       layoutId={instanceId}
+      layoutDependency={frame}
       // 倒すのは動かさずに描く。プレビューは描いた直後のカードの大きさで置き場所を決める。
       style={{ rotate: POSTURE_ANGLES[posture ?? ""] ?? 0 }}
       {...moving}
@@ -223,6 +228,7 @@ function ShownPokemon({
   const { table } = useCardData();
   const self = useRef<HTMLDivElement>(null);
   const moving = useMovingMark(self);
+  const frame = use(BoardFrame);
   const top = pokemon.stack[pokemon.stack.length - 1]!;
   const posture = pokemon.conditions.find((condition) =>
     Object.hasOwn(POSTURE_ANGLES, condition.kind),
@@ -239,6 +245,7 @@ function ShownPokemon({
     <motion.div
       ref={self}
       layoutId={`pokemon ${pokemon.inPlayId}`}
+      layoutDependency={frame}
       {...moving}
       className={aimed.has(pokemon.inPlayId) ? "pokemon aimed zoomable" : "pokemon zoomable"}
       {...zoomable}
@@ -272,16 +279,37 @@ function ShownPokemon({
 }
 
 /**
+ * 描いている局面。カードはこれが変わったときだけ位置を測り直す。指せる手のボタンにマウスを載せるたびに
+ * 盤面を描き直すが、そのたびに全部のカードを測らない。
+ */
+const BoardFrame = createContext<object | undefined>(undefined);
+
+/**
  * 卓の両側とスタジアムを並べる枠。カードを動かして見せるのは同じ枠の中だけにする。対戦とそのリプレイを
  * 同時に開くと、同じカードが 2 つの盤面に出る。
  */
-export function Board({ name, children }: { name: string; children: ReactNode }) {
+export function Board({
+  name,
+  near,
+  far,
+  stadium,
+  children,
+}: {
+  name: string;
+  near: Side | null;
+  far: Side | null;
+  stadium: SpectatorView["stadium"];
+  children: ReactNode;
+}) {
+  const frame = useMemo(() => ({ near, far, stadium }), [near, far, stadium]);
   return (
     <LayoutGroup id={name}>
-      {/* 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。 */}
-      <motion.div className="board" layoutScroll>
-        {children}
-      </motion.div>
+      <BoardFrame value={frame}>
+        {/* 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。 */}
+        <motion.div className="board" layoutScroll layoutDependency={frame}>
+          {children}
+        </motion.div>
+      </BoardFrame>
     </LayoutGroup>
   );
 }
@@ -329,7 +357,12 @@ export const SideBoard = memo(function SideBoard({
       </div>
       <div className="field">
         <Zone name="active" label="バトル場">
-          <PokemonSlot pokemon={side.active} aimed={aimed} />
+          {/* 入れ替わったポケモンは別の要素として描く。同じ要素のまま layoutId だけ変えても Motion は追わない。 */}
+          <PokemonSlot
+            key={side.active !== null && "inPlayId" in side.active ? side.active.inPlayId : "none"}
+            pokemon={side.active}
+            aimed={aimed}
+          />
         </Zone>
         <Zone name="bench" label="ベンチ">
           {bench.length === 0 ? (

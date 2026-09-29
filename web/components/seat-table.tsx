@@ -102,7 +102,12 @@ export function SeatTable({
             </p>
           )}
         </div>
-        <Board name="seat">
+        <Board
+          name="seat"
+          near={view?.self ?? null}
+          far={view?.opponent ?? null}
+          stadium={view?.stadium ?? null}
+        >
           <div className="board-side">
             <h2>相手</h2>
             <div id="opponent">

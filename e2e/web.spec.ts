@@ -638,16 +638,16 @@ function placingActive(): [PlayerView[], PlayerView[]] {
 }
 
 /**
- * リプレイを開き、`before` の局面を描いたところで時計を止める。1 手進めると `after` を描く。
- * 返すのは、自分のバトル場に出たカードがその枠に収まっているかを調べる関数。
+ * リプレイを開き、`frames` の最初の局面を描いたところで時計を止める。1 手進めるごとに次の局面を描く。
+ * 返すのは、自分のバトル場に出たカードと、それがその枠に収まっているかを調べる関数。
  */
-async function openPlacing(page: Page, before: PlayerView[], after: PlayerView[]) {
+async function openPlacing(page: Page, ...frames: PlayerView[][]) {
   await page.clock.install();
   await mockHistory(
     page,
     async () => "ok",
     null,
-    (ply) => (ply === 0 ? before : after),
+    (ply) => frames[Math.min(ply, frames.length - 1)]!,
   );
   await page.goto("/");
   await page.click("#history-button");
@@ -676,6 +676,12 @@ test("手札のカードを場に出すと、手札の位置から動いて場�
   await page.clock.runFor(20);
   expect(await inZone()).toBe(false);
   await expect(card).toHaveAttribute("data-moving");
+  // 出ていくカードは、詰めて動く手札より上に描く。
+  const zIndex = (node: Element) => getComputedStyle(node).zIndex;
+  expect(await card.evaluate(zIndex)).toBe("3");
+  const shifting = page.locator('#replay-self [data-zone="hand"] .card[data-moving]');
+  await expect(shifting.first()).toBeAttached();
+  expect(await shifting.first().evaluate(zIndex)).toBe("auto");
   await page.clock.runFor(1_000);
   expect(await inZone()).toBe(true);
   await expect(card).not.toHaveAttribute("data-moving");
@@ -718,6 +724,61 @@ test("ベンチへ下がるポケモンは、ダメージの印も一緒に動�
   expect(middle.x).toBeLessThan(card.x + card.width);
   expect(middle.y).toBeGreaterThan(card.y);
   expect(middle.y).toBeLessThan(card.y + card.height);
+});
+
+/** バトル場のポケモンに、ダメージを載せて別の ID を付けた写し。ベンチに並べる 2 匹目にする。 */
+function anotherPokemon(views: PlayerView[], damage: number) {
+  const active = views[0]!.self.active;
+  if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
+  const copy = structuredClone(active);
+  copy.inPlayId += "-2";
+  for (const card of copy.stack) card.instanceId += "-2";
+  copy.damage = damage;
+  return { active, copy };
+}
+
+test("バトル場とベンチが入れ替わると、ベンチから出たポケモンも印ごと動く", async ({ page }) => {
+  const [, placed] = placingActive();
+  const before = structuredClone(placed);
+  const { active, copy } = anotherPokemon(before, 30);
+  before[0]!.self.bench = [copy];
+  const after = structuredClone(before);
+  after[0]!.self.active = structuredClone(copy);
+  after[0]!.self.bench = [structuredClone(active)];
+  await openPlacing(page, before, after);
+  await page.click("#replay-next");
+  const pokemon = page.locator('#replay-self [data-zone="active"] .pokemon');
+  await expect(pokemon).toHaveAttribute("data-damage", "30");
+  await page.clock.runFor(20);
+  const [card, badge] = [
+    await pokemon.locator(".card").boundingBox(),
+    await pokemon.locator(".damage").boundingBox(),
+  ];
+  if (card === null || badge === null) throw new Error("カードか印が描けていない");
+  await page.clock.runFor(1_000);
+  const middle = { x: badge.x + badge.width / 2, y: badge.y + badge.height / 2 };
+  expect(middle.x).toBeGreaterThan(card.x);
+  expect(middle.x).toBeLessThan(card.x + card.width);
+  expect(middle.y).toBeGreaterThan(card.y);
+  expect(middle.y).toBeLessThan(card.y + card.height);
+  expect(await pokemon.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
+});
+
+test("何手か前に見えていたカードが出てきても、前の場所からは動かさない", async ({ page }) => {
+  const [before, placed] = placingActive();
+  // Motion は、消えたカードの最後の位置を、次に同じ layoutId のカードが出てきたときまで持ち越さない。
+  // 持ち越すようになったら、前の局面で描いていなかったカードには別の layoutId を付ける。
+  // 出したカードをいったん盤面から消し（山札へもどしたことにする）、次の手でまた場に出す。
+  const hidden = structuredClone(placed);
+  hidden[0]!.self.active = null;
+  const { inZone, card } = await openPlacing(page, before, hidden, placed);
+  await page.click("#replay-next");
+  await expect(card).toHaveCount(0);
+  await page.clock.runFor(1_000);
+  await page.click("#replay-next");
+  await expect(card).toBeVisible();
+  await page.clock.runFor(20);
+  expect(await inZone()).toBe(true);
 });
 
 test("OS で動きを減らす設定にしていたら、カードを動かさずに場に置く", async ({ page }) => {

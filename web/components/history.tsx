@@ -262,7 +262,12 @@ function Replay({
           .filter((line) => line !== "")
           .join("　")}
       </p>
-      <Board name="replay">
+      <Board
+        name="replay"
+        near={board?.self ?? null}
+        far={board?.opponent ?? null}
+        stadium={board?.stadium ?? null}
+      >
         <div className="board-side">
           <h2>相手</h2>
           <div id="replay-opponent">

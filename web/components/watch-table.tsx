@@ -100,7 +100,12 @@ export function WatchTable({ token }: { token: string }) {
             </p>
           )}
         </div>
-        <Board name="watch">
+        <Board
+          name="watch"
+          near={frame?.sides[0] ?? null}
+          far={frame?.sides[1] ?? null}
+          stadium={frame?.stadium ?? null}
+        >
           <SeatSide state={state} frame={frame} player={1} aimed={aimed} />
           <div id="watch-stadium" className="board-center">
             {frame !== null && <Stadium stadium={frame.stadium} />}
