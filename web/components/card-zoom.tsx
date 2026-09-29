@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { ZoomContext, type ZoomTarget } from "../lib/zoom.js";
 import { CardCaption, CardFace } from "./board.js";
 
@@ -10,10 +11,11 @@ export function CardZoom({ children }: { children: ReactNode }) {
   const pressedBackdrop = useRef(false);
   const releasedBackdrop = useRef(false);
 
-  // 開くのは押したその場で行う。閉じてから close イベントが届くまでに同じカードを押すと、`target` は
-  // 変わらないので、描き直しを待っていると開かない。
+  // 開くのは押したその場で行う。閉じてから close イベントが届くまでに同じカードを押すと、`target` に
+  // 同じものが渡って描き直しが起きないので、描き直しを待っていると開かない。開くと「閉じる」へ
+  // 移るので、中身を描いてから開く。
   const open = useCallback((next: ZoomTarget) => {
-    setTarget(next);
+    flushSync(() => setTarget(next));
     const shown = dialog.current;
     if (shown !== null && !shown.open) shown.showModal();
   }, []);

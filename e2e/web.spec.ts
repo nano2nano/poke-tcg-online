@@ -1007,10 +1007,15 @@ test("閉じてすぐに同じカードを押しても、拡大を開き直す",
   const zoom = page.locator("#card-zoom");
   await hand.first().click();
   await expect(zoom).toBeVisible();
-  // dialog の close イベントは閉じたあとで届く。届く前に押す。
-  await hand.first().evaluate((card) => {
-    (document.querySelector("#card-zoom") as HTMLDialogElement).close();
+  // dialog の close イベントは閉じたあとで届く。届く前に押し、届くまで待つ。
+  await hand.first().evaluate(async (card) => {
+    const dialog = document.querySelector("#card-zoom") as HTMLDialogElement;
+    const closed = new Promise((resolve) =>
+      dialog.addEventListener("close", resolve, { once: true }),
+    );
+    dialog.close();
     (card as HTMLElement).click();
+    await closed;
   });
   await expect(zoom).toBeVisible();
   await expect(page.locator("#card-zoom-cards .card")).toHaveCount(1);
