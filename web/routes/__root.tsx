@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { HeadContent, Navigate, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { CardPreview } from "../components/card-preview.js";
 import { CardZoom } from "../components/card-zoom.js";
 import { CardDataProvider } from "../lib/cards.js";
@@ -12,12 +12,15 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "ポケカ オンライン対戦" },
     ],
-    links: [{ rel: "stylesheet", href: styles }],
+    links: [
+      { rel: "stylesheet", href: styles },
+      // 目印は要らないが、無いとブラウザが毎回 `/favicon.ico` を取りに行く。空の 1 枚を埋めておく。
+      { rel: "icon", href: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>" },
+    ],
   }),
   // SSR はしないが、文書の骨組みとスクリプトの読み込みはビルドが `index.html` へ書き出す。
   shellComponent: Document,
   component: Root,
-  notFoundComponent: ElsewhereToHome,
 });
 
 function Root() {
@@ -29,14 +32,6 @@ function Root() {
       </CardZoom>
     </CardDataProvider>
   );
-}
-
-/**
- * 画面のパスは `/` だけなので、ほかのパスは検索の部分を残して `/` へ移す。画面を入れ替える前に
- * `/next/` で配った観戦のリンクも、これで開ける。
- */
-function ElsewhereToHome() {
-  return <Navigate to="/" search={true} replace />;
 }
 
 function Document({ children }: { children: ReactNode }) {
