@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Move, Player } from "../../src/engine.js";
+import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
 import {
@@ -105,7 +105,7 @@ export function SeatTable({
   const cardChoice =
     state.ended === null &&
     view?.phase !== "setup" &&
-    isCardChoice(listed.buttons, state.revealedDeck !== null);
+    isCardChoice(view?.choices.at(-1)?.prompt?.kind, listed.buttons);
 
   useEffect(() => {
     if (left !== null) onLeave(left.text, left.resumable);
@@ -478,15 +478,20 @@ function answerCard(move: Move, context: MoveContext): string | null {
 }
 
 /**
- * 効果でカードを選ぶ選択か。カードを選ぶ答えと、選ぶのをやめる答えだけが並ぶ。山札を見ているなら、
- * 選べるカードが 1 枚も無くても、無いことを山札で確かめられるよう選ぶ画面を出す。
+ * 効果でカードを選ぶ選択か。カードを選ぶ答えと、選ぶのをやめる答えだけが並ぶ。エンジンは選べるカードが
+ * 1 枚も無くても、やめるだけの選択を積む。そのときも選ぶ画面を出し、選べるカードが無いことを見せる。
  */
-function isCardChoice(buttons: readonly ListedMove[], revealing: boolean): boolean {
+function isCardChoice(
+  prompt: Choice["prompt"]["kind"] | undefined,
+  buttons: readonly ListedMove[],
+): boolean {
   const answers = buttons.map(({ move }) =>
     move.type === "AnswerChoice" ? move.answer.kind : null,
   );
   return (
-    (revealing || answers.some((kind) => kind === "card" || kind === "cardDef")) &&
+    (prompt === "selectCard" ||
+      prompt === "selectFromHiddenZone" ||
+      answers.some((kind) => kind === "card" || kind === "cardDef")) &&
     answers.every((kind) => kind === "card" || kind === "cardDef" || kind === "decline")
   );
 }
@@ -582,6 +587,10 @@ function ChoiceSheet({
       {/* 畳んでも、選ぶのをやめるボタンは残す。 */}
       <div id="moves" className="choice-body">
         {!folded && heading !== null && <h3>{heading}</h3>}
+        {!folded &&
+          buttons.every(
+            ({ move }) => move.type === "AnswerChoice" && move.answer.kind === "decline",
+          ) && <p>選べるカードはありません。</p>}
         {!folded && (
           <div
             id={revealedDeck === null ? undefined : "revealed-deck"}
