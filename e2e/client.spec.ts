@@ -2936,7 +2936,7 @@ test("効果でカードを選ぶあいだは、候補を盤面の上に大き�
   await expect(tiles).toHaveCount(2);
   await expect(tiles.nth(1).locator(".card")).toHaveAttribute("data-def-id", hand[2]!.defId);
 
-  // たたんでも、選ぶのをやめるボタンは残す。
+  // 畳んでも、選ぶのをやめるボタンは残す。
   await page.click("#choice-fold");
   await expect(tiles).toHaveCount(0);
   await expect(sheet.locator("#moves button")).toHaveCount(1);

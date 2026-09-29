@@ -469,7 +469,7 @@ function SetupForm({
   );
 }
 
-/** 選択の答えのカード。カードを選ぶ答えでなければ null。 */
+/** 答えが選ぶカードの defId。カードを選ぶ答えでないか、カードの場所を盤面で引けなければ null。 */
 function answerCard(move: Move, context: MoveContext): string | null {
   if (move.type !== "AnswerChoice") return null;
   const { answer } = move;
@@ -579,7 +579,7 @@ function ChoiceSheet({
           {folded ? "選ぶカードを出す" : "盤面を見る"}
         </button>
       </div>
-      {/* たたんでも、選ぶのをやめるボタンは残す。 */}
+      {/* 畳んでも、選ぶのをやめるボタンは残す。 */}
       <div id="moves" className="choice-body">
         {!folded && heading !== null && <h3>{heading}</h3>}
         {!folded && (
@@ -604,7 +604,7 @@ function ChoiceSheet({
                 <button
                   key={button.key}
                   className="choice-card"
-                  // カードの面の説明まで読むと長いので、手の見出しだけを読ませる。
+                  // カードの面の説明まで読むと長いので、手のラベルだけを読ませる。
                   aria-label={button.label}
                   data-count={count}
                   disabled={disabled}
