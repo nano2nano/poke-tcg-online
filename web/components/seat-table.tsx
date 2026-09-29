@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
 import {
+  choicePrompt,
   describeMove,
   foldMoves,
   handCardName,
+  locateCard,
   moveTargets,
   placementPrompt,
   setupPrompt,
@@ -15,7 +17,7 @@ import { NO_DROPS, planDrops } from "../lib/card-drops.js";
 import { setupOffer, type SeatState } from "../lib/match-state.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
-import { Board, CardFace, NOTHING_AIMED, SideBoard, Stadium } from "./board.js";
+import { Board, CardFace, NOTHING_AIMED, PokemonChoices, SideBoard, Stadium } from "./board.js";
 import type { CardDrops } from "./card-drag.js";
 import { EventLog } from "./event-log.js";
 import { MotionToggle } from "./motion-setting.js";
@@ -81,6 +83,29 @@ export function SeatTable({
   }, [listed, aim]);
   const onAim = (kind: keyof Aim, key: string | null) =>
     setAim((current) => (current[kind] === key ? current : { ...current, [kind]: key }));
+  const onPlay = (move: Move) => {
+    if (!seating.awaiting) playMove(seating, listed.offered, move);
+  };
+  // 描き直すたびに作り直す `onPlay` を渡すと、盤面のポケモンを全部描き直す。いまの値はここから読む。
+  const latestPlay = useRef(onPlay);
+  useLayoutEffect(() => {
+    latestPlay.current = onPlay;
+  });
+  const pokemonChoices = useMemo(() => {
+    const moves = pokemonMoves(listed.buttons);
+    if (disabled || moves.size === 0) return null;
+    return {
+      targets: new Set(moves.keys()),
+      choose: (inPlayId: string) => {
+        const move = moves.get(inPlayId);
+        if (move !== undefined) latestPlay.current(move);
+      },
+    };
+  }, [listed, disabled]);
+  const cardChoice =
+    state.ended === null &&
+    view?.phase !== "setup" &&
+    isCardChoice(listed.buttons, state.revealedDeck !== null);
 
   useEffect(() => {
     if (left !== null) onLeave(left.text, left.resumable);
@@ -120,42 +145,59 @@ export function SeatTable({
             </p>
           )}
         </div>
-        <Board
-          name="seat"
-          near={view?.self ?? null}
-          far={view?.opponent ?? null}
-          stadium={view?.stadium ?? null}
-          drops={drops}
-        >
-          <div className="board-side">
-            <h2>相手</h2>
-            <div id="opponent">
-              {view !== null && <SideBoard side={view.opponent} mirrored aimed={aimed} />}
+        <PokemonChoices value={pokemonChoices}>
+          <Board
+            name="seat"
+            near={view?.self ?? null}
+            far={view?.opponent ?? null}
+            stadium={view?.stadium ?? null}
+            drops={drops}
+          >
+            <div className="board-side">
+              <h2>相手</h2>
+              <div id="opponent">
+                {view !== null && <SideBoard side={view.opponent} mirrored aimed={aimed} />}
+              </div>
             </div>
-          </div>
-          <div id="stadium" className="board-center">
-            {view !== null && <Stadium stadium={view.stadium} />}
-          </div>
-          <div className="board-side">
-            <h2>自分</h2>
-            <div id="self">
-              {view !== null && <SideBoard side={view.self} mirrored={false} aimed={aimed} drops />}
+            <div id="stadium" className="board-center">
+              {view !== null && <Stadium stadium={view.stadium} />}
             </div>
-          </div>
-        </Board>
+            <div className="board-side">
+              <h2>自分</h2>
+              <div id="self">
+                {view !== null && (
+                  <SideBoard side={view.self} mirrored={false} aimed={aimed} drops />
+                )}
+              </div>
+            </div>
+          </Board>
+        </PokemonChoices>
+        {cardChoice && (
+          <ChoiceSheet
+            key={view?.choices.at(-1)?.choiceId}
+            state={state}
+            context={context}
+            buttons={listed.buttons}
+            disabled={disabled}
+            awaiting={seating.awaiting}
+            onPlay={onPlay}
+          />
+        )}
 
         <div className="table-panel">
           <Mulligans state={state} />
           <h2>指せる手</h2>
-          <Moves
-            seating={seating}
-            context={context}
-            listed={listed}
-            narrowed={narrowed}
-            onWiden={() => setNarrowed(null)}
-            disabled={disabled}
-            onAim={onAim}
-          />
+          {!cardChoice && (
+            <Moves
+              seating={seating}
+              context={context}
+              listed={listed}
+              narrowed={narrowed}
+              onWiden={() => setNarrowed(null)}
+              disabled={disabled}
+              onAim={onAim}
+            />
+          )}
           <button
             id="concede-button"
             className="danger"
@@ -271,14 +313,14 @@ function Moves({
   onAim: (kind: "hovered" | "focused", key: string | null) => void;
 }) {
   const { state, awaiting, send, choose } = seating;
-  const { view, legalMoves: moves, setup, deckPlacement: placement, revealedDeck } = state;
+  const { view, legalMoves: moves, setup, deckPlacement: placement } = state;
   const table = context.cards;
   const playing = state.ended === null;
   const prompt = !playing
     ? ""
     : moves !== null && placement !== null
       ? placementPrompt(placement, table)
-      : setupPrompt(context, moves !== null, setup);
+      : setupPrompt(context, moves !== null, setup) || choicePrompt(context);
 
   const buttons =
     narrowed === null ? listed.buttons : listed.buttons.filter(({ key }) => narrowed.includes(key));
@@ -291,9 +333,6 @@ function Moves({
         <p id="move-prompt" className="move-prompt">
           {prompt}
         </p>
-      )}
-      {playing && moves !== null && revealedDeck !== null && (
-        <RevealedDeck state={state} table={table} moves={moves} revealedDeck={revealedDeck} />
       )}
       <SetupForm
         state={state}
@@ -430,58 +469,172 @@ function SetupForm({
   );
 }
 
+/** 答えが選ぶカードの defId。カードを選ぶ答えでないか、カードの場所を盤面で引けなければ null。 */
+function answerCard(move: Move, context: MoveContext): string | null {
+  if (move.type !== "AnswerChoice") return null;
+  const { answer } = move;
+  if (answer.kind === "cardDef") return answer.defId;
+  return answer.kind === "card" ? (locateCard(answer.card, context)?.defId ?? null) : null;
+}
+
 /**
- * 山札を見て選ぶ効果で、見ている山札を並べる。エンジンの候補は条件に合うカードだけなので、
- * ボタンだけでは、選べないカードや、山札に何が残っていて何がサイドに落ちたかを読めない。
- * 選ぶのはボタンで行い、選べるカードは枠で囲まない。盤面のほかのカードと同じく押すと拡大するので、
- * 囲むと押せば選べるように見える。
+ * 効果でカードを選ぶ選択か。カードを選ぶ答えと、選ぶのをやめる答えだけが並ぶ。山札を見ているなら、
+ * 選べるカードが 1 枚も無くても、無いことを山札で確かめられるよう選ぶ画面を出す。
  */
-function RevealedDeck({
+function isCardChoice(buttons: readonly ListedMove[], revealing: boolean): boolean {
+  const answers = buttons.map(({ move }) =>
+    move.type === "AnswerChoice" ? move.answer.kind : null,
+  );
+  return (
+    (revealing || answers.some((kind) => kind === "card" || kind === "cardDef")) &&
+    answers.every((kind) => kind === "card" || kind === "cardDef" || kind === "decline")
+  );
+}
+
+/** 効果で選べるポケモンと、盤面でそのポケモンを押したときに指す手。 */
+function pokemonMoves(buttons: readonly ListedMove[]): Map<string, Move> {
+  const moves = new Map<string, Move>();
+  for (const { move } of buttons) {
+    if (move.type === "AnswerChoice" && move.answer.kind === "inPlay") {
+      moves.set(move.answer.target, move);
+    }
+  }
+  return moves;
+}
+
+/**
+ * 効果でカードを選ぶあいだ、候補を盤面の上に大きく並べ、押して選ばせる。
+ *
+ * 山札を見て選ぶ効果では、見ている山札をすべて並べ、選べないカードは暗くする。エンジンの候補は条件に
+ * 合うカードだけなので、候補だけでは山札に何が残っていて何がサイドに落ちたかを読めない。
+ * 盤面のカードは押すと拡大するが、ここの候補は押すと選ぶ。印刷の文字は、マウスを載せるか長押しで読む。
+ */
+function ChoiceSheet({
   state,
-  table,
-  moves,
-  revealedDeck,
+  context,
+  buttons,
+  disabled,
+  awaiting,
+  onPlay,
 }: {
   state: SeatState;
-  table: MoveContext["cards"];
-  moves: Move[];
-  revealedDeck: string[];
+  context: MoveContext;
+  buttons: readonly ListedMove[];
+  disabled: boolean;
+  awaiting: boolean;
+  onPlay: (move: Move) => void;
 }) {
-  const pickable = new Set(
-    moves.flatMap((move) =>
-      move.type === "AnswerChoice" && move.answer.kind === "cardDef" ? [move.answer.defId] : [],
-    ),
-  );
+  // 選ぶカードを隠して盤面を見られるようにする。次の選択に移ったら、部品ごと作り直して開く。
+  const [folded, setFolded] = useState(false);
+  const table = context.cards;
+  const { revealedDeck, deckPlacement: placement } = state;
+  const source = state.view?.choices.at(-1)?.context?.source ?? null;
+  const prompt = placement !== null ? placementPrompt(placement, table) : choicePrompt(context);
+  const picks: { defId: string; button: ListedMove }[] = [];
+  const others: ListedMove[] = [];
+  for (const button of buttons) {
+    const defId = answerCard(button.move, context);
+    if (defId === null) others.push(button);
+    else picks.push({ defId, button });
+  }
+  // 山札を並べるときは、同じカードを 1 枚にまとめて枚数を添え、種類と名前で並べ直す。サーバの並びは見せた順で、
+  // 探すときの手がかりにならない。
   const counts = new Map<string, number>();
-  for (const defId of revealedDeck) counts.set(defId, (counts.get(defId) ?? 0) + 1);
-  // サーバの並びは見せた順で、探すときの手がかりにならないので、種類と名前で並べ直す。
-  const defIds = [...counts.keys()].sort(
-    (a, b) =>
-      kindRank(table[a]) - kindRank(table[b]) ||
-      nameOf(table, a).localeCompare(nameOf(table, b), "ja"),
-  );
+  for (const defId of revealedDeck ?? []) counts.set(defId, (counts.get(defId) ?? 0) + 1);
+  const tiles: { defId: string; button: ListedMove | undefined }[] =
+    revealedDeck === null
+      ? picks
+      : [
+          ...[...counts.keys()]
+            .sort(
+              (a, b) =>
+                kindRank(table[a]) - kindRank(table[b]) ||
+                nameOf(table, a).localeCompare(nameOf(table, b), "ja"),
+            )
+            .map((defId) => ({
+              defId,
+              button: picks.find((pick) => pick.defId === defId)?.button,
+            })),
+          ...picks.filter(({ defId }) => !counts.has(defId)),
+        ];
   // サーバは見せたあとに山札へ入ったカードを送らないので、並べた枚数が山札の枚数より少ないことがある。
   const deckCount = state.view?.self.deckCount;
   const heading =
-    deckCount === undefined || deckCount === revealedDeck.length
-      ? `山札 ${revealedDeck.length} 枚`
-      : `山札 ${deckCount} 枚のうち、見た ${revealedDeck.length} 枚`;
+    revealedDeck === null
+      ? null
+      : deckCount === undefined || deckCount === revealedDeck.length
+        ? `山札 ${revealedDeck.length} 枚`
+        : `山札 ${deckCount} 枚のうち、見た ${revealedDeck.length} 枚`;
+
   return (
-    <div id="revealed-deck" className="revealed-deck" data-count={revealedDeck.length}>
-      <h3>{heading}</h3>
-      <div className="revealed-cards">
-        {defIds.map((defId) => (
-          <div key={defId} className="revealed-card" data-count={counts.get(defId)}>
-            <CardFace
-              defId={defId}
-              pickable={pickable.has(defId)}
-              zoom={{ title: "山札", defIds: [defId] }}
-            />
-            <span>×{counts.get(defId)}</span>
-          </div>
-        ))}
+    <section id="choice-sheet" className="choice-sheet" aria-label="カードを選ぶ">
+      <div className="choice-head">
+        {source !== null && (
+          <CardFace defId={source.defId} zoom={{ title: source.label, defIds: [source.defId] }} />
+        )}
+        <p id="move-prompt" className="move-prompt">
+          {prompt}
+        </p>
+        <button id="choice-fold" className="secondary" onClick={() => setFolded(!folded)}>
+          {folded ? "選ぶカードを出す" : "盤面を見る"}
+        </button>
       </div>
-    </div>
+      {/* 畳んでも、選ぶのをやめるボタンは残す。 */}
+      <div id="moves" className="choice-body">
+        {!folded && heading !== null && <h3>{heading}</h3>}
+        {!folded && (
+          <div
+            id={revealedDeck === null ? undefined : "revealed-deck"}
+            className="choice-cards"
+            data-count={revealedDeck?.length}
+          >
+            {tiles.map(({ defId, button }) => {
+              const count = counts.get(defId);
+              const shown = count === undefined ? null : <span>×{count}</span>;
+              return button === undefined ? (
+                <div key={defId} className="choice-card" data-count={count}>
+                  <CardFace
+                    defId={defId}
+                    pickable={false}
+                    zoom={{ title: "山札", defIds: [defId] }}
+                  />
+                  {shown}
+                </div>
+              ) : (
+                <button
+                  key={button.key}
+                  className="choice-card"
+                  // カードの面の説明まで読むと長いので、手のラベルだけを読ませる。
+                  aria-label={button.label}
+                  data-count={count}
+                  disabled={disabled}
+                  aria-disabled={awaiting}
+                  onClick={() => onPlay(button.move)}
+                >
+                  <CardFace defId={defId} pickable />
+                  {shown}
+                  <span className="choice-label">{button.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {others.length > 0 && (
+          <div className="moves">
+            {others.map(({ move, key, label }) => (
+              <button
+                key={key}
+                disabled={disabled}
+                aria-disabled={awaiting}
+                onClick={() => onPlay(move)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

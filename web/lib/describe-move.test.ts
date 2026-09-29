@@ -4,7 +4,7 @@ import { viewFor } from "../../src/match.js";
 import { ensureCards, newMatch } from "../../tests/helpers.js";
 import type { CardTable } from "./cards.js";
 import { readerView } from "./describe.js";
-import { describeMove, replayStatusText } from "./describe-move.js";
+import { choicePrompt, describeMove, replayStatusText } from "./describe-move.js";
 
 const answering = (answer: ChoiceAnswer) =>
   describeMove(
@@ -78,5 +78,96 @@ describe("済んだ対戦を読み返す盤面", () => {
     expect(text).toContain("0 / 4 手　直前の手: 対戦の開始時");
     expect(text).toContain("エンジンの版が違います");
     expect(text).toContain("5 手目から先は、いまのエンジンでは再現できません");
+  });
+});
+
+describe("choicePrompt", () => {
+  const promptFor = (prompt: object, context: object | null, cards: CardTable = {}): string => {
+    ensureCards();
+    const view = viewFor(newMatch("describe-move-prompt"), 0);
+    const choice = {
+      choiceId: "c1",
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt,
+      context,
+    };
+    return choicePrompt({ view: { ...view, choices: [choice] } as PlayerView, cards });
+  };
+  const shape = {
+    source: { defId: "haipaboru", label: "効果の元", instanceId: null },
+    sourceRole: "trainer",
+    step: null,
+    min: 2,
+    max: 2,
+    remaining: 1,
+    picked: ["選んだ"],
+    destination: "discard",
+    revealsResult: true,
+    window: null,
+  };
+
+  it("効果の元、候補のゾーン、行き先、残りの枚数、選んだカードを書く", () => {
+    const hand = viewFor(newMatch("describe-move-prompt"), 0).self.hand.map(
+      (card) => card.instanceId,
+    );
+    const cards = { 選んだ: { name: "選んだカード" } } as unknown as CardTable;
+    expect(promptFor({ kind: "selectCard", candidates: hand }, shape, cards)).toBe(
+      "効果の元：手札からトラッシュするカードを選んでください（あと 1 枚）。選んだカード: 選んだカード",
+    );
+  });
+
+  it("相手の山札から選ぶときは、誰の山札かを書き、書かれていない枚数は出さない", () => {
+    const loose = {
+      ...shape,
+      min: null,
+      max: null,
+      remaining: null,
+      picked: null,
+      destination: null,
+    };
+    const zone = { kind: "deck", player: 1 };
+    expect(promptFor({ kind: "selectFromHiddenZone", zone, candidates: [] }, loose)).toBe(
+      "効果の元：相手の山札からカードを選んでください。",
+    );
+  });
+
+  it("ポケモンを選ぶときは、残りを匹で数える", () => {
+    const one = { ...shape, min: 1, max: 1, remaining: 1, picked: null };
+    expect(promptFor({ kind: "selectInPlay", candidates: [] }, one)).toBe(
+      "効果の元：ポケモンを選んでください（あと 1 匹）。",
+    );
+  });
+
+  it("カードやポケモンを選ぶのでなければ、枚数を書かない", () => {
+    const confirm = { ...shape, picked: null };
+    expect(promptFor({ kind: "confirm", count: 1 }, confirm)).toBe("効果の元：選んでください。");
+  });
+
+  it("選ぶのをやめる答えは、先に選んだカードがあれば「選び終える」、無ければ「選ばない」", () => {
+    ensureCards();
+    const view = viewFor(newMatch("describe-move-prompt"), 0);
+    const decline = (picked: string[] | null) => {
+      const choice = {
+        choiceId: "c1",
+        owner: 0,
+        kind: "card-effect",
+        optional: true,
+        prompt: { kind: "selectFromHiddenZone", zone: { kind: "deck", player: 0 }, candidates: [] },
+        context: { ...shape, picked },
+      };
+      return describeMove(
+        { type: "AnswerChoice", player: 0, choiceId: "c1", answer: { kind: "decline" } },
+        { view: { ...view, choices: [choice] } as PlayerView, cards: {} },
+      );
+    };
+    expect(decline(["選んだ"])).toBe("選び終える");
+    expect(decline([])).toBe("選ばない");
+    expect(decline(null)).toBe("選ばない");
+  });
+
+  it("効果の元が分からない選択には書かない", () => {
+    expect(promptFor({ kind: "selectInPlay", candidates: [] }, null)).toBe("");
   });
 });

@@ -2853,7 +2853,7 @@ test("山札全体を見て選ぶあいだは、見ている山札を並べ、�
     answer: { kind: "cardDef", defId },
   }));
   const deck = page.locator("#revealed-deck");
-  const shown = deck.locator(".revealed-card");
+  const shown = deck.locator(".choice-card");
 
   sync.revealedDeck = [a, c, a, d, b];
   sync.view.self.deckCount = sync.revealedDeck.length;
@@ -2871,13 +2871,126 @@ test("山札全体を見て選ぶあいだは、見ている山札を並べ、�
   expect(
     await pickable.evaluateAll((faces) => faces.map((face) => face.dataset.defId ?? "").sort()),
   ).toEqual([a, b].sort());
-  // 選ぶのはボタンのまま。
+  // 選べるカードだけを押せる。
   await expect(page.locator("#moves button")).toHaveCount(2);
+  await expect(deck.locator("button.choice-card")).toHaveCount(2);
+
+  // 選べるカードが無くても、無いことを山札で確かめられるよう並べる。
+  sync.legalMoves = [{ type: "AnswerChoice", player: 0, choiceId, answer: { kind: "decline" } }];
+  await openWith(page, sync);
+  await expect(shown).toHaveCount(4);
+  await expect(page.locator("#moves button")).toHaveCount(1);
 
   sync.revealedDeck = null;
   await openWith(page, sync);
-  await expect(page.locator("#moves button")).toHaveCount(2);
+  await expect(page.locator("#moves button")).toHaveCount(1);
   await expect(deck).toBeHidden();
+});
+
+test("効果でカードを選ぶあいだは、候補を盤面の上に大きく並べ、押したカードを選ぶ。隠して盤面も見られる", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync;
+  const { hand } = sync.view.self;
+  const source = hand.find((card) => card.defId !== hand[0]!.defId)!;
+  const candidates = [hand[0]!, hand[2]!].map((card) => card.instanceId);
+  const choiceId = "手札から選ぶ";
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: true,
+      prompt: { kind: "selectCard", candidates },
+      context: {
+        source: { defId: source.defId, label: "効果の元", instanceId: null },
+        sourceRole: "trainer",
+        step: null,
+        min: 2,
+        max: 2,
+        remaining: 2,
+        picked: [],
+        destination: "discard",
+        revealsResult: true,
+        window: null,
+      },
+    },
+  ];
+  sync.legalMoves = [
+    ...candidates.map((card) => ({
+      type: "AnswerChoice",
+      player: 0,
+      choiceId,
+      answer: { kind: "card", card },
+    })),
+    { type: "AnswerChoice", player: 0, choiceId, answer: { kind: "decline" } },
+  ];
+  const sent = await openWith(page, sync);
+  const sheet = page.locator("#choice-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator(`.choice-head .card[data-def-id="${source.defId}"]`)).toBeVisible();
+  // 手のボタンは選ぶ画面にだけ並べる。
+  await expect(page.locator("#moves")).toHaveCount(1);
+  await expect(sheet.locator("#moves button")).toHaveCount(3);
+  const tiles = sheet.locator("button.choice-card");
+  await expect(tiles).toHaveCount(2);
+  await expect(tiles.nth(1).locator(".card")).toHaveAttribute("data-def-id", hand[2]!.defId);
+
+  // 畳んでも、選ぶのをやめるボタンは残す。
+  await page.click("#choice-fold");
+  await expect(tiles).toHaveCount(0);
+  await expect(sheet.locator("#moves button")).toHaveCount(1);
+  await page.click("#choice-fold");
+  await tiles.nth(1).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(sync.legalMoves[1]);
+});
+
+test("効果でポケモンを選ぶあいだは、盤面の候補を押すと選び、ほかのポケモンは押すと大きく出す", async ({
+  page,
+}) => {
+  const sync = crowdedSync(5) as CrowdedSync & {
+    view: { opponent: { bench: { inPlayId: string }[] } };
+  };
+  const [first, second, third] = sync.view.opponent.bench.map(({ inPlayId }) => inPlayId);
+  const choiceId = "ポケモンを選ぶ";
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt: { kind: "selectInPlay", candidates: [first, second] },
+    },
+  ];
+  sync.legalMoves = [first, second].map((target) => ({
+    type: "AnswerChoice",
+    player: 0,
+    choiceId,
+    answer: { kind: "inPlay", target },
+  }));
+  const sent = await openWith(page, sync);
+  const pokemon = (id: string | undefined) => page.locator(`#opponent [data-in-play-id="${id}"]`);
+  await expect(page.locator("#table .pokemon[data-choosable]")).toHaveCount(2);
+  await expect(page.locator("#choice-sheet")).toHaveCount(0);
+
+  await pokemon(third).click();
+  await expect(page.locator("#card-zoom")).toBeVisible();
+  await page.click("#card-zoom-close");
+  expect(sent).toHaveLength(0);
+
+  await pokemon(second).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(sync.legalMoves[1]);
+  await expect(page.locator("#card-zoom")).toBeHidden();
+
+  // キーボードでも、押したときと同じく選ぶ。
+  const typed = await openWith(page, sync);
+  await pokemon(first).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => typed.length).toBe(1);
+  expect(typed[0]!.move).toEqual(sync.legalMoves[0]);
+  await expect(page.locator("#card-zoom")).toBeHidden();
 });
 
 test("山札の上へ順に置く選択では、何枚目に置くかを案内とボタンに出す", async ({ page }) => {
