@@ -2946,6 +2946,42 @@ test("効果でカードを選ぶあいだは、候補を盤面の上に大き�
   expect(sent[0]!.move).toEqual(sync.legalMoves[1]);
 });
 
+test("効果で選べるカードが 1 枚も無く、やめるしかないときも、選ぶ画面で無いことを見せる", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync;
+  const choiceId = "2 枚目を選ぶ";
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: true,
+      prompt: { kind: "selectCard", candidates: [] },
+      context: {
+        source: { defId: sync.view.self.hand[0]!.defId, label: "効果の元", instanceId: null },
+        sourceRole: "trainer",
+        step: null,
+        min: null,
+        max: null,
+        remaining: null,
+        picked: null,
+        destination: null,
+        revealsResult: null,
+        window: null,
+      },
+    },
+  ];
+  sync.legalMoves = [{ type: "AnswerChoice", player: 0, choiceId, answer: { kind: "decline" } }];
+  const sent = await openWith(page, sync);
+  const sheet = page.locator("#choice-sheet");
+  await expect(sheet).toContainText("選べるカードはありません。");
+  await expect(page.locator("#moves button")).toHaveText(["選ばない"]);
+  await sheet.locator("#moves button").click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(sync.legalMoves[0]);
+});
+
 test("効果でポケモンを選ぶあいだは、盤面の候補を押すと選び、ほかのポケモンは押すと大きく出す", async ({
   page,
 }) => {
