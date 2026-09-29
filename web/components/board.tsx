@@ -39,6 +39,7 @@ import {
   useCardGrip,
   useDropSpot,
   useInDragArea,
+  useTapArea,
   type CardDrops,
 } from "./card-drag.js";
 
@@ -67,6 +68,7 @@ export function CardFace({
   zoom,
   gripRef,
   grippable,
+  picked,
   onImageFailed,
 }: {
   defId: string;
@@ -82,6 +84,8 @@ export function CardFace({
   gripRef?: (element: Element | null) => void;
   /** いま、つかんで盤面へ落とせるか。 */
   grippable?: boolean;
+  /** タッチで押して、落とす先を選んでいるところか。 */
+  picked?: boolean;
   onImageFailed?: () => void;
 }) {
   const { table, images } = useCardData();
@@ -125,6 +129,7 @@ export function CardFace({
     "data-half": card?.stadiumHalf,
     "data-pickable": pickable === undefined ? undefined : String(pickable),
     "data-grippable": grippable === true ? "" : undefined,
+    "data-picked": picked === true ? "" : undefined,
   };
   const children = (
     <>
@@ -394,12 +399,7 @@ export function Board({
   children: ReactNode;
 }) {
   const frame = useMemo(() => ({ near, far, stadium }), [near, far, stadium]);
-  const body = (
-    // 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。
-    <motion.div className="board" layoutScroll layoutDependency={frame}>
-      {children}
-    </motion.div>
-  );
+  const body = <BoardBody frame={frame}>{children}</BoardBody>;
   return (
     <LayoutGroup id={name}>
       <BoardFrame value={frame}>
@@ -412,6 +412,16 @@ export function Board({
         )}
       </BoardFrame>
     </LayoutGroup>
+  );
+}
+
+function BoardBody({ frame, children }: { frame: object; children: ReactNode }) {
+  const taps = useTapArea();
+  return (
+    // 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。
+    <motion.div className="board" layoutScroll layoutDependency={frame} {...taps}>
+      {children}
+    </motion.div>
   );
 }
 
@@ -532,7 +542,7 @@ function HandCard({ card }: { card: CardInstance }) {
 }
 
 function GripCard({ card }: { card: CardInstance }) {
-  const { attach, grippable } = useCardGrip(card.defId, card.instanceId);
+  const { attach, grippable, picked } = useCardGrip(card.defId, card.instanceId);
   return (
     <CardFace
       defId={card.defId}
@@ -540,6 +550,7 @@ function GripCard({ card }: { card: CardInstance }) {
       zoom={{ title: "手札", defIds: [card.defId] }}
       gripRef={attach}
       grippable={grippable}
+      picked={picked}
     />
   );
 }
