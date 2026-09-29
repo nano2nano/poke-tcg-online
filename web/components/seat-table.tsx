@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
@@ -14,10 +14,19 @@ import {
   type MoveContext,
 } from "../lib/describe-move.js";
 import { NO_DROPS, planDrops } from "../lib/card-drops.js";
+import { menuSubjectAt, planMenus } from "../lib/card-menu.js";
 import { setupOffer, type SeatState } from "../lib/match-state.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
-import { Board, CardFace, NOTHING_AIMED, PokemonChoices, SideBoard, Stadium } from "./board.js";
+import {
+  Board,
+  CardFace,
+  NOTHING_AIMED,
+  PokemonChoices,
+  ReadyAbilities,
+  SideBoard,
+  Stadium,
+} from "./board.js";
 import type { CardDrops } from "./card-drag.js";
 import { EventLog } from "./event-log.js";
 import { MotionToggle } from "./motion-setting.js";
@@ -51,18 +60,32 @@ export function SeatTable({
   const [aim, setAim] = useState<Aim>({ hovered: null, focused: null });
   // カードを落とした先で指せる手が 2 つ以上あれば、ボタンをそれだけに絞って選ばせる。一覧が変わったら解く。
   const [narrowed, setNarrowed] = useState<readonly string[] | null>(null);
+  // 右クリックしたカードでできる手を、その場に出す。一覧が変わったら閉じる。
+  const [menu, setMenu] = useState<Menu | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  // contextmenu が pointerType を持たないブラウザでは、直前に押したポインタで長押しのタッチを見分ける。
+  const pressedWith = useRef("");
   // 一覧が変わったら、消えたボタンの狙いを捨てる。消えたボタンからはマウスが離れた知らせが来ないので、
   // 残すと、同じ手があとでまた並んだときに、載せていないのに囲む。残ったボタンの狙いはそのまま囲む。
   const [aimFor, setAimFor] = useState(listed);
   if (aimFor !== listed) {
     setAimFor(listed);
     setNarrowed(null);
+    setMenu(null);
     const keys = new Set(listed.buttons.map(({ key }) => key));
     const kept = (key: string | null) => (key !== null && keys.has(key) ? key : null);
     setAim((current) => ({ hovered: kept(current.hovered), focused: kept(current.focused) }));
   }
   const disabled = connection !== null;
   const plan = useMemo(() => planDrops(listed.buttons, context), [listed, context]);
+  const menus = useMemo(() => planMenus(listed.buttons, context), [listed, context]);
+  const abilities = useMemo(
+    () =>
+      new Set(
+        listed.buttons.flatMap(({ move }) => (move.type === "UseAbility" ? [move.source] : [])),
+      ),
+    [listed],
+  );
   const drops: CardDrops = {
     plan: disabled || seating.awaiting ? NO_DROPS : plan,
     onDrop: (keys) => {
@@ -129,6 +152,29 @@ export function SeatTable({
         ref={board}
         data-ended={ended === null ? undefined : ""}
         data-state-version={state.stateVersion}
+        onPointerDown={(event) => {
+          pressedWith.current = event.pointerType;
+        }}
+        onContextMenu={(event) => {
+          const { target, nativeEvent } = event;
+          // タッチの長押しは、カードのプレビューに使う。
+          const pointer = (nativeEvent as Partial<PointerEvent>).pointerType ?? pressedWith.current;
+          if (pointer === "touch") return;
+          const subject = target instanceof Element ? menuSubjectAt(target) : null;
+          const keys = subject === null ? undefined : menus.get(subject);
+          if (keys === undefined || disabled || seating.awaiting) return;
+          event.preventDefault();
+          // キーボードで開いたときは、開いたカードの下に出す。
+          const box = (target as Element).getBoundingClientRect();
+          const mouse = event.button === 2;
+          // 落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
+          setNarrowed(null);
+          setMenu({
+            x: mouse ? event.clientX : box.left,
+            y: mouse ? event.clientY : box.bottom,
+            buttons: listed.buttons.filter(({ key }) => keys.includes(key)),
+          });
+        }}
       >
         <div className="table-status">
           <div id="clock" className="clock">
@@ -146,32 +192,35 @@ export function SeatTable({
           )}
         </div>
         <PokemonChoices value={pokemonChoices}>
-          <Board
-            name="seat"
-            near={view?.self ?? null}
-            far={view?.opponent ?? null}
-            stadium={view?.stadium ?? null}
-            drops={drops}
-          >
-            <div className="board-side">
-              <h2>相手</h2>
-              <div id="opponent">
-                {view !== null && <SideBoard side={view.opponent} mirrored aimed={aimed} />}
+          <ReadyAbilities value={abilities}>
+            <Board
+              name="seat"
+              near={view?.self ?? null}
+              far={view?.opponent ?? null}
+              stadium={view?.stadium ?? null}
+              drops={drops}
+            >
+              <div className="board-side">
+                <h2>相手</h2>
+                <div id="opponent">
+                  {view !== null && <SideBoard side={view.opponent} mirrored aimed={aimed} />}
+                </div>
               </div>
-            </div>
-            <div id="stadium" className="board-center">
-              {view !== null && <Stadium stadium={view.stadium} />}
-            </div>
-            <div className="board-side">
-              <h2>自分</h2>
-              <div id="self">
-                {view !== null && (
-                  <SideBoard side={view.self} mirrored={false} aimed={aimed} drops />
-                )}
+              <div id="stadium" className="board-center">
+                {view !== null && <Stadium stadium={view.stadium} />}
               </div>
-            </div>
-          </Board>
+              <div className="board-side">
+                <h2>自分</h2>
+                <div id="self">
+                  {view !== null && (
+                    <SideBoard side={view.self} mirrored={false} aimed={aimed} drops />
+                  )}
+                </div>
+              </div>
+            </Board>
+          </ReadyAbilities>
         </PokemonChoices>
+        {menu !== null && !disabled && <MoveMenu menu={menu} onPlay={onPlay} onClose={closeMenu} />}
         {cardChoice && (
           <ChoiceSheet
             key={view?.choices.at(-1)?.choiceId}
@@ -187,6 +236,9 @@ export function SeatTable({
         <div className="table-panel">
           <Mulligans state={state} />
           <h2>指せる手</h2>
+          <p className="note menu-hint">
+            盤面のカードやポケモンを右クリックすると、そこでできる手を選べます。
+          </p>
           {!cardChoice && (
             <Moves
               seating={seating}
@@ -229,6 +281,98 @@ export function SeatTable({
       </section>
       <NoticeLayer feed={feed} board={board} />
     </>
+  );
+}
+
+interface Menu {
+  x: number;
+  y: number;
+  buttons: readonly ListedMove[];
+}
+
+/**
+ * 右クリックしたカードでできる手を、その場に並べる。右の欄まで目と手を動かさずに指せる。
+ * 外を押すか Esc で閉じる。popover の light dismiss は使わない。右クリックは押したときにメニューを開く
+ * 環境があり、開いた直後に外で離したことになって閉じてしまう。
+ */
+function MoveMenu({
+  menu,
+  onPlay,
+  onClose,
+}: {
+  menu: Menu;
+  onPlay: (move: Move) => void;
+  onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (element === null) return;
+    // 開いたときにフォーカスがあった要素へ、閉じたら戻す。キーボードで開いた人が位置を失わない。
+    const opener = document.activeElement;
+    // 選ぶ画面やカードの拡大より上に出す。
+    // popover の無いブラウザで例外を出し、対戦の画面ごと止めない。
+    if ("showPopover" in element) element.showPopover();
+    // 画面の端で右クリックしても、はみ出さないように置く。
+    const { width, height } = element.getBoundingClientRect();
+    element.style.left = `${Math.max(0, Math.min(menu.x, innerWidth - width))}px`;
+    element.style.top = `${Math.max(0, Math.min(menu.y, innerHeight - height))}px`;
+    element.querySelector("button")?.focus();
+    return () => {
+      const lost =
+        document.activeElement === document.body || element.contains(document.activeElement);
+      if (opener instanceof HTMLElement && opener.isConnected && lost) opener.focus();
+    };
+  }, [menu]);
+  useEffect(() => {
+    const close = (event: Event) => {
+      const outside =
+        event instanceof KeyboardEvent
+          ? event.key === "Escape"
+          : !(event.target instanceof Node && box.current?.contains(event.target) === true);
+      if (outside) onClose();
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [onClose]);
+  return (
+    <div
+      id="move-menu"
+      className="move-menu"
+      ref={box}
+      popover="manual"
+      role="menu"
+      tabIndex={-1}
+      // Tab でメニューの外へ出たら閉じる。開いたまま盤面を覆わない。
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) onClose();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        const items = [...event.currentTarget.querySelectorAll("button")];
+        const at = items.indexOf(document.activeElement as HTMLButtonElement);
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        items.at(at === -1 && step === -1 ? -1 : (at + step) % items.length)?.focus();
+      }}
+    >
+      {menu.buttons.map(({ move, key, label }) => (
+        <button
+          key={key}
+          role="menuitem"
+          onClick={() => {
+            onPlay(move);
+            onClose();
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
 
