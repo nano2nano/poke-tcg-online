@@ -554,7 +554,7 @@ test("読んでいる最中の画像は、あとから出た同じカードの�
   await expect.poll(() => asked).toContain(path);
 
   // 読んでいる最中に、同じカードを隠したデッキの行に出す。`loading="lazy"` の画像は隠れているあいだ
-  // 頼むのを待ち、失敗が分かったあとで見えると頼み直す。
+  // 頼まないので、失敗が分かったあとで見えたときに頼まないかを確かめる。
   const hiding = await page.addStyleTag({ content: "#deck-cards { display: none; }" });
   await row.locator("button.add").click();
   await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);

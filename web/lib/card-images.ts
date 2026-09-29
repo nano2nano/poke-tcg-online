@@ -87,10 +87,14 @@ function createImage(src: string): HTMLImageElement {
   });
   const waiting = pending.get(src);
   if (waiting !== undefined) {
+    image.loading = "lazy";
     waiting.add(image);
     return image;
   }
-  if (!loaded.has(src)) {
+  if (loaded.has(src)) {
+    image.loading = "lazy";
+  } else {
+    // 同じ画像のほかの要素はこの要素が読み終わるのを待つので、これは見えなくてもすぐ読む。
     pending.set(src, new Set());
     image.addEventListener("load", () => {
       loaded.add(src);
