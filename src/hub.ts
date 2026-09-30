@@ -75,13 +75,13 @@ export interface HubOptions {
 /**
  * 人の画面が演出を見せ終えてから、AI が手を指すまでの間（7.3 節）。AI が手を選ぶ時間は人が画面を追う時間より
  * ずっと短いので、間を置かないと番が回ってきた瞬間に何手も進み、人は画面で何が起きたかを追えない。
- * 人の座席が繋がっていなければ、見せ終えるのを待たずにこの間だけ置く。
+ * 人の画面が `shown` を送らなければ、見せ終えるのを待たずにこの間だけ置く。
  */
 const BOT_DELAY_MS = 700;
 
 /**
- * 人の画面が演出を見せ終えたと言ってくるのを待つ上限（7.3 節）。裏へ回したタブではブラウザがタイマーを
- * 間引くので、知らせが遅れたり来なかったりする。そのときは AI の持ち時間を使い切る前に指す。
+ * 人の画面から `shown` が届くのを待つ上限（7.3 節）。裏へ回したタブではブラウザがタイマーを間引くので
+ * 遅れることがあり、待っているあいだに閉じたタブからは届かない。待ち続けると AI の持ち時間が尽きる。
  */
 const SHOWN_WAIT_MS = 10_000;
 
@@ -105,11 +105,16 @@ export class MatchHub {
   /** 観戦者の接続 → 対戦 ID。観戦者の数はこの大きさで数え、別の数え方を持たない。 */
   private readonly spectatorOf = new Map<SeatSocket, string>();
   private readonly now: () => number;
-  /** 対戦 ID → AI が次の手を指すタイマー。1 局に 1 つだけ持つ。`shown` は人の画面を待っているあいだ真。 */
+  /** 対戦 ID → AI が次の手を指すタイマー。1 局に 1 つだけ持つ。 */
   private readonly botTimers = new Map<
     string,
-    { timer: ReturnType<typeof setTimeout>; shown: boolean }
+    { timer: ReturnType<typeof setTimeout>; awaitingShown: boolean }
   >();
+  /**
+   * `shown` を 1 度でも送ってきた座席の接続。`shown` を送らない版の画面を開いたままのタブを待つと、
+   * AI の手が毎回 `SHOWN_WAIT_MS` かかる。
+   */
+  private readonly showing = new WeakSet<SeatSocket>();
   private readonly botDelayMs: number;
   private readonly watchDelayMs: number;
 
@@ -304,7 +309,8 @@ export class MatchHub {
         send(socket, { t: "pong" });
         return;
       case "shown":
-        this.shown(match, message.stateVersion);
+        this.showing.add(socket);
+        this.screenShown(match, message.stateVersion);
         return;
       case "move": {
         /**
@@ -374,15 +380,16 @@ export class MatchHub {
    * AI の番なら、間を置いて AI に 1 手指させる（7.3 節）。何度呼んでも、待っている手は 1 局に 1 つである。
    * 局面が動くところ（対戦の開始、手を受理したあと）と、座席が就いたところから呼ぶ。
    *
-   * 人の座席が繋がっていれば、いまの局面の演出をその画面が見せ終えるのを待ってから間を置く。
+   * 人の座席の画面が `shown` を送るなら、いまの局面の演出をその画面が見せ終えるのを待ってから間を置く。
    * 局面を送った直後に呼ぶので、ここへ来た時点の画面はまだ見せ終えていない。
    */
-  private driveBot(match: Match, shown = false): void {
+  private driveBot(match: Match, afterShown = false): void {
     const seat = toMove(match);
     const bot = seat === null ? null : match.bots[seat];
     if (seat === null || bot === null || this.botTimers.has(match.matchId)) return;
     // 座席の接続を持つのは人の座席だけである。
-    const awaitShown = !shown && this.sockets.has(match.matchId);
+    const seats = this.sockets.get(match.matchId)?.values() ?? [];
+    const awaitingShown = !afterShown && [...seats].some((socket) => this.showing.has(socket));
     const timer = setTimeout(
       () => {
         this.botTimers.delete(match.matchId);
@@ -393,9 +400,9 @@ export class MatchHub {
           this.botResigns(match, seat);
         }
       },
-      awaitShown ? SHOWN_WAIT_MS : this.botDelayFor(match),
+      awaitingShown ? SHOWN_WAIT_MS : this.botDelayFor(match),
     );
-    this.botTimers.set(match.matchId, { timer, shown: awaitShown });
+    this.botTimers.set(match.matchId, { timer, awaitingShown });
   }
 
   private botDelayFor(match: Match): number {
@@ -405,8 +412,9 @@ export class MatchHub {
   }
 
   /** 人の画面が見せ終えたのが AI の待っている局面なら、そこから間を置いて指させる。 */
-  private shown(match: Match, stateVersion: number): void {
-    if (stateVersion !== match.version || this.botTimers.get(match.matchId)?.shown !== true) return;
+  private screenShown(match: Match, stateVersion: number): void {
+    if (stateVersion !== match.version) return;
+    if (this.botTimers.get(match.matchId)?.awaitingShown !== true) return;
     this.stopBot(match);
     this.driveBot(match, true);
   }

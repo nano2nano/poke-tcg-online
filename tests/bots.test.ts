@@ -516,7 +516,47 @@ describe("AI の座席", () => {
     expect(record.moves.every((move) => move.source === "human")).toBe(true);
   });
 
-  it("人の座席が繋がっていれば、AI はその画面がいまの局面を見せ終えてから指す", async () => {
+  it("人の画面が `shown` を送るなら、AI はその画面がいまの局面を見せ終えてから指す", async () => {
+    ensureCards();
+    const arena = newArena(20);
+    const bot = botFromBytes("g0", generationZero());
+    const { account, secret } = await arena.accounts.create("ひと", 0);
+    const outcome = arena.lobby.joinBot(
+      { secret, deck: presetDeck("dragapult-28731")! },
+      account,
+      bot,
+      presetDeck("alakazam-dudunsparce-72073")!,
+    );
+    if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
+    const { seatToken } = outcome.seat;
+    const socket: SeatSocket = { send() {}, close() {} };
+    arena.hub.attach(socket, seatToken);
+    const [match] = arena.registry.live();
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
+    // 繋いだ時点では、まだ `shown` を送る画面か分からないので、AI が先に選ぶ対戦ではそのまま指す。
+    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: match!.version });
+    await settle();
+    while (toMove(match!) === 0) {
+      const move = legalMovesFor(match!, 0)![0]!;
+      arena.hub.handle(socket, seatToken, { t: "move", stateVersion: match!.version, move });
+    }
+    const version = match!.version;
+
+    await settle();
+    expect(match!.version).toBe(version);
+    // 前の局面を見せ終えた知らせでは動かない。
+    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: version - 1 });
+    await settle();
+    expect(match!.version).toBe(version);
+
+    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: version });
+    await settle();
+    expect(match!.version).toBeGreaterThan(version);
+    expect(match!.moves.at(-1)?.source).toBe("bot");
+    arena.hub.handle(socket, seatToken, { t: "concede" });
+  });
+
+  it("`shown` を送ってこない画面は待たない", async () => {
     ensureCards();
     const arena = newArena(20);
     const bot = botFromBytes("g0", generationZero());
@@ -537,19 +577,9 @@ describe("AI の座席", () => {
       arena.hub.handle(socket, seatToken, { t: "move", stateVersion: match!.version, move });
     }
     const version = match!.version;
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
 
-    await settle();
-    expect(match!.version).toBe(version);
-    // 前の局面を見せ終えた知らせでは動かない。
-    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: version - 1 });
-    await settle();
-    expect(match!.version).toBe(version);
-
-    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: version });
-    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 60));
     expect(match!.version).toBeGreaterThan(version);
-    expect(match!.moves.at(-1)?.source).toBe("bot");
     arena.hub.handle(socket, seatToken, { t: "concede" });
   });
 
