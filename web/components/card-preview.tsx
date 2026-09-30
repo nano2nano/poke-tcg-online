@@ -41,6 +41,8 @@ export function CardPreview() {
     let lastMouse: { x: number; y: number } | null = null;
     let longPress: { pointerId: number; x: number; y: number; timer: number } | null = null;
     let touchedAt = -Infinity;
+    const emulated = (event: PointerEvent) =>
+      event.pointerType === "mouse" && event.timeStamp - touchedAt < EMULATED_MOUSE_MS;
     // 長押しで読んで指を離すと、そのクリックも届いて拡大が開いてしまう。
     let swallowClick = false;
 
@@ -92,7 +94,7 @@ export function CardPreview() {
     };
 
     const over = (event: PointerEvent) => {
-      if (event.pointerType === "touch" || event.timeStamp - touchedAt < EMULATED_MOUSE_MS) return;
+      if (event.pointerType === "touch" || emulated(event)) return;
       const card = previewable(event.target);
       if (card !== null) show(card, "mouse");
     };
@@ -117,7 +119,9 @@ export function CardPreview() {
       longPress = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, timer };
     };
     const move = (event: PointerEvent) => {
-      if (event.pointerType !== "touch") lastMouse = { x: event.clientX, y: event.clientY };
+      if (event.pointerType !== "touch" && !emulated(event)) {
+        lastMouse = { x: event.clientX, y: event.clientY };
+      }
       if (longPress?.pointerId !== event.pointerId) return;
       const moved = Math.hypot(event.clientX - longPress.x, event.clientY - longPress.y);
       if (moved <= LONG_PRESS_SLOP_PX) return;
@@ -126,7 +130,8 @@ export function CardPreview() {
       endLongPress();
     };
     const up = (event: PointerEvent) => {
-      if (event.pointerType === "touch") touchedAt = event.timeStamp;
+      // Apple Pencil で押したあとに届くマウスの知らせも、指と同じく無視する。
+      if (event.pointerType !== "mouse") touchedAt = event.timeStamp;
       if (longPress?.pointerId !== event.pointerId) return;
       endLongPress();
       if (event.type === "pointercancel") swallowClick = false;

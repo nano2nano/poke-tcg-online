@@ -1949,7 +1949,8 @@ test("閉じてすぐに同じカードを押しても、拡大を開き直す",
 test.describe("タッチ端末", () => {
   test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
 
-  test("長押しを指をずらしてやめたら、次にキーボードで押したボタンを止めない", async ({ page }) => {
+  /** デッキを組む画面で、候補の行の小さな面を出す。 */
+  async function searchedThumb(page: Page) {
     await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
     // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
     await page.route("**/api/card-image/*", () => {});
@@ -1957,6 +1958,11 @@ test.describe("タッチ端末", () => {
     await page.fill("#card-search", "エネルギー");
     const thumb = page.locator("#card-results .card-row .card").first();
     await expect(thumb).toBeVisible();
+    return thumb;
+  }
+
+  test("長押しを指をずらしてやめたら、次にキーボードで押したボタンを止めない", async ({ page }) => {
+    const thumb = await searchedThumb(page);
     const box = await thumb.boundingBox();
     if (box === null) throw new Error("小さな面が出ていない");
 
@@ -1977,13 +1983,8 @@ test.describe("タッチ端末", () => {
   });
 
   test("指を離した直後に届くマウスの pointerover では、プレビューを出さない", async ({ page }) => {
-    await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
-    await page.route("**/api/card-image/*", () => {});
-    await page.goto("/decks/new");
-    await page.fill("#card-search", "エネルギー");
-    const thumb = page.locator("#card-results .card-row .card").first();
-    await expect(thumb).toBeVisible();
-    // iOS と同じく、指を離したらその場所へマウスの pointerover を送る。
+    const thumb = await searchedThumb(page);
+    // iOS と同じく、指を離したらその場所へマウスの pointerover を送る。送り終えたら印を付ける。
     await page.evaluate(() => {
       document.addEventListener("pointerup", (event) => {
         if (event.pointerType !== "touch" || !(event.target instanceof Element)) return;
@@ -1992,21 +1993,18 @@ test.describe("タッチ端末", () => {
           target.dispatchEvent(
             new PointerEvent("pointerover", { pointerType: "mouse", bubbles: true }),
           );
+          document.body.dataset.emulated = "";
         });
       });
     });
 
     await thumb.tap();
-    await page.waitForTimeout(100);
+    await expect(page.locator("body")).toHaveAttribute("data-emulated");
     await expect(page.locator("#card-preview")).toBeHidden();
   });
 
   test("マウスで出たプレビューも、指で押せば閉じる", async ({ page }) => {
-    await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
-    await page.route("**/api/card-image/*", () => {});
-    await page.goto("/decks/new");
-    await page.fill("#card-search", "エネルギー");
-    const thumb = page.locator("#card-results .card-row .card").first();
+    const thumb = await searchedThumb(page);
     await thumb.hover();
     await expect(page.locator("#card-preview")).toBeVisible();
 
