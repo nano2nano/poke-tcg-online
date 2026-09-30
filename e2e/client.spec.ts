@@ -105,7 +105,10 @@ async function playOne(page: Page): Promise<boolean> {
       await page.locator("#setup-submit").click({ timeout: 1_000 });
       return true;
     }
-    await page.locator("#moves button").first().click({ timeout: 1_000 });
+    // 番を終える手はほかの手と別に置く。ほかに指せる手があれば、そちらを先に指す。両方は同じ描画で出る。
+    await page.locator("#moves button, #end-turn").first().waitFor({ timeout: 1_000 });
+    const move = page.locator("#moves button").first();
+    await ((await move.isVisible()) ? move : page.locator("#end-turn")).click({ timeout: 1_000 });
     return true;
   } catch {
     return false;
@@ -283,11 +286,11 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
   await expect.poll(() => seenA()?.phase).not.toBe("setup");
   await expect.poll(() => seenB()?.phase).not.toBe("setup");
   for (const page of [a, b]) {
-    await expect(page.locator("#moves button, #moves .waiting").first()).toBeVisible();
+    await expect(page.locator("#moves button, #moves .waiting, #end-turn").first()).toBeVisible();
   }
   const counts = await Promise.all([
-    a.locator("#moves button").count(),
-    b.locator("#moves button").count(),
+    a.locator("#moves button, #end-turn").count(),
+    b.locator("#moves button, #end-turn").count(),
   ]);
   expect(counts.filter((count) => count > 0)).toHaveLength(1);
 
@@ -2161,7 +2164,7 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
 
   // 相手の手で盤面が描き直されても、マウスの下にあるカードを出す。無ければ閉じる。自分の手を押すと
   // マウスが動くので、相手が指せるところまで進めてから載せ直す。準備を出しただけでは、こちらの局面は動かない。
-  const opponentMove = b.locator("#moves button").first();
+  const opponentMove = b.locator("#moves button, #end-turn").first();
   const opponentCanMove = () =>
     opponentMove.waitFor({ timeout: 1_000 }).then(
       () => true,
@@ -2552,6 +2555,12 @@ for (const viewport of [
         await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
     }
     await expectInside(page, '#stadium [data-zone="stadium"] .card', board);
+    // 番を終えるボタンは盤面の中に置き、どのカードにも重ねない。
+    await expectInside(page, "#end-turn", board);
+    const endTurn = (await page.locator("#end-turn").boundingBox()) as Box;
+    for (const card of await page.locator("#table .card").all()) {
+      expect(overlaps(endTurn, (await card.boundingBox()) as Box)).toBe(false);
+    }
     const screen = { x: 0, y: 0, ...viewport };
     for (const selector of ["#clock", "#concede-button", "#moves button >> nth=0", "#event-log"]) {
       await expectInside(page, selector, screen);
@@ -2674,13 +2683,23 @@ async function openWith(page: Page, sync: object): Promise<{ move: object; offer
   return sent;
 }
 
+test("番を終える手は指せる手の並びに混ぜず、盤面の決まった場所のボタンで指す", async ({ page }) => {
+  const sync = crowdedSync(5) as CrowdedSync;
+  const sent = await openWith(page, sync);
+  await expect(page.locator("#moves button")).toHaveCount(sync.legalMoves.length - 1);
+  await page.click("#end-turn");
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual({ type: "EndTurn", player: 0 });
+});
+
 test("つける先だけが違う手は見出しで見分けられ、ボタンに載せると盤面のつける先を囲む", async ({
   page,
 }) => {
   const sync = crowdedSync(20) as CrowdedSync;
   const sent = await openWith(page, sync);
   const buttons = page.locator("#moves button");
-  await expect(buttons).toHaveCount(sync.legalMoves.length);
+  // 番を終える手は盤面のボタンで指す。
+  await expect(buttons).toHaveCount(sync.legalMoves.length - 1);
   // ベンチの 5 匹は同じカードなので、名前だけでは見出しが重なる。
   const labels = await buttons.allTextContents();
   expect(new Set(labels).size).toBe(labels.length);

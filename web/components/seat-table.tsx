@@ -34,7 +34,7 @@ import { SettingsButton, useDirectPlay } from "./settings.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
 /**
- * 座席の卓。相手を向かいに、自分を手前に置き、右の欄に指せる手を並べる。
+ * 座席の卓。相手を向かいに、自分を手前に置き、右の欄に指せる手を並べる。番を終えるボタンだけは盤面に置く。
  *
  * **盤面の判断を一切持たない。** サーバが送ってきた合法手を並べ、押された 1 つを送り返す。
  * 卓の配置の CSS は `body` の直下にある卓を探すので、外側を別の要素で包まない。
@@ -127,6 +127,8 @@ export function SeatTable({
       },
     };
   }, [listed, disabled]);
+  // 落とした先の手を選ぶあいだは、絞った手だけを見せたと記録するので、番を終えるボタンも出さない。
+  const endTurn = narrowed === null ? listed.endTurn : undefined;
   const cardChoice =
     state.ended === null &&
     view?.phase !== "setup" &&
@@ -224,6 +226,18 @@ export function SeatTable({
               </div>
               <div id="stadium" className="board-center">
                 {view !== null && <Stadium stadium={view.stadium} />}
+                {endTurn !== undefined && (
+                  <button
+                    id="end-turn"
+                    className="primary end-turn"
+                    data-tap-through
+                    disabled={disabled}
+                    aria-disabled={seating.awaiting}
+                    onClick={() => onPlay(endTurn.move)}
+                  >
+                    {endTurn.label}
+                  </button>
+                )}
               </div>
               <div className="board-side">
                 <h2>自分</h2>
@@ -414,7 +428,9 @@ interface ListedMove {
 }
 
 interface Listed {
+  /** 番を終える手は含めない。ほかの手の並びに混ぜず、盤面の決まった場所に置く。 */
   buttons: ListedMove[];
+  endTurn: ListedMove | undefined;
   /**
    * 畳んだときだけ、見せた手の `legalMoves` での位置を添える。記録で、見せなかった手と
    * 選ばなかった手を分けるため（6.2 節）。
@@ -435,16 +451,20 @@ function listMoves(
   }: Pick<SeatState, "legalMoves" | "setup" | "deckPlacement" | "answerDestinations">,
   context: MoveContext,
 ): Listed {
-  if (moves === null || setup !== null) return { buttons: [], offered: undefined };
+  if (moves === null || setup !== null) {
+    return { buttons: [], endTurn: undefined, offered: undefined };
+  }
   const folded = foldMoves(moves, context);
+  const buttons = folded.map(({ move, index, key }) => ({
+    move,
+    index,
+    key,
+    label: describeMove(move, context, deckPlacement, answerDestinations?.[index] ?? null),
+    targets: moveTargets(move),
+  }));
   return {
-    buttons: folded.map(({ move, index, key }) => ({
-      move,
-      index,
-      key,
-      label: describeMove(move, context, deckPlacement, answerDestinations?.[index] ?? null),
-      targets: moveTargets(move),
-    })),
+    buttons: buttons.filter(({ move }) => move.type !== "EndTurn"),
+    endTurn: buttons.find(({ move }) => move.type === "EndTurn"),
     offered: folded.length === moves.length ? undefined : folded.map(({ index }) => index),
   };
 }
