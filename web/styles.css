@@ -319,7 +319,8 @@ button[aria-pressed="true"] {
 .moves button {
   text-align: left;
 }
-.moves button[aria-disabled="true"] {
+.moves button[aria-disabled="true"],
+.end-turn[aria-disabled="true"] {
   cursor: progress;
 }
 .event-log {
@@ -492,7 +493,9 @@ button.secondary {
 }
 .board-center {
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 12px;
   --w: 64px;
 }
 .mat {
@@ -1003,6 +1006,13 @@ button.choice-card:enabled > .card {
     position: absolute;
     top: 50%;
     right: calc(50% + var(--b) * 2.2);
+    transform: translateY(-50%);
+  }
+  /* 番を終えるボタンは、スタジアムと向かい合うバトル場の右に置く。指せる手の数で動かない。 */
+  .table .board-center > .end-turn {
+    position: absolute;
+    top: 50%;
+    left: calc(50% + var(--b) * 2.2);
     transform: translateY(-50%);
   }
 

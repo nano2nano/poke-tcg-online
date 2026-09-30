@@ -231,6 +231,7 @@ function dropKeys(plan: DropPlan, defId: string, spot: DropSpot): readonly strin
  *
  * - 手札のつかめるカードを押すと、そのカードを選ぶ。もう 1 度押すと放して、いつもどおり大きく出す。
  * - 選んでいるあいだに落とせる先を押すと、そこへ落とす。盤面のほかを押すと放すだけにする。
+ *   盤面に重ねたボタン（`data-tap-through`）は、放したうえで押したことにする。
  */
 function tap(
   event: MouseEvent,
@@ -265,8 +266,11 @@ function tap(
     }
   }
   if (picked === null) return;
-  event.stopPropagation();
   setPicked(null);
+  // 盤面に重ねたボタン（番を終えるなど）は、放すだけにせず 1 度で押させる。
+  if (event.target instanceof Element && event.target.closest("[data-tap-through]") !== null)
+    return;
+  event.stopPropagation();
   // ベンチのポケモンの上を押しても、たねポケモンならベンチへ出す。落とせる先に当たるまで外側へたどる。
   const spot = closestMarked(event, spots, (each) => dropKeys(plan, picked.defId, each) !== null);
   const keys = spot === null ? null : dropKeys(plan, picked.defId, spot);

@@ -1502,7 +1502,8 @@ test("落とした先でできる手が 2 つ以上あれば、ボタンをそ�
   await page.goto("/");
   const card = page.locator('#self [data-zone="hand"] .card').nth(index);
   const target = page.locator(`#self .pokemon[data-in-play-id="${move.target}"]`);
-  const buttons = page.locator("#moves button");
+  // 絞ったあいだは番を終えるボタンも隠し、記録に残す「見せた手」と揃える。
+  const buttons = page.locator("#moves button, #end-turn");
   await expect(buttons).toHaveCount(3);
 
   await dragOver(page, card, target);
@@ -1689,6 +1690,22 @@ test.describe("タッチ端末の座席", () => {
     await expect(card).toHaveAttribute("data-picked");
     await page.locator("#moves button").last().tap();
     await expect.poll(() => sent.length).toBe(1);
+    await expect(card).not.toHaveAttribute("data-picked");
+  });
+
+  test("カードを選んでいるあいだに盤面の番を終えるボタンを押すと、1 度でカードを放して番を終える", async ({
+    page,
+  }) => {
+    const turn = firstTurn();
+    const { index } = attaching(turn);
+    const { sent } = await mockSeat(page, turn.view, turn.moves);
+    await page.goto("/");
+    const card = page.locator('#self [data-zone="hand"] .card').nth(index);
+
+    await card.tap();
+    await expect(card).toHaveAttribute("data-picked");
+    await page.locator("#end-turn").tap();
+    await expect.poll(() => sent).toEqual([{ type: "EndTurn", player: turn.view.viewer }]);
     await expect(card).not.toHaveAttribute("data-picked");
   });
 
