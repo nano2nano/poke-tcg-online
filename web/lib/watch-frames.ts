@@ -29,17 +29,19 @@ export interface WatchFrame {
   notices: Notice[];
 }
 
-/** 1 手を見せる長さの選択肢。0 は届いたらすぐ描く。 */
+/**
+ * 1 手の演出が終わってから次の手を見せるまでの間の選択肢。0 は演出を待たず、届いたらすぐ描く。
+ */
 export const STEP_CHOICES: readonly { ms: number; label: string }[] = [
-  { ms: 2_000, label: "2 秒ごと" },
-  { ms: 1_000, label: "1 秒ごと" },
-  { ms: 500, label: "0.5 秒ごと" },
-  { ms: 250, label: "0.25 秒ごと" },
+  { ms: 2_000, label: "2 秒" },
+  { ms: 1_000, label: "1 秒" },
+  { ms: 500, label: "0.5 秒" },
+  { ms: 250, label: "0.25 秒" },
   { ms: 0, label: "届きしだい" },
 ];
 
 /**
- * 人が選ぶまでの速さ。AI どうしの対戦はサーバが人の目より速く指すので 1 手ずつ間を置き、
+ * 人が選ぶまでの間。AI どうしの対戦はサーバが人の目より速く指すので 1 手ずつ間を置き、
  * 人が座る対戦は指されたときに見せる。
  */
 function defaultStepMs(open: boolean): number {
@@ -51,7 +53,7 @@ export interface Playback {
   /** 描いている局面の位置。局面がまだ無ければ -1。 */
   at: number;
   playing: boolean;
-  /** 人が選んだ 1 手の長さ。選ぶまでは null で、`defaultStepMs` に従う。 */
+  /** 人が選んだ、演出のあとの間。選ぶまでは null で、`defaultStepMs` に従う。 */
   stepMs: number | null;
   /**
    * 最後の送りが、届いた順に局面を見せたものか。通知を出すのはそのときだけにする。

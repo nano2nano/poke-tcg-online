@@ -88,6 +88,8 @@ describe("AI と対戦する", () => {
         const message = JSON.parse((raw as Buffer).toString()) as ServerMessage;
         if (message.t === "ended") resolve(message);
         if (message.t !== "sync" && message.t !== "delta") return;
+        const shown: ClientMessage = { t: "shown", stateVersion: message.stateVersion };
+        socket.send(JSON.stringify(shown));
         const legal = message.legalMoves;
         if (legal === null || legal.length === 0) return;
         const move: ClientMessage = {

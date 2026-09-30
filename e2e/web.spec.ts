@@ -1004,8 +1004,8 @@ test("ねむりのポケモンは、カードを左へ倒して描く", async ({
 });
 
 /**
- * 覚えている座席の代わりに、サーバとして `view` の局面を送る。`sent` は画面が送ってきた手。
- * 返す `send` は、イベントを載せて続けて局面を送る。
+ * 覚えている座席の代わりに、サーバとして `view` の局面を送る。`sent` は画面が送ってきた手、
+ * `shown` は画面が見せ終えたと知らせてきた局面の版。返す `send` は、イベントを載せて続けて局面を送る。
  */
 async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = null) {
   await page.addInitScript((seat) => {
@@ -1018,12 +1018,14 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
   const sent: Move[] = [];
   /** 手と一緒に送ってきた、見せた手の位置。 */
   const offers: (number[] | undefined)[] = [];
+  const shown: number[] = [];
   await page.routeWebSocket(
     (url) => url.searchParams.has("seatToken"),
     (route) => {
       socket = route;
       route.onMessage((raw) => {
         const message = JSON.parse(String(raw));
+        if (message.t === "shown") shown.push(message.stateVersion);
         if (message.t !== "move") return;
         sent.push(message.move);
         offers.push(message.offered);
@@ -1066,7 +1068,7 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
       }),
     );
   };
-  return { sent, offers, send };
+  return { sent, offers, shown, send };
 }
 
 /** 覚えている座席で画面を開き、サーバの代わりに `view` の局面を送って、時計を止める。 */
@@ -1126,6 +1128,30 @@ test("1 つの局面の結果は順に出し、次の局面が届いたら残り
   await expect(results).toHaveCount(4);
   await expect(results.nth(2)).toContainText("相手の番");
   await expect(results.nth(3)).toContainText("あなたの番");
+});
+
+test("局面の結果を出し終えてから、見せ終えたことをサーバへ知らせる", async ({ page }) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  await page.clock.install();
+  const { send, shown } = await mockSeat(page, view);
+  await page.goto("/");
+  await expect(page.locator("#self .mat")).toBeVisible();
+  const now = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(now + 1_000);
+  await page.clock.runFor(10_000);
+  await expect.poll(() => shown).toEqual([1]);
+
+  // コインが回り終え、続く 2 つの結果を出し終えるまでは知らせない。
+  send([
+    { kind: "coin-flipped", player: 0, results: [true] },
+    damageTo(activeOf(view).inPlayId),
+    { kind: "turn-started", player: 1 },
+  ]);
+  await page.clock.runFor(1_600);
+  expect(shown).toEqual([1]);
+  await page.clock.runFor(300);
+  await expect.poll(() => shown).toEqual([1, 2]);
 });
 
 test("ダメージの数字は、ポケモンが動き終えてからその位置に浮かべる", async ({ page }) => {
@@ -2498,7 +2524,9 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
     await expect(page.locator(`#watch-side-${player} .hand .card[data-def-id]`)).not.toHaveCount(0);
   }
 
-  // 人が選ぶまでは 1 秒ごとに送る。
+  // 人が選ぶまでは、先攻のコインが回り終えてから 1 秒置いて送る。
+  await page.clock.runFor(1_500);
+  await expect(position).toHaveAttribute("data-shown", "0");
   await page.clock.runFor(1_000);
   await expect(position).toHaveAttribute("data-shown", "1");
   await expect(page.locator("#watch-move")).not.toBeEmpty();

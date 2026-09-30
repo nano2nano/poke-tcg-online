@@ -97,6 +97,8 @@ export const clientMessageSchema = z.discriminatedUnion("t", [
   }),
   z.object({ t: z.literal("concede") }),
   z.object({ t: z.literal("ping") }),
+  /** その局面の演出を画面が見せ終えた（7.3 節）。AI との対戦で、AI はこれを待ってから次の手を指す。 */
+  z.object({ t: z.literal("shown"), stateVersion: z.int().nonnegative() }),
 ]);
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;

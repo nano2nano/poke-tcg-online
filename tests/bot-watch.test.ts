@@ -189,14 +189,15 @@ describe("AI どうしの対戦を立てる", () => {
     const match = arena.registry.bySeatToken(seatToken)!.match;
     const watcher = spectator();
     arena.hub.attachSpectator(watcher.socket, match.spectatorToken);
-    // 人の座席は、届いた合法手の先頭を次の番で指す。
+    // 人の座席は、局面を見せ終えたと知らせ、届いた合法手の先頭を次の番で指す。
     const human: SeatSocket = {
       send(data) {
         const message = JSON.parse(data) as ServerMessage;
         if (message.t !== "sync" && message.t !== "delta") return;
+        const stateVersion = message.stateVersion;
+        setTimeout(() => arena.hub.handle(human, seatToken, { t: "shown", stateVersion }), 0);
         const move = message.legalMoves?.[0];
         if (move === undefined) return;
-        const stateVersion = message.stateVersion;
         setTimeout(() => arena.hub.handle(human, seatToken, { t: "move", stateVersion, move }), 0);
       },
       close() {},

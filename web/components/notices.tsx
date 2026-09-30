@@ -60,6 +60,11 @@ export interface NoticeFeed {
    * 出しきっていない前の結果は待たせずに出す。`hit` を持つ結果は、盤面の上に数字を浮かべる。
    */
   show: (notice: Notice) => void;
+  /**
+   * 渡した結果を出し終え、出たカードを見せ終え、カードが動き終えるまでの長さ。演出を出さないなら 0。
+   * 盤面を描き替えた直後に呼ぶ。結果の無い局面でも、カードが動き終えるまでは待つ。
+   */
+  remainingMs: () => number;
 }
 
 export function useNotices(): NoticeFeed {
@@ -71,7 +76,7 @@ export function useNotices(): NoticeFeed {
   // 演出を出さないときはカードを動かさないので、結果も数字も待たせずに出す。
   const animate = useMotionOn();
   useEffect(() => queue.setAnimate(animate), [queue, animate]);
-  return { notices, hits, showcase, show: queue.show };
+  return { notices, hits, showcase, show: queue.show, remainingMs: queue.remainingMs };
 }
 
 type Setter<T> = (update: (current: T[]) => T[]) => void;
@@ -90,6 +95,10 @@ function createQueue(
   let settling: Floating[] = [];
   let floating: ReturnType<typeof setTimeout> | undefined;
   let settledAt = 0;
+  /** 待っている結果を出し終える時刻。 */
+  let doneAt = 0;
+  /** `doneAt` に、出たカードを見せ終える時刻も合わせたもの。 */
+  let busyUntil = 0;
   let inBatch = false;
   let animate = true;
 
@@ -147,7 +156,7 @@ function createQueue(
       setShowcase(() => ({ id, defId: card }));
       later(SHOWCASE_MS, () => setShowcase((current) => (current?.id === id ? null : current)));
     }
-    return coins === undefined ? STEP_MS : COIN_SPIN_MS + COIN_GAP_MS * (coins.results.length - 1);
+    return stepOf(coins);
   };
 
   const step = () => {
@@ -185,11 +194,20 @@ function createQueue(
         floating = undefined;
         flush();
         schedule();
+        doneAt = busyUntil = performance.now();
       }
+      const revealAt = Math.max(performance.now(), doneAt);
+      doneAt = revealAt + stepOf(notice.coins);
+      busyUntil = Math.max(
+        busyUntil,
+        doneAt,
+        notice.card === undefined ? 0 : revealAt + SHOWCASE_MS,
+      );
       waiting.push(notice);
       if (!animate) flush();
       else if (stepping === undefined) step();
     },
+    remainingMs: () => (animate ? Math.max(SETTLE_MS, busyUntil - performance.now()) : 0),
     /** 演出を切ったら、待たせている結果と数字もすぐ出す。 */
     setAnimate: (next: boolean) => {
       animate = next;
@@ -208,6 +226,11 @@ function createQueue(
       setShowcase(() => null);
     },
   };
+}
+
+/** 結果を 1 つ出してから次を出すまでの間。 */
+function stepOf(coins: CoinToss | undefined): number {
+  return coins === undefined ? STEP_MS : COIN_SPIN_MS + COIN_GAP_MS * (coins.results.length - 1);
 }
 
 /** `board` は数字を浮かべる先のポケモンを探す範囲。同じ画面に盤面が 2 つあっても取り違えない。 */
