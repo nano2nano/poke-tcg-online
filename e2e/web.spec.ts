@@ -406,7 +406,7 @@ test("規則を通らない保存したデッキを選ぶと、直すページ�
   const deckId = await saveDeckAs(page, "くみかけ", [{ defId: "組みかけ", count: 1 }]);
   await page.reload();
   // 規則を通らないデッキは、はじめからは選ばない。
-  await expect(page.locator("#deck-choice")).toHaveValue("sample");
+  await expect(page.locator("#deck-choice")).toHaveValue(/^preset:/);
   await page.locator("#deck-choice").selectOption(`saved:${deckId}`);
   await page.locator("#deck-note a").click();
   await expect(page).toHaveURL(new RegExp(`/decks/${deckId}$`));
@@ -435,10 +435,11 @@ test("前に選んだデッキが一覧に無ければ、ほかのデッキで�
     await route.fulfill({ json: { ok: false, code: "queue-full", errors: ["断った"] } });
   });
   await page.goto("/");
-  await expect(page.locator("#deck-choice")).toHaveValue("sample");
+  // AI と同じ表のデッキにする。サンプルデッキは AI が学んだことの無い相手になる。
+  await expect(page.locator("#deck-choice")).toHaveValue(/^preset:/);
   await page.click("#join-button");
   await expect(page.locator("#join-status")).toContainText("断った");
-  expect(sent).toHaveLength(1);
+  expect(sent).toEqual([expect.objectContaining({ deckPreset: expect.any(String) })]);
 });
 
 test("保存したあとに一覧を読み直せなくても、組んでいる画面を閉じない", async ({ page }) => {
@@ -456,6 +457,8 @@ test("保存したあとに一覧を読み直せなくても、組んでいる�
   await expect.poll(() => failed, { timeout: 20_000 }).toBe(4);
   await painted(page);
   await expect(page.locator("#deck-builder")).toBeVisible();
+  // 保存したデッキと比べるので、保存していない変更は無い。
+  await expect(page.locator("#save-deck-button")).toBeDisabled();
 });
 
 test("プレイヤーを用意できなければ、デッキの一覧にその理由を出す", async ({ page }) => {
@@ -488,6 +491,55 @@ test("相手を待っているあいだにページを移るときは、確か�
   await expect(page.locator("#decks")).toBeVisible();
   const claimed = await page.request.get(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
   expect(((await claimed.json()) as { kind: string }).kind).toBe("dropped");
+});
+
+test("相手を待っているあいだに同じページへ移っても、確かめずに待ち続ける", async ({ page }) => {
+  let asked = 0;
+  page.on("dialog", (dialog) => {
+    asked += 1;
+    void dialog.dismiss();
+  });
+  await page.goto("/");
+  await enterRoom(page, `おなじ-${Date.now()}`);
+  await page.click("#join-button");
+  await page.waitForResponse((response) => response.url().includes("/api/claim?"));
+  await page.click('.site-nav a[href="/"]');
+  await page.waitForResponse((response) => response.url().includes("/api/claim?"));
+  expect(asked).toBe(0);
+});
+
+test("チケットを降ろせなかったら、ページを移らずに待ち続ける", async ({ page }) => {
+  await page.route("**/api/leave", (route) => route.abort());
+  await page.goto("/");
+  await enterRoom(page, `おろせない-${Date.now()}`);
+  await page.click("#join-button");
+  await page.waitForResponse((response) => response.url().includes("/api/claim?"));
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.click('.site-nav a[href="/decks"]');
+  await expect(page.locator("#join-status")).toContainText("やめられませんでした");
+  await expect(page.locator("#join")).toBeVisible();
+  await page.waitForResponse((response) => response.url().includes("/api/claim?"));
+});
+
+test("保存したデッキの一覧が届く前に押しても、前に選んだ保存したデッキで入る", async ({ page }) => {
+  await page.goto("/");
+  const cards = await sampleEntries(page);
+  const deckId = await saveDeckAs(page, "えらんだ", cards);
+  await page.evaluate((id) => localStorage.setItem("poke-deck-choice", `saved:${id}`), deckId);
+  const [held, release] = gate();
+  await page.route("**/api/decks", async (route) => {
+    await held;
+    await route.continue();
+  });
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
+  await page.reload();
+  await enterRoom(page, `とどくまえ-${Date.now()}`);
+  await page.click("#join-button");
+  release();
+  const { deck } = (await sent).postDataJSON() as { deck: { cards: string[] } };
+  expect([...deck.cards].sort()).toEqual(
+    cards.flatMap(({ defId, count }) => Array<string>(count).fill(defId)).sort(),
+  );
 });
 
 test("相手さがしの答えを待つあいだにページを移っても、届いたチケットを降ろす", async ({ page }) => {

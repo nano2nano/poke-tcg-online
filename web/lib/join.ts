@@ -41,8 +41,26 @@ export function rememberDeckChoice(choice: DeckChoice): void {
 }
 
 /**
+ * 使うデッキ。前に選んだものが一覧に無ければ（消したデッキ、表から外れたデッキ）、規則を通る保存したデッキの先頭か、
+ * AI と同じ表のデッキの先頭にする。サンプルデッキは AI が学んだことの無い相手になる。
+ */
+export function resolveDeckChoice(
+  picked: DeckChoice | null,
+  saved: readonly SavedDeck[],
+  presets: readonly DeckPreset[],
+): DeckChoice {
+  const listed =
+    picked === "sample" ||
+    saved.some(({ deckId }) => `saved:${deckId}` === picked) ||
+    presets.some(({ label }) => `preset:${label}` === picked);
+  if (picked !== null && listed) return picked;
+  const playable = saved.find(({ errors }) => errors.length === 0);
+  if (playable !== undefined) return `saved:${playable.deckId}`;
+  return presets[0] === undefined ? "sample" : `preset:${presets[0].label}`;
+}
+
+/**
  * 送るデッキ。規則には照らさない。照らすのはサーバで、続いている対戦があればデッキより先にその席を返す。
- * 保存したデッキが一覧に無ければ（別のブラウザで消したときなど）投げる。
  */
 export async function deckRequest(
   choice: DeckChoice,

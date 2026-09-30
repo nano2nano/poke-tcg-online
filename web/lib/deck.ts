@@ -4,7 +4,7 @@
  * 枚数の上限は画面にも持つが、決めるのはサーバの検査である（仕様 5.1 節）。画面の上限は押せるボタンを絞るだけ。
  */
 
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { CardChoice } from "../../src/card-index.js";
 import type { DeckEntry } from "../../src/deck.js";
 import type { SavedDeck } from "../../src/decks.js";
@@ -30,16 +30,20 @@ export function useSavedDecks() {
   const queryClient = useQueryClient();
   const account = useQuery(accountQuery());
   const playerId = account.data?.playerId ?? null;
-  const decks = useQuery({
-    queryKey: [...DECKS_KEY, playerId],
-    queryFn: () => loadDecks(queryClient),
-    enabled: playerId !== null,
-  });
+  const decks = useQuery(savedDecksQuery(queryClient, playerId));
   const failure = decks.isError ? decks.error : account.isError ? account.error : null;
   return { decks, failure };
 }
 
 const DECKS_KEY = ["decks"] as const;
+
+export function savedDecksQuery(queryClient: QueryClient, playerId: string | null) {
+  return queryOptions({
+    queryKey: [...DECKS_KEY, playerId],
+    queryFn: () => loadDecks(queryClient),
+    enabled: playerId !== null,
+  });
+}
 
 async function loadDecks(queryClient: QueryClient): Promise<SavedDeck[]> {
   await moveBrowserDeck(queryClient);
@@ -87,18 +91,25 @@ export function parseBrowserDeck(json: string | null): DeckEntry[] {
 }
 
 /**
- * 保存する。`deckId` が無ければ新しいデッキになる。一覧は取り直す。
+ * 保存する。`deckId` が無ければ新しいデッキになる。
  * 新しいデッキのページを初めて開いたブラウザは、まだプレイヤーを持たないので、ここで用意する。
+ *
+ * 読んである一覧には、保存したデッキを先頭に置いてから取り直す。取り直しに失敗しても、組む画面は保存したデッキと比べる。
  */
 export async function saveDeck(
   queryClient: QueryClient,
   deck: { deckId?: string; name: string; cards: readonly DeckEntry[] },
 ): Promise<SavedDeck> {
-  await queryClient.fetchQuery(accountQuery());
+  const { playerId } = await queryClient.fetchQuery(accountQuery());
   const { deck: saved } = await postAsPlayer<{ deck: SavedDeck }>(
     queryClient,
     "/api/decks/save",
     deck,
+  );
+  queryClient.setQueryData<SavedDeck[]>([...DECKS_KEY, playerId], (list) =>
+    list === undefined
+      ? undefined
+      : [saved, ...list.filter(({ deckId }) => deckId !== saved.deckId)],
   );
   await queryClient.invalidateQueries({ queryKey: DECKS_KEY });
   return saved;

@@ -173,6 +173,8 @@ test("押してから送るまでのあいだに直した名前とルームコ�
   });
 
   await page.goto("./");
+  // サンプルデッキは送る前に取りに行くので、その返事を止めて、押してから送るまでのあいだを作る。
+  await page.selectOption("#deck-choice", "sample");
   const room = `うちたし-${Date.now()}`;
   await page.fill("#name", "たろ");
   await enterRoom(page, `${room}-まちがい`);

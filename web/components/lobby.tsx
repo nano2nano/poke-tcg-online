@@ -12,7 +12,7 @@ import {
 } from "../lib/account.js";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
-import { useSavedDecks, type SavedDeck } from "../lib/deck.js";
+import { savedDecksQuery, useSavedDecks, type SavedDeck } from "../lib/deck.js";
 import {
   botListQuery,
   claim,
@@ -22,6 +22,7 @@ import {
   newSeedShare,
   presetName,
   rememberDeckChoice,
+  resolveDeckChoice,
   shareFor,
   storedDeckChoice,
   withShare,
@@ -85,24 +86,8 @@ export function Lobby({
 
   const saved = useSavedDecks();
   const savedDecks = saved.decks.data ?? [];
-  /**
-   * 人が選んだデッキ。前に選んだものが一覧に無ければ（消したデッキ、表から外れたデッキ）、
-   * 規則を通る保存したデッキの先頭か、サンプルデッキにする。
-   */
   const [picked, setPicked] = useState<DeckChoice | null>(storedDeckChoice);
-  const firstPlayable = savedDecks.find(({ errors }) => errors.length === 0);
-  const listed = (option: DeckChoice) =>
-    option === "sample" ||
-    savedDecks.some(({ deckId }) => `saved:${deckId}` === option) ||
-    decks.some(({ label }) => `preset:${label}` === option);
-  const choice: DeckChoice =
-    picked !== null && listed(picked)
-      ? picked
-      : firstPlayable === undefined
-        ? "sample"
-        : `saved:${firstPlayable.deckId}`;
-  /** 一覧が届くまでは、選ぶデッキが決まらない。押させると、選んだつもりのないデッキで入る。 */
-  const choosing = (account.data !== undefined && saved.decks.isPending) || bots.isPending;
+  const choice = resolveDeckChoice(picked, savedDecks, decks);
   const chosenSaved = savedDecks.find(({ deckId }) => `saved:${deckId}` === choice) ?? null;
   const choose = (next: DeckChoice) => {
     setPicked(next);
@@ -146,14 +131,13 @@ export function Lobby({
   const sentShares = useRef<SeedShare[]>([]);
 
   /**
-   * 相手を待つのをやめる。降ろす前に席が決まっていたら、その卓へ移って true を返す。
+   * 相手を待つのをやめる。降ろす前に席が決まっていたら、その卓へ移る。届かなければ null を返す。
    * 降ろさないままページを移ると、相手が見つかっても誰も取りに行かず、座らないまま時間切れで負ける。
    */
-  const abandon = async (ticket: string, share: string | undefined): Promise<boolean> => {
+  const abandon = async (ticket: string, share: string | undefined) => {
     const outcome = await leaveQueue(ticket);
-    if (outcome?.kind !== "seated") return false;
-    onSeated(withShare(outcome.seat, share));
-    return true;
+    if (outcome?.kind === "seated") onSeated(withShare(outcome.seat, share));
+    return outcome;
   };
   useBlocker({
     shouldBlockFn: async ({ next }) => {
@@ -161,11 +145,30 @@ export function Lobby({
       // 卓へ移るのは、席に着いたときである。
       if (pending === null || next.pathname === "/match") return false;
       if (!confirm("相手をさがすのをやめて、このページを離れますか。")) return true;
+      const outcome = await abandon(pending.ticket, pending.share);
+      // 降ろせたか分からないまま離れると、残ったチケットを誰も取りに行かない。ここに留まって待ち続ける。
+      if (outcome === null) {
+        setStatus("つながらなかったので、相手をさがすのをやめられませんでした。");
+        return true;
+      }
       waitingFor.current = null;
-      return abandon(pending.ticket, pending.share);
+      return outcome.kind === "seated";
     },
     enableBeforeUnload: false,
   });
+
+  /** 送るデッキ。一覧が届く前に押されたら、届いてから選ぶ。届く前の一覧で選ぶと、選んだつもりのないデッキで入る。 */
+  const deckToSend = async () => {
+    const { playerId } = await ensureAccount();
+    const [list, presets] = await Promise.all([
+      queryClient.ensureQueryData(savedDecksQuery(queryClient, playerId)),
+      queryClient.ensureQueryData(botListQuery).then(
+        (answer) => answer.decks,
+        () => [],
+      ),
+    ]);
+    return deckRequest(resolveDeckChoice(picked, list, presets), list);
+  };
 
   const run = (task: (mine: object) => Promise<void>) => {
     const mine = {};
@@ -240,7 +243,7 @@ export function Lobby({
 
   const join = async (mine: object) => {
     setStatus("デッキを送っています");
-    const deck = await deckRequest(choice, savedDecks);
+    const deck = await deckToSend();
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
@@ -332,7 +335,7 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    const deck = await deckRequest(choice, savedDecks);
+    const deck = await deckToSend();
     const share = await newSeedShare();
     const request = await common(share);
     const outcome = await send(
@@ -438,7 +441,7 @@ export function Lobby({
           <button
             id="join-button"
             className="primary"
-            disabled={requesting || choosing}
+            disabled={requesting}
             onClick={() => run((mine) => join(mine))}
           >
             対戦をさがす
@@ -499,9 +502,7 @@ export function Lobby({
           </label>
           <button
             id="bot-button"
-            disabled={
-              requesting || waiting || choosing || botNames.length === 0 || decks.length === 0
-            }
+            disabled={requesting || waiting || botNames.length === 0 || decks.length === 0}
             onClick={() => run(joinBot)}
           >
             AI と対戦する
