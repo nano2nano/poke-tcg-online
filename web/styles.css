@@ -946,10 +946,17 @@ button.choice-card:enabled > .card {
     margin-top: 8px;
   }
   /* 指せる手が多い局面でも、投了のボタンとできごとの記録を押し出さない。 */
-  .table-panel > .moves {
+  .table-panel > .moves,
+  .table-panel > .all-moves[open] {
     flex: 0 1 auto;
     min-height: 3em;
     overflow-y: auto;
+  }
+  /* 一覧を送っても、畳むところは残す。 */
+  .all-moves > summary {
+    position: sticky;
+    top: 0;
+    background: Canvas;
   }
   .table-panel > .note {
     margin: 8px 0 0;

@@ -1513,6 +1513,8 @@ test("落とした先でできる手が 2 つ以上あれば、ボタンをそ�
   expect(sent).toEqual([]);
   await page.click("#drop-widen");
   await expect(buttons).toHaveCount(3);
+  // ほかの手を出すと頼んだので、畳んだ一覧も開く。
+  await expect(page.locator("#moves button").first()).toBeVisible();
   await expect(page.locator("#drop-prompt")).toHaveCount(0);
 
   await dragOver(page, card, target);
@@ -1687,7 +1689,8 @@ test.describe("タッチ端末の座席", () => {
     await page.keyboard.press("Escape");
     await expect(card).not.toHaveAttribute("data-picked");
 
-    // ボタンで手を指したら、選んでいたカードも放す。
+    // ボタンで手を指したら、選んでいたカードも放す。番の中の手は畳んであるので、選ぶ前に開く。
+    await page.locator("#all-moves > summary").tap();
     await card.tap();
     await expect(card).toHaveAttribute("data-picked");
     await page.locator("#moves button").last().tap();
