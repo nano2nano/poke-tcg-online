@@ -83,6 +83,8 @@ async function enterRoom(page: Page, room: string): Promise<void> {
 }
 
 async function join(page: Page, room: string): Promise<void> {
+  // 盤面を進めるテストは、サンプルデッキで書いてある。表のデッキでは、進めるうちに手札が尽きることがある。
+  await page.selectOption("#deck-choice", "sample");
   await enterRoom(page, room);
   const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
