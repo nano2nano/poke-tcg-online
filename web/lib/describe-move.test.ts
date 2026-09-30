@@ -171,3 +171,72 @@ describe("choicePrompt", () => {
     expect(promptFor({ kind: "selectInPlay", candidates: [] }, null)).toBe("");
   });
 });
+
+describe("エンジン自身が積む選択", () => {
+  const withChoice = (
+    kind: string,
+    prompt: object,
+    context: object | null = null,
+    cards: CardTable = {},
+  ) => {
+    ensureCards();
+    const view = viewFor(newMatch("describe-move-rule"), 0);
+    const choice = { choiceId: "c1", owner: 0, kind, optional: true, prompt, context };
+    return { view: { ...view, choices: [choice] } as PlayerView, cards };
+  };
+  const answer = (context: ReturnType<typeof withChoice>, picked: ChoiceAnswer) =>
+    describeMove({ type: "AnswerChoice", player: 0, choiceId: "c1", answer: picked }, context);
+
+  it("効果の元が無くても、何を選ぶのかを書く", () => {
+    const source = { defId: "x", label: "効果の元", instanceId: null };
+    const prompts = [
+      withChoice("use-second-attack", { kind: "confirm", count: 1 }),
+      withChoice("select-attack", { kind: "selectAttack", candidates: [] }),
+      withChoice("order-effects", { kind: "selectEffect", candidates: [], context: "trigger" }),
+      withChoice("place-check-effect", { kind: "selectPlacement", effect: source }, { source }),
+      withChoice("take-prize", {
+        kind: "selectPrize",
+        zone: { kind: "prizes", player: 0 },
+        positions: [],
+        remaining: [2, 0],
+        total: [2, 0],
+        checkOutcome: true,
+      }),
+    ].map(choicePrompt);
+    expect(prompts.filter((prompt) => prompt === "")).toEqual([]);
+  });
+
+  it("2 回目のワザを使うかの答えは、使うか番を終えるかで出す", () => {
+    const context = withChoice("use-second-attack", { kind: "confirm", count: 1 });
+    expect(answer(context, { kind: "accept" })).toBe("もう一度ワザを使う");
+    expect(answer(context, { kind: "decline" })).toBe("使わずに番を終える");
+  });
+
+  it("取るサイドはオモテなら名前、ウラならウラのサイドで出す", () => {
+    const prize = {
+      kind: "selectPrize",
+      zone: { kind: "prizes", player: 0 },
+      positions: [
+        { index: 0, defId: null },
+        { index: 3, defId: "オモテ" },
+      ],
+      remaining: [2, 0],
+      total: [2, 0],
+      checkOutcome: true,
+    };
+    const cards = { オモテ: { name: "オモテのカード" } } as unknown as CardTable;
+    const context = withChoice("take-prize", prize, null, cards);
+    expect(answer(context, { kind: "position", index: 0 })).toBe("ウラのサイドを取る");
+    expect(answer(context, { kind: "position", index: 3 })).toBe("オモテの オモテのカード を取る");
+  });
+
+  it("効果の順番の答えは、効果の名前で出す", () => {
+    const candidates = [{ defId: "x", label: "先の効果", instanceId: null }];
+    const context = withChoice("order-effects", {
+      kind: "selectEffect",
+      candidates,
+      context: "trigger",
+    });
+    expect(answer(context, { kind: "effectIndex", index: 0 })).toBe("先の効果");
+  });
+});
