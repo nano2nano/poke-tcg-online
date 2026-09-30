@@ -53,7 +53,15 @@ const CHANNEL = "poke-seat";
 
 const REPLY_WAIT_MS = 10_000;
 
-export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): Seating {
+/**
+ * `remainingMs` は、いま出している演出を見せ終えるまでの長さ。見せ終えたらサーバへ知らせ、
+ * AI との対戦では AI がそれを待って次の手を指す（仕様 7.3 節）。
+ */
+export function useSeat(
+  seated: StoredSeat,
+  notify: (notice: Notice) => void,
+  remainingMs: () => number,
+): Seating {
   const [state, setState] = useState(() => initialSeatState(seated.seat));
   const [connection, setConnection] = useState<Connection>(null);
   const [events, setEvents] = useState<LoggedEvent[]>([]);
@@ -64,6 +72,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
   const { table } = useCardData();
   const cardTable = useEffectEvent(() => table);
   const show = useEffectEvent(notify);
+  const remaining = useEffectEvent(remainingMs);
   const queryClient = useQueryClient();
   const refreshRating = useEffectEvent(() => refreshAccount(queryClient).catch(() => {}));
 
@@ -83,6 +92,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
     let replaced = false;
     /** 先攻のコイントスを見せたか。`sync` は繋ぎ直すたびに届くので、2 度は出さない。 */
     let firstPlayerShown = false;
+    let shownTimer: ReturnType<typeof setTimeout> | undefined;
 
     const who = (player: Player) => (player === seated.seat ? "あなた" : "相手");
     const log = (texts: string[]) => {
@@ -148,6 +158,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
             });
           }
           for (const notice of noticesToShow(notices, seated.seat)) show(notice);
+          acknowledge(message.stateVersion);
           return;
         }
         case "ended": {
@@ -176,6 +187,16 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         default:
           return;
       }
+    }
+
+    /** 局面の演出を見せ終えたら知らせる。次の局面が先に届いたら、前の局面のぶんは知らせない。 */
+    function acknowledge(stateVersion: number) {
+      clearTimeout(shownTimer);
+      const socket = live.current.socket;
+      shownTimer = setTimeout(() => {
+        const message: ClientMessage = { t: "shown", stateVersion };
+        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+      }, remaining());
     }
 
     function connect() {
@@ -244,6 +265,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
 
     return () => {
       disposed = true;
+      clearTimeout(shownTimer);
       retry.stop();
       channel?.close();
       live.current.socket?.close();

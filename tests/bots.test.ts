@@ -322,8 +322,8 @@ function newArena(botDelayMs = 0): Arena {
 }
 
 /**
- * 人の座席の接続。合法手が届いたら先頭を指す。受け取った処理の中で指し返さず、次の番へ回す。
- * サーバは受け取った処理の中で次の配信をするので、その場で指すと処理が入れ子になる。
+ * 人の座席の接続。局面が届いたら見せ終えたと知らせ、合法手があれば先頭を指す。受け取った処理の中で
+ * 指し返さず、次の番へ回す。サーバは受け取った処理の中で次の配信をするので、その場で指すと処理が入れ子になる。
  */
 function humanSeat(arena: Arena, seatToken: string, ended: () => void): SeatSocket {
   const socket: SeatSocket = {
@@ -334,6 +334,8 @@ function humanSeat(arena: Arena, seatToken: string, ended: () => void): SeatSock
         return;
       }
       if (message.t !== "sync" && message.t !== "delta") return;
+      const shown: ClientMessage = { t: "shown", stateVersion: message.stateVersion };
+      setTimeout(() => arena.hub.handle(socket, seatToken, shown), 0);
       const legal = message.legalMoves;
       if (legal === null || legal.length === 0) return;
       const move: ClientMessage = {
@@ -512,6 +514,73 @@ describe("AI の座席", () => {
 
     expect(record.matchResult).toEqual({ kind: "concede", winner: 0, conceded: 1 });
     expect(record.moves.every((move) => move.source === "human")).toBe(true);
+  });
+
+  it("人の画面が `shown` を送るなら、AI はその画面がいまの局面を見せ終えてから指す", async () => {
+    ensureCards();
+    const arena = newArena(20);
+    const bot = botFromBytes("g0", generationZero());
+    const { account, secret } = await arena.accounts.create("ひと", 0);
+    const outcome = arena.lobby.joinBot(
+      { secret, deck: presetDeck("dragapult-28731")! },
+      account,
+      bot,
+      presetDeck("alakazam-dudunsparce-72073")!,
+    );
+    if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
+    const { seatToken } = outcome.seat;
+    const socket: SeatSocket = { send() {}, close() {} };
+    arena.hub.attach(socket, seatToken);
+    const [match] = arena.registry.live();
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
+    // 繋いだ時点では、まだ `shown` を送る画面か分からないので、AI が先に選ぶ対戦ではそのまま指す。
+    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: match!.version });
+    await settle();
+    while (toMove(match!) === 0) {
+      const move = legalMovesFor(match!, 0)![0]!;
+      arena.hub.handle(socket, seatToken, { t: "move", stateVersion: match!.version, move });
+    }
+    const version = match!.version;
+
+    await settle();
+    expect(match!.version).toBe(version);
+    // 前の局面を見せ終えた知らせでは動かない。
+    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: version - 1 });
+    await settle();
+    expect(match!.version).toBe(version);
+
+    arena.hub.handle(socket, seatToken, { t: "shown", stateVersion: version });
+    await settle();
+    expect(match!.version).toBeGreaterThan(version);
+    expect(match!.moves.at(-1)?.source).toBe("bot");
+    arena.hub.handle(socket, seatToken, { t: "concede" });
+  });
+
+  it("`shown` を送ってこない画面は待たない", async () => {
+    ensureCards();
+    const arena = newArena(20);
+    const bot = botFromBytes("g0", generationZero());
+    const { account, secret } = await arena.accounts.create("ひと", 0);
+    const outcome = arena.lobby.joinBot(
+      { secret, deck: presetDeck("dragapult-28731")! },
+      account,
+      bot,
+      presetDeck("alakazam-dudunsparce-72073")!,
+    );
+    if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
+    const { seatToken } = outcome.seat;
+    const socket: SeatSocket = { send() {}, close() {} };
+    arena.hub.attach(socket, seatToken);
+    const [match] = arena.registry.live();
+    while (toMove(match!) === 0) {
+      const move = legalMovesFor(match!, 0)![0]!;
+      arena.hub.handle(socket, seatToken, { t: "move", stateVersion: match!.version, move });
+    }
+    const version = match!.version;
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(match!.version).toBeGreaterThan(version);
+    arena.hub.handle(socket, seatToken, { t: "concede" });
   });
 
   it("人が投了したら、待っていた AI の手は指さない", async () => {

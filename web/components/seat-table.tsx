@@ -49,7 +49,7 @@ export function SeatTable({
 }) {
   const board = useRef<HTMLElement>(null);
   const feed = useNotices();
-  const seating = useSeat(seated, feed.show);
+  const seating = useSeat(seated, feed.show, feed.remainingMs);
   const { state, connection, events, shuffle, left, send } = seating;
   const { table } = useCardData();
   const { view, legalMoves, setup, deckPlacement, answerDestinations, attacks } = state;

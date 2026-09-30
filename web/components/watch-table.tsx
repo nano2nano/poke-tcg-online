@@ -20,7 +20,7 @@ import { NoticeLayer, useNotices } from "./notices.js";
 /**
  * 観戦の卓。自分の座席は無いので、座席 0 を手前に置く。
  *
- * 局面は届いたものを溜めて、選んだ速さで 1 手ずつ送る。止めて 1 手ずつ進めることも、戻ることもできる。
+ * 局面は届いたものを溜めて、1 手の演出が終わってから選んだ間を置いて送る。止めて 1 手ずつ進めることも、戻ることもできる。
  *
  * 卓の配置の CSS は `body` の直下にある卓を探すので、外側を別の要素で包まない。
  */
@@ -35,8 +35,6 @@ export function WatchTable({ token }: { token: string }) {
   const atEnd = at === frames.length - 1;
   const who = (player: Player) => seatDisplayName(seats, player);
 
-  useTicker(playback, control);
-
   // 届いた順に進んだときだけ、進んだぶんの結果を出す。届きしだい描くと、1 度に何手も進むことがある。
   const show = feed.show;
   const announced = useRef(-1);
@@ -48,6 +46,8 @@ export function WatchTable({ token }: { token: string }) {
     }
     announced.current = at;
   }, [at, stepped, frames, show]);
+  // 次の局面へ送るまでの長さは、いま出した結果から測る。結果を出す effect より後に置く。
+  useTicker(playback, control, feed.remainingMs);
 
   // 決着は、描いている局面が最後に届いたものに追いついたときに出す。
   const endShown = useRef(false);
@@ -120,16 +120,24 @@ export function WatchTable({ token }: { token: string }) {
   );
 }
 
-/** 再生しているあいだ、選んだ間を置いて 1 手ずつ送る。届きしだいのときは届いた側が送る。 */
-function useTicker(playback: Playback, control: (action: PlaybackAction) => void) {
+/**
+ * 再生しているあいだ、いまの局面の演出が終わってから選んだ間を置いて、1 手ずつ送る。
+ * 届きしだいのときは届いた側が送る。
+ */
+function useTicker(
+  playback: Playback,
+  control: (action: PlaybackAction) => void,
+  remainingMs: () => number,
+) {
   const stepMs = stepMsOf(playback);
-  const behind = playback.at < playback.frames.length - 1;
-  const { playing } = playback;
+  const { at, playing } = playback;
+  const behind = at < playback.frames.length - 1;
   useEffect(() => {
     if (!playing || !behind || stepMs === 0) return;
-    const timer = setInterval(() => control({ t: "tick" }), stepMs);
-    return () => clearInterval(timer);
-  }, [playing, behind, stepMs, control]);
+    const timer = setTimeout(() => control({ t: "tick" }), remainingMs() + stepMs);
+    return () => clearTimeout(timer);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- 1 手送るたびに、その局面の演出から測り直す。
+  }, [at, playing, behind, stepMs, control, remainingMs]);
 }
 
 function Controls({
@@ -160,7 +168,7 @@ function Controls({
         </button>
       </div>
       <label>
-        速さ{" "}
+        演出のあとの間{" "}
         <select
           id="watch-speed"
           value={stepMsOf(playback)}

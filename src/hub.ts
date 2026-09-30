@@ -66,17 +66,24 @@ export interface HubOptions {
   now?: () => number;
   /** 対戦が終わってレジストリを離れたあとに 1 度だけ呼ぶ。記録を残し、レーティングを動かすのはここである。 */
   onFinish?: (record: MatchRecord) => void;
-  /** AI が手を指すまでの間。既定は `BOT_DELAY_MS`。 */
+  /** 人の画面が演出を見せ終えてから、AI が手を指すまでの間。既定は `BOT_DELAY_MS`。 */
   botDelayMs?: number;
   /** AI どうしの対戦で、AI が手を指すまでの間。既定は `WATCH_DELAY_MS`。 */
   watchDelayMs?: number;
 }
 
 /**
- * AI が手を指すまでの間（7.3 節）。AI が手を選ぶ時間は人が画面を追う時間よりずっと短いので、
- * 間を置かないと番が回ってきた瞬間に何手も進み、人は画面で何が起きたかを追えない。
+ * 人の画面が演出を見せ終えてから、AI が手を指すまでの間（7.3 節）。AI が手を選ぶ時間は人が画面を追う時間より
+ * ずっと短いので、間を置かないと番が回ってきた瞬間に何手も進み、人は画面で何が起きたかを追えない。
+ * 人の画面が `shown` を送らなければ、見せ終えるのを待たずにこの間だけ置く。
  */
 const BOT_DELAY_MS = 700;
+
+/**
+ * 人の画面から `shown` が届くのを待つ上限（7.3 節）。裏へ回したタブではブラウザがタイマーを間引くので
+ * 遅れることがあり、待っているあいだに閉じたタブからは届かない。待ち続けると AI の持ち時間が尽きる。
+ */
+const SHOWN_WAIT_MS = 10_000;
 
 /**
  * AI どうしの対戦で、AI が手を指すまでの間（7.4 節）。見る速さは画面が届いた局面を溜めて決めるので、
@@ -99,7 +106,15 @@ export class MatchHub {
   private readonly spectatorOf = new Map<SeatSocket, string>();
   private readonly now: () => number;
   /** 対戦 ID → AI が次の手を指すタイマー。1 局に 1 つだけ持つ。 */
-  private readonly botTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly botTimers = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; awaitingShown: boolean }
+  >();
+  /**
+   * `shown` を 1 度でも送ってきた座席の接続。`shown` を送らない版の画面を開いたままのタブを待つと、
+   * AI の手が毎回 `SHOWN_WAIT_MS` かかる。
+   */
+  private readonly showing = new WeakSet<SeatSocket>();
   private readonly botDelayMs: number;
   private readonly watchDelayMs: number;
 
@@ -244,6 +259,9 @@ export class MatchHub {
       case "ping":
         send(socket, { t: "pong" });
         return;
+      // 観戦者の画面を待つ AI はいない（7.4 節）。
+      case "shown":
+        return;
       case "move":
       case "setup":
       case "concede":
@@ -260,6 +278,8 @@ export class MatchHub {
         return;
       case "hello":
         send(socket, { t: "pending" });
+        return;
+      case "shown":
         return;
       case "move":
       case "setup":
@@ -287,6 +307,10 @@ export class MatchHub {
         return;
       case "ping":
         send(socket, { t: "pong" });
+        return;
+      case "shown":
+        this.showing.add(socket);
+        this.screenShown(match, message.stateVersion);
         return;
       case "move": {
         /**
@@ -355,21 +379,30 @@ export class MatchHub {
   /**
    * AI の番なら、間を置いて AI に 1 手指させる（7.3 節）。何度呼んでも、待っている手は 1 局に 1 つである。
    * 局面が動くところ（対戦の開始、手を受理したあと）と、座席が就いたところから呼ぶ。
+   *
+   * 人の座席の画面が `shown` を送るなら、いまの局面の演出をその画面が見せ終えるのを待ってから間を置く。
+   * 局面を送った直後に呼ぶので、ここへ来た時点の画面はまだ見せ終えていない。
    */
-  private driveBot(match: Match): void {
+  private driveBot(match: Match, afterShown = false): void {
     const seat = toMove(match);
     const bot = seat === null ? null : match.bots[seat];
     if (seat === null || bot === null || this.botTimers.has(match.matchId)) return;
-    const timer = setTimeout(() => {
-      this.botTimers.delete(match.matchId);
-      try {
-        this.botMove(match, seat, bot);
-      } catch (error) {
-        console.error(`AI の手を進められなかった。投了で終える（${match.matchId}）:`, error);
-        this.botResigns(match, seat);
-      }
-    }, this.botDelayFor(match));
-    this.botTimers.set(match.matchId, timer);
+    // 座席の接続を持つのは人の座席だけである。
+    const seats = this.sockets.get(match.matchId)?.values() ?? [];
+    const awaitingShown = !afterShown && [...seats].some((socket) => this.showing.has(socket));
+    const timer = setTimeout(
+      () => {
+        this.botTimers.delete(match.matchId);
+        try {
+          this.botMove(match, seat, bot);
+        } catch (error) {
+          console.error(`AI の手を進められなかった。投了で終える（${match.matchId}）:`, error);
+          this.botResigns(match, seat);
+        }
+      },
+      awaitingShown ? SHOWN_WAIT_MS : this.botDelayFor(match),
+    );
+    this.botTimers.set(match.matchId, { timer, awaitingShown });
   }
 
   private botDelayFor(match: Match): number {
@@ -378,9 +411,17 @@ export class MatchHub {
     return awaited ? WATCH_START_MS : this.watchDelayMs;
   }
 
+  /** 人の画面が見せ終えたのが AI の待っている局面なら、そこから間を置いて指させる。 */
+  private screenShown(match: Match, stateVersion: number): void {
+    if (stateVersion !== match.version) return;
+    if (this.botTimers.get(match.matchId)?.awaitingShown !== true) return;
+    this.stopBot(match);
+    this.driveBot(match, true);
+  }
+
   private stopBot(match: Match): void {
-    const timer = this.botTimers.get(match.matchId);
-    if (timer !== undefined) clearTimeout(timer);
+    const pending = this.botTimers.get(match.matchId);
+    if (pending !== undefined) clearTimeout(pending.timer);
     this.botTimers.delete(match.matchId);
   }
 
