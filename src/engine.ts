@@ -92,6 +92,8 @@ export { derivedView } from "../engine/src/engine/derivedView.js";
 export { RevisitTracker } from "../engine/src/testing/revisit.js";
 /** テストが、サーバとは別の道で AI の座席の候補を求め直すのに使う。 */
 export { positionKey } from "../engine/src/testing/revisit.js";
+/** テストが、候補から外れうる手を選ぶのに使う。 */
+export { cannotRevisit } from "../engine/src/testing/revisit.js";
 /**
  * AI の座席が握るデッキは、学習の `--decks` が握らせた大会の入賞デッキの本である（7.3 節）。
  * 学習と同じ読み方で `--decks` の値から本を引くのに要る。
@@ -99,3 +101,9 @@ export { positionKey } from "../engine/src/testing/revisit.js";
 export { deckListOf, tournamentDecks } from "../engine/harness/tournament-decks.js";
 export { labelsOf } from "../engine/harness/deck-catalog.js";
 export { matchupDeckLabels } from "../engine/harness/deck-families.js";
+/**
+ * 母集団から組を引く学習の走り（`--pool`）は、デッキの集合の書き方で学ぶ本を決める。
+ * その本に AI の座席のデッキが入っているかを、学習と同じ読み方と中身で確かめるのに要る。
+ */
+export { deckPoolOf } from "../engine/harness/deck-pool.js";
+export { deckHashOf } from "../engine/harness/deck-set.js";
