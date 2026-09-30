@@ -3,6 +3,7 @@ import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-r
 import { CardPreview } from "../components/card-preview.js";
 import { CardZoom } from "../components/card-zoom.js";
 import { MotionSettingProvider } from "../components/motion-setting.js";
+import { Settings } from "../components/settings.js";
 import { CardDataProvider } from "../lib/cards.js";
 import styles from "../styles.css?url";
 
@@ -27,12 +28,14 @@ export const Route = createRootRoute({
 function Root() {
   return (
     <MotionSettingProvider>
-      <CardDataProvider>
-        <CardZoom>
-          <Outlet />
-          <CardPreview />
-        </CardZoom>
-      </CardDataProvider>
+      <Settings>
+        <CardDataProvider>
+          <CardZoom>
+            <Outlet />
+            <CardPreview />
+          </CardZoom>
+        </CardDataProvider>
+      </Settings>
     </MotionSettingProvider>
   );
 }

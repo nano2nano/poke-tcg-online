@@ -14,7 +14,7 @@ import {
   type ReplayState,
 } from "../lib/match-state.js";
 import { Board, SideBoard, Stadium } from "./board.js";
-import { MotionToggle } from "./motion-setting.js";
+import { SettingsButton } from "./settings.js";
 
 /**
  * 指した対戦の一覧と、開いた対戦のリプレイ。
@@ -257,7 +257,7 @@ function Replay({
         <button id="replay-close" className="secondary" onClick={onClose}>
           閉じる
         </button>
-        <MotionToggle id="replay-motion-toggle" />
+        <SettingsButton id="replay-settings-button" />
       </div>
       <p id="replay-status" className="note">
         {[frame === null ? "" : replayStatusText(frame, seat, table, divergedAt), failure]

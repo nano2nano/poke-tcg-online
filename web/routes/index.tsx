@@ -6,6 +6,7 @@ import { History } from "../components/history.js";
 import { Lobby } from "../components/lobby.js";
 import { refreshAccount } from "../lib/account.js";
 import { SeatTable } from "../components/seat-table.js";
+import { SettingsButton } from "../components/settings.js";
 import { WatchTable } from "../components/watch-table.js";
 import { rememberSeat, storedSeat, type StoredSeat } from "../lib/seat.js";
 
@@ -70,6 +71,7 @@ function Seat() {
               盤面は卓と同じ配置で描き、指せる手はサーバが送ってきたものをそのまま並べます。
               カードにマウスを載せる（タッチ端末では長押しする）と大きく出ます。押すと、進化前やついているカードもまとめて出ます。
             </p>
+            <SettingsButton id="home-settings-button" />
           </header>
           <Lobby status={status} remembered={remembered} onSeated={sit} onResume={resume} />
         </>
