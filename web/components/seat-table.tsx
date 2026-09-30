@@ -601,7 +601,7 @@ function Moves({
       {narrowed !== null && (
         <p id="drop-prompt" className="move-prompt">
           落とした先でできる手がいくつかあります。どれにするか選んでください。{" "}
-          <button id="drop-widen" className="secondary" onClick={onWiden}>
+          <button id="drop-widen" onClick={onWiden}>
             ほかの手も出す
           </button>
         </p>
@@ -666,7 +666,6 @@ function SetupForm({
     <button
       key={instanceId}
       type="button"
-      className="secondary"
       data-instance-id={instanceId}
       aria-pressed={pressed}
       disabled={off}
@@ -828,7 +827,7 @@ function ChoiceSheet({
             {prompt}
           </p>
         )}
-        <button id="choice-fold" className="secondary" onClick={() => setFolded(!folded)}>
+        <button id="choice-fold" onClick={() => setFolded(!folded)}>
           {folded ? "選ぶ画面を出す" : "盤面を見る"}
         </button>
       </div>

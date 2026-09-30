@@ -226,9 +226,9 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
 
   return (
     <section id="deck-builder">
-      <p>
-        <Link to="/decks">デッキの一覧へ</Link>
-      </p>
+      <nav className="breadcrumb" aria-label="パンくずリスト">
+        <Link to="/decks">デッキ</Link> / {saved?.name ?? "新しいデッキ"}
+      </nav>
       <div className="builder-head">
         <input
           id="deck-name"
@@ -248,7 +248,7 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
           保存する
         </button>
       </div>
-      <div id="deck-status" className={`deck-status ${shown.tone}`}>
+      <div id="deck-status" className={`status deck-status ${shown.tone}`}>
         {shown.messages.map((message, index) => (
           // 同じ文言が並ぶことがある。並びは届いた答えのまま変わらない。
           // oxlint-disable-next-line react/no-array-index-key
@@ -289,7 +289,6 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
           />
           <button
             id="deck-code-button"
-            className="secondary"
             // 公式サイトの返事を待つあいだに 2 度押されると、2 つの結果が前後して書き込まれる。
             disabled={importing}
             onClick={startImport}
@@ -300,7 +299,7 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
       </details>
 
       <div className="builder-columns">
-        <div>
+        <div className="panel">
           <h2>カードをさがす</h2>
           <input
             ref={search}
@@ -325,7 +324,7 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
                   <span className="card-count">{inDeck === 0 ? "" : `${inDeck} 枚`}</span>
                   <button
                     type="button"
-                    className="secondary add"
+                    className="add"
                     disabled={!canAdd(entries, table, defId)}
                     onClick={(event) => change(defId, 1, event.currentTarget)}
                   >
@@ -342,7 +341,7 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
             )}
           </div>
         </div>
-        <div>
+        <div className="panel">
           <h2 id="deck-count" className={total === DECK_SIZE ? "deck-count full" : "deck-count"}>
             {total === 0 ? "デッキは空です" : `${total} / ${DECK_SIZE} 枚`}
           </h2>
@@ -356,7 +355,7 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
                     <CardRow key={defId} defId={defId} table={table}>
                       <button
                         type="button"
-                        className="secondary remove"
+                        className="remove"
                         onClick={(event) => change(defId, -1, event.currentTarget)}
                       >
                         −
@@ -364,7 +363,7 @@ export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
                       <span className="card-count">{count}</span>
                       <button
                         type="button"
-                        className="secondary add"
+                        className="add"
                         disabled={!canAdd(entries, table, defId)}
                         onClick={(event) => change(defId, 1, event.currentTarget)}
                       >

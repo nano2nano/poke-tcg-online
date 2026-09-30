@@ -367,29 +367,37 @@ export function Lobby({
 
   const unplayable = chosenSaved !== null && chosenSaved.errors.length > 0;
   return (
-    <>
-      <section id="join" className="panel">
-        <h1>対戦する</h1>
-        <p id="account" className="note">
-          {account.data !== undefined
-            ? accountText(account.data)
-            : account.isError
-              ? `アカウントを読めませんでした: ${messageOf(account.error)}`
-              : ""}
-        </p>
-        {remembered !== null && (
-          <p>
-            {/* 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。
-                リクエストやポーリングの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。 */}
-            <button
-              id="resume-button"
-              disabled={requesting || waiting}
-              onClick={() => onResume(remembered)}
-            >
-              指していた対戦へ戻る
-            </button>
+    <section id="join">
+      <header className="page-head">
+        <div>
+          <h1>対戦</h1>
+          <p id="account" className="note">
+            {account.data !== undefined
+              ? accountText(account.data)
+              : account.isError
+                ? `アカウントを読めませんでした: ${messageOf(account.error)}`
+                : ""}
           </p>
+        </div>
+        {remembered !== null && (
+          // 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。
+          // リクエストやポーリングの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。
+          <button
+            id="resume-button"
+            className="primary"
+            disabled={requesting || waiting}
+            onClick={() => onResume(remembered)}
+          >
+            指していた対戦へ戻る
+          </button>
         )}
+      </header>
+      <output id="join-status" className="status">
+        {status}
+      </output>
+
+      <section className="panel">
+        <h2>名前とデッキ</h2>
         <div className="fields">
           <label>
             名前
@@ -445,82 +453,91 @@ export function Lobby({
             </>
           )}
         </p>
-        <p>
-          <button
-            id="join-button"
-            className="primary"
-            disabled={requesting}
-            onClick={() => run((mine) => join(mine))}
-          >
-            対戦をさがす
-          </button>
-        </p>
-        <details className="room">
-          <summary>友だちと対戦する</summary>
-          <label>
-            ルームコード
-            <input
-              id="room"
-              placeholder="同じコードを入れた 2 人が対戦します"
-              value={room}
-              onChange={(event) => {
-                roomNow.current = event.target.value;
-                setRoom(event.target.value);
-              }}
-            />
-          </label>
-          <p className="note">
-            入れたら「対戦をさがす」を押します。空ならマッチングキューへ入ります。
-          </p>
-        </details>
-        <p>
-          <output id="join-status">{status}</output>
-        </p>
       </section>
 
-      <section id="bot-join" className="panel">
-        <h2>AI と対戦する</h2>
-        <p className="note">
-          学習した AI と、上で選んだデッキで指します。レーティングは動きません。
-        </p>
-        <div className="bot-form">
-          <label>
-            AI
-            <select id="bot" value={chosenBot} onChange={(event) => setBot(event.target.value)}>
-              {botNames.map(({ name: botName }) => (
-                <option key={botName} value={botName}>
-                  {botName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            AI のデッキ
-            <select
-              id="bot-deck"
-              value={chosenBotDeck}
-              onChange={(event) => setBotDeck(event.target.value)}
+      <div className="panels">
+        <section className="panel">
+          <h2>人と対戦する</h2>
+          <p className="note">相手が見つかると、対戦の卓へ移ります。</p>
+          <details className="room">
+            <summary>友だちと対戦する</summary>
+            <div className="fields">
+              <label>
+                ルームコード
+                <input
+                  id="room"
+                  placeholder="同じコードを入れた 2 人が対戦します"
+                  value={room}
+                  onChange={(event) => {
+                    roomNow.current = event.target.value;
+                    setRoom(event.target.value);
+                  }}
+                />
+              </label>
+            </div>
+            <p className="note">
+              入れたら「対戦をさがす」を押します。空ならマッチングキューへ入ります。
+            </p>
+          </details>
+          <div className="actions">
+            <button
+              id="join-button"
+              className="primary"
+              disabled={requesting}
+              onClick={() => run((mine) => join(mine))}
             >
-              {decks.map((deck) => (
-                <option key={deck.label} value={deck.label}>
-                  {deckName(deck)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            id="bot-button"
-            disabled={requesting || waiting || botNames.length === 0 || decks.length === 0}
-            onClick={() => run(joinBot)}
-          >
-            AI と対戦する
-          </button>
-        </div>
-        <p id="bot-status" className="note">
-          {botStatus}
-        </p>
-      </section>
-    </>
+              対戦をさがす
+            </button>
+          </div>
+        </section>
+
+        <section id="bot-join" className="panel">
+          <h2>AI と対戦する</h2>
+          <p className="note">
+            学習した AI と、上で選んだデッキで指します。レーティングは動きません。
+          </p>
+          <div className="fields">
+            <label>
+              AI
+              <select id="bot" value={chosenBot} onChange={(event) => setBot(event.target.value)}>
+                {botNames.map(({ name: botName }) => (
+                  <option key={botName} value={botName}>
+                    {botName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              AI のデッキ
+              <select
+                id="bot-deck"
+                value={chosenBotDeck}
+                onChange={(event) => setBotDeck(event.target.value)}
+              >
+                {decks.map((deck) => (
+                  <option key={deck.label} value={deck.label}>
+                    {deckName(deck)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="actions">
+            <button
+              id="bot-button"
+              className="primary"
+              disabled={requesting || waiting || botNames.length === 0 || decks.length === 0}
+              onClick={() => run(joinBot)}
+            >
+              AI と対戦する
+            </button>
+          </div>
+          <p id="bot-status" className="note">
+            {botStatus}
+          </p>
+        </section>
+      </div>
+    </section>
   );
 }
 

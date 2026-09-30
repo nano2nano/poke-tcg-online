@@ -18,8 +18,8 @@ function Site() {
           <Link to="/decks">デッキ</Link>
           <Link to="/history">対戦の記録</Link>
           <Link to="/watch">観戦</Link>
-          <SettingsButton id="site-settings-button" />
         </nav>
+        <SettingsButton id="site-settings-button" />
       </header>
       <main className="page">
         <Outlet />

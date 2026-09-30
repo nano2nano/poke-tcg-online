@@ -37,19 +37,21 @@ export function DeckList() {
 
   return (
     <section id="decks">
-      <div className="page-head">
-        <h1>デッキ</h1>
+      <header className="page-head">
+        <div>
+          <h1>デッキ</h1>
+          <p className="note">
+            カードを検索して組むか、公式のデッキコードから読み込みます。保存したデッキはプレイヤーに紐づいてサーバに残ります。
+          </p>
+        </div>
         <Link id="new-deck" to="/decks/new" className="button primary">
           新しいデッキを組む
         </Link>
-      </div>
-      <p className="note">
-        カードを検索して組むか、公式のデッキコードから読み込みます。保存したデッキはプレイヤーに紐づいてサーバに残ります。
-      </p>
-      <p id="decks-status" className="note">
+      </header>
+      <output id="decks-status" className="status ng">
         {failure === null ? status : `デッキを読めませんでした: ${messageOf(failure)}`}
-      </p>
-      {decks.data?.length === 0 && <p className="note">まだ保存したデッキがありません。</p>}
+      </output>
+      {decks.data?.length === 0 && <p className="empty-state">まだ保存したデッキがありません。</p>}
       <ul id="deck-list" className="deck-list">
         {decks.data?.map((deck) => {
           const defId = cover(deck);
@@ -72,17 +74,13 @@ export function DeckList() {
               <div className="deck-item-actions">
                 <button
                   type="button"
-                  className="secondary play-deck"
+                  className="play-deck"
                   disabled={!playable}
                   onClick={() => play(deck)}
                 >
                   このデッキで対戦
                 </button>
-                <button
-                  type="button"
-                  className="secondary delete-deck"
-                  onClick={() => remove(deck)}
-                >
+                <button type="button" className="danger delete-deck" onClick={() => remove(deck)}>
                   消す
                 </button>
               </div>

@@ -93,7 +93,7 @@ export function MotionSettingProvider({ children }: { children: ReactNode }) {
 export function MotionToggle() {
   const { animate, setAnimate } = use(MotionSetting);
   return (
-    <label className="motion-toggle">
+    <label className="setting">
       <input
         id="motion-toggle"
         type="checkbox"

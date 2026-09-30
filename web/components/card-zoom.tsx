@@ -86,7 +86,7 @@ export function CardZoom({ children }: { children: ReactNode }) {
             </div>
           )}
           <form method="dialog">
-            <button id="card-zoom-close" className="secondary" ref={close}>
+            <button id="card-zoom-close" ref={close}>
               閉じる
             </button>
           </form>

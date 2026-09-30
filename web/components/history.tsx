@@ -67,11 +67,15 @@ function PlayerHistory({
   return (
     <>
       <section id="history">
-        <div className="page-head">
-          <h1>対戦の記録</h1>
+        <header className="page-head">
+          <div>
+            <h1>対戦の記録</h1>
+            <p className="note">
+              指した対戦を 1 手ずつ辿れます。終わった対戦なので、両方の手札まで見えます。
+            </p>
+          </div>
           <button
             id="history-button"
-            className="secondary"
             onClick={() => {
               setFailure("");
               // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
@@ -82,18 +86,17 @@ function PlayerHistory({
           >
             読み直す
           </button>
-        </div>
-        <p className="note">
-          指した対戦を 1 手ずつ辿れます。終わった対戦なので、両方の手札まで見えます。
-        </p>
-        <p id="history-status" className="note">
+        </header>
+        <output id="history-status" className="status ng">
           {failure ||
             (matches.isError && !matches.isFetching
               ? `一覧を出せませんでした: ${messageOf(matches.error)}`
               : accountFailure && `プレイヤーを用意できませんでした: ${accountFailure}`)}
-        </p>
+        </output>
         <div id="history-list" className="history-list">
-          {matches.data?.length === 0 && "まだ読み返せる対戦がありません。"}
+          {matches.data?.length === 0 && (
+            <p className="empty-state">まだ読み返せる対戦がありません。</p>
+          )}
           {matches.data?.map((summary) => (
             <button
               key={summary.matchId}
@@ -216,34 +219,19 @@ function Replay({
     <section id="replay">
       <h2>リプレイ</h2>
       <div className="replay-controls">
-        <button id="replay-first" className="secondary" disabled={waiting} onClick={step(() => 0)}>
+        <button id="replay-first" disabled={waiting} onClick={step(() => 0)}>
           さいしょ
         </button>
-        <button
-          id="replay-prev"
-          className="secondary"
-          disabled={waiting}
-          onClick={step(({ wanted }) => wanted - 1)}
-        >
+        <button id="replay-prev" disabled={waiting} onClick={step(({ wanted }) => wanted - 1)}>
           ◀ 1 手
         </button>
-        <button
-          id="replay-next"
-          className="secondary"
-          disabled={waiting}
-          onClick={step(({ wanted }) => wanted + 1)}
-        >
+        <button id="replay-next" disabled={waiting} onClick={step(({ wanted }) => wanted + 1)}>
           1 手 ▶
         </button>
-        <button
-          id="replay-last"
-          className="secondary"
-          disabled={waiting}
-          onClick={step(({ moveCount }) => moveCount)}
-        >
+        <button id="replay-last" disabled={waiting} onClick={step(({ moveCount }) => moveCount)}>
           さいご
         </button>
-        <button id="replay-close" className="secondary" onClick={onClose}>
+        <button id="replay-close" onClick={onClose}>
           閉じる
         </button>
         <SettingsButton id="replay-settings-button" />
