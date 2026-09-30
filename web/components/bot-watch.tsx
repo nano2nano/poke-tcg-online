@@ -58,62 +58,73 @@ export function BotWatchForm() {
 
   const ready = botNames.length > 0 && decks.length > 0;
   return (
-    <section id="bot-watch" className="panel">
-      <h1>観戦</h1>
-      <p className="note">
-        人の対戦は、指している人から観戦のリンクを受け取って開きます。ここでは AI を 2
-        人選んで指させ、1 手ずつ見ます。両者の手札も見え、止めて 1 手ずつ進めたり戻したりできます。
-      </p>
-      <div className="bot-form">
-        {([0, 1] as const).map((seat) => (
-          <fieldset key={seat} className="watch-seat">
-            <legend>{seat === 0 ? "手前" : "向かい"}</legend>
-            <label>
-              AI{" "}
-              <select
-                id={`watch-bot-${seat}`}
-                value={chosen[seat]!.bot}
-                onChange={(event) => pick(seat, { bot: event.target.value })}
-              >
-                {botNames.map(({ name }) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              デッキ{" "}
-              <select
-                id={`watch-deck-${seat}`}
-                value={chosen[seat]!.deck}
-                onChange={(event) => pick(seat, { deck: event.target.value })}
-              >
-                {decks.map((deck) => (
-                  <option key={deck.label} value={deck.label}>
-                    {presetName(deck, table)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </fieldset>
-        ))}
-        <button
-          id="watch-bots-button"
-          disabled={requesting || !ready}
-          onClick={() => {
-            setRequesting(true);
-            start()
-              .catch((error: unknown) => setStatus(`始められませんでした: ${messageOf(error)}`))
-              .finally(() => setRequesting(false));
-          }}
-        >
-          AI どうしの対戦を見る
-        </button>
-      </div>
-      <p>
-        <output id="watch-bots-status">{status}</output>
-      </p>
+    <section id="bot-watch">
+      <header className="page-head">
+        <div>
+          <h1>観戦</h1>
+          <p className="note">
+            人の対戦は、指している人から観戦のリンクを受け取って開きます。ここでは AI を 2
+            人選んで指させ、1 手ずつ見ます。両者の手札も見え、止めて 1
+            手ずつ進めたり戻したりできます。
+          </p>
+        </div>
+      </header>
+      <output id="watch-bots-status" className="status">
+        {status}
+      </output>
+      <section className="panel">
+        <h2>AI どうしの対戦</h2>
+        <div className="fields">
+          {([0, 1] as const).map((seat) => (
+            <fieldset key={seat} className="watch-seat">
+              <legend>{seat === 0 ? "手前" : "向かい"}</legend>
+              <label>
+                AI
+                <select
+                  id={`watch-bot-${seat}`}
+                  value={chosen[seat]!.bot}
+                  onChange={(event) => pick(seat, { bot: event.target.value })}
+                >
+                  {botNames.map(({ name }) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                デッキ
+                <select
+                  id={`watch-deck-${seat}`}
+                  value={chosen[seat]!.deck}
+                  onChange={(event) => pick(seat, { deck: event.target.value })}
+                >
+                  {decks.map((deck) => (
+                    <option key={deck.label} value={deck.label}>
+                      {presetName(deck, table)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </fieldset>
+          ))}
+        </div>
+        <div className="actions">
+          <button
+            id="watch-bots-button"
+            className="primary"
+            disabled={requesting || !ready}
+            onClick={() => {
+              setRequesting(true);
+              start()
+                .catch((error: unknown) => setStatus(`始められませんでした: ${messageOf(error)}`))
+                .finally(() => setRequesting(false));
+            }}
+          >
+            AI どうしの対戦を見る
+          </button>
+        </div>
+      </section>
     </section>
   );
 }

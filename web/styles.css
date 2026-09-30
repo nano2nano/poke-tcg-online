@@ -1,16 +1,23 @@
 :root {
   color-scheme: light dark;
+  accent-color: var(--accent);
   --line: color-mix(in srgb, currentColor 20%, transparent);
+  /* 入力欄とボタンの枠は区切り線より濃くし、押せるものと見分けられるようにする。 */
+  --control-line: color-mix(in srgb, currentColor 35%, transparent);
+  --muted: color-mix(in srgb, currentColor 65%, transparent);
+  --accent: #2f6fde;
+  --ok: light-dark(#1d6b3a, #7bd88f);
+  --ng: light-dark(#a3241c, #ff8a80);
+  --radius: 8px;
 }
 body {
-  margin: 0 auto;
-  padding: 16px;
-  max-width: 1100px;
+  margin: 0;
   font-family: system-ui, "Hiragino Kaku Gothic ProN", sans-serif;
   line-height: 1.6;
 }
 h1 {
-  font-size: 1.3rem;
+  font-size: 1.5rem;
+  line-height: 1.3;
 }
 h2 {
   font-size: 1rem;
@@ -25,143 +32,262 @@ label {
   display: block;
   margin: 6px 0;
 }
-input {
-  padding: 4px 6px;
+
+/*
+ * ボタンと入力欄は高さと枠をそろえる。ボタンは既定・主（`primary`）・取り消せない操作（`danger`）の 3 つ。
+ * 詳細度を 0 にして、盤面の部品がクラス 1 つで上書きできるようにする。
+ * 選ぶ画面のカード（`choice-card`）はカードとして描くので含めない。
+ */
+:where(button:not(.choice-card), .button, input:not([type="checkbox"], [type="radio"]), select) {
+  box-sizing: border-box;
+  min-height: 2.5rem;
+  max-width: 100%;
+  padding: 7px 12px;
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius);
+  background: Canvas;
+  color: inherit;
   font: inherit;
+  line-height: 1.5;
 }
-button {
-  padding: 6px 10px;
-  font: inherit;
+:where(button:not(.choice-card), .button) {
+  padding-inline: 16px;
   cursor: pointer;
-}
-button.danger {
-  margin-top: 12px;
-}
-/* ページの枠。卓（対戦と観戦）はこの枠に入れず、画面いっぱいに描く。 */
-.site-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px 16px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--line);
-}
-.site-title {
-  font-weight: bold;
-  color: inherit;
   text-decoration: none;
 }
-.site-nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px;
+:where(.button) {
+  display: inline-block;
 }
-.site-nav a {
-  padding: 4px 10px;
-  border-radius: 6px;
-  color: inherit;
-  text-decoration: none;
+:where(button:enabled, .button):hover {
+  background: color-mix(in srgb, currentColor 7%, Canvas);
 }
-.site-nav a[aria-current="page"] {
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-weight: bold;
+:where(button:not(.choice-card):disabled) {
+  cursor: default;
+  opacity: 0.5;
 }
-.page {
-  padding-top: 8px;
+:where(button, .button, input, select, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
-.page-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.panel {
-  max-width: 640px;
-  margin: 16px 0;
-  padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.panel > h1,
-.panel > h2 {
-  margin-top: 0;
-}
-.fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-}
-.fields label,
-.bot-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-width: 100%;
-  margin: 0;
-  font-size: 0.85rem;
-}
-.fields input,
-.fields select {
-  font-size: 1rem;
-  min-width: 12rem;
-  max-width: 100%;
-}
-select {
-  padding: 4px 6px;
-  font: inherit;
-  max-width: 100%;
-}
-button.primary,
-a.button.primary {
-  padding: 10px 24px;
-  border: none;
-  border-radius: 8px;
-  background: #2f6fde;
+.primary {
+  border-color: var(--accent);
+  background: var(--accent);
   color: #fff;
   font-weight: bold;
-  text-decoration: none;
 }
-button.primary:disabled {
-  opacity: 0.5;
+.primary:is(:enabled, .button):hover {
+  background: color-mix(in srgb, var(--accent) 85%, #000);
+}
+.danger {
+  color: var(--ng);
+  border-color: color-mix(in srgb, var(--ng) 50%, transparent);
+}
+.danger:enabled:hover {
+  background: color-mix(in srgb, var(--ng) 10%, Canvas);
 }
 details > summary {
   cursor: pointer;
 }
-.room {
-  margin: 8px 0;
+
+/* ページの枠。卓（対戦と観戦）はこの枠に入れず、画面いっぱいに描く。 */
+:root:has(.site-header) {
+  /* フォーカスでスクロールした入力欄を、上に留まるヘッダーの下に隠さない。 */
+  scroll-padding-top: 64px;
 }
-.after-match {
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 0 24px;
+  min-height: 56px;
+  padding-inline: max(16px, (100% - 1100px) / 2);
+  border-bottom: 1px solid var(--line);
+  background: Canvas;
+}
+.site-title {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.site-nav {
+  display: flex;
+  flex: 1;
+  align-self: stretch;
+  overflow-x: auto;
+}
+.site-nav a {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.site-nav a:hover,
+.site-header > button:hover {
+  color: CanvasText;
+}
+.site-nav a[aria-current="page"] {
+  border-bottom-color: var(--accent);
+  color: inherit;
+  font-weight: bold;
+}
+.site-header > button {
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+}
+/* 狭い画面では、ページの切り替えを 2 段目に置く。2 段のヘッダーを上に留めると本文が狭くなるので、留めない。 */
+@media (max-width: 640px) {
+  .site-header {
+    position: static;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    padding-top: 8px;
+  }
+  .site-nav {
+    order: 1;
+    flex-basis: 100%;
+    min-height: 44px;
+    margin-inline: -12px;
+  }
+}
+.page {
+  width: min(100% - 32px, 1100px);
+  margin-inline: auto;
+  padding-block: 24px 48px;
+}
+.page-head {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-bottom: 24px;
+}
+.page-head h1 {
+  margin: 0;
+}
+.page-head p {
+  margin: 4px 0 0;
+}
+.breadcrumb {
+  margin: 0 0 8px;
+  font-size: 0.875rem;
+}
+.breadcrumb a {
+  color: var(--muted);
+}
+.panel {
+  margin: 0 0 16px;
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.panel > h2 {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
   gap: 16px;
 }
-
-/* 保存したデッキの一覧。1 行に絵と名前、対戦に使うボタンを並べる。 */
-.deck-list {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+.panels > .panel,
+.builder-columns > .panel {
+  margin: 0;
+}
+/* 項目名を上に置く入力欄の並び。狭い画面では 1 列になる。 */
+.fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+.fields label {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: bold;
+}
+.fields :is(input, select) {
+  font-size: 1rem;
+  font-weight: normal;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  margin: 16px 0 0;
+}
+.panel > .note:last-child {
+  margin-bottom: 0;
+}
+/* 操作の結果を伝える欄。空のあいだは場所を取らない。 */
+.status {
+  display: block;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 10%, Canvas);
+  white-space: pre-wrap;
+}
+.status:empty {
+  display: none;
+}
+.status.ok {
+  background: color-mix(in srgb, var(--ok) 12%, Canvas);
+  color: var(--ok);
+}
+.status.ng {
+  background: color-mix(in srgb, var(--ng) 12%, Canvas);
+  color: var(--ng);
+}
+.empty-state {
+  margin: 0;
+  padding: 32px 16px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 保存したデッキの一覧。1 枚に絵と名前、対戦に使うボタンを並べる。 */
+.deck-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .deck-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: 12px;
+  padding: 16px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
 }
 .deck-open {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   color: inherit;
   text-decoration: none;
+}
+.deck-open:hover strong {
+  text-decoration: underline;
 }
 .deck-open strong {
   display: block;
@@ -170,14 +296,18 @@ details > summary {
   font-size: 0.85rem;
 }
 .deck-meta.ok {
-  color: #1d6b3a;
+  color: var(--ok);
 }
 .deck-meta.ng {
-  color: #a3241c;
+  color: var(--ng);
 }
 .deck-item-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  margin-top: auto;
+}
+.deck-item-actions > .danger {
+  margin-left: auto;
 }
 
 /* デッキを組むページ。広い画面では、さがす列とデッキの列を並べる。 */
@@ -186,11 +316,13 @@ details > summary {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  margin-bottom: 16px;
 }
 #deck-name {
   flex: 1;
   min-width: 12rem;
-  font-size: 1.1rem;
+  font-size: 1.25rem;
+  font-weight: bold;
 }
 .builder-columns {
   display: grid;
@@ -206,11 +338,14 @@ details > summary {
   }
   #card-results,
   #deck-cards {
-    max-height: calc(100dvh - 260px);
+    max-height: calc(100dvh - 340px);
     overflow-y: auto;
   }
 }
 
+.table {
+  padding: 16px;
+}
 .clock {
   font-variant-numeric: tabular-nums;
   padding: 6px 0;
@@ -319,6 +454,9 @@ button[aria-pressed="true"] {
 .moves button {
   text-align: left;
 }
+.end-turn {
+  padding: 10px 24px;
+}
 .moves button[aria-disabled="true"],
 .end-turn[aria-disabled="true"] {
   cursor: progress;
@@ -341,71 +479,83 @@ button[aria-pressed="true"] {
   opacity: 0.6;
 }
 
-button.secondary {
-  background: #eef1f5;
-  color: #1c2530;
+.after-match {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+#concede-button {
+  margin-top: 12px;
 }
 
-.deck-status {
-  margin: 0.5rem 0;
-  white-space: pre-wrap;
+.deck-status p {
+  margin: 0;
 }
-
-.deck-status.ok {
-  color: #1d6b3a;
-}
-
-.deck-status.ng {
-  color: #a3241c;
-}
-
 .deck-status .choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  margin: 0.25rem 0 0.75rem;
+  gap: 4px;
+  margin: 6px 0;
 }
-
 .deck-status .choices button {
+  padding: 2px 8px;
   font-size: 0.85rem;
-  padding: 0.2rem 0.5rem;
 }
 
+/* 対戦の記録。1 行が 1 局で、押すとその下にリプレイを開く。 */
 .history-list {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  margin: 0.5rem 0;
+  gap: 8px;
 }
-
 .history-list button {
+  padding: 12px 16px;
   text-align: left;
-  background: #eef1f5;
-  color: #1c2530;
 }
 
 .replay-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  margin: 0.5rem 0;
+  gap: 8px;
+  margin: 8px 0;
 }
-.motion-toggle,
+#replay-close {
+  margin-left: auto;
+}
 .setting {
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
+  align-items: flex-start;
+  gap: 8px;
+}
+.setting > input {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0.3em 0 0;
 }
 .settings {
-  max-width: min(92vw, 480px);
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  width: min(92vw, 480px);
+  box-sizing: border-box;
+  padding: 24px;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
 }
 .settings::backdrop {
   background: rgb(0 0 0 / 0.5);
 }
 .settings h2 {
-  margin-top: 0;
+  margin: 0 0 16px;
+  font-size: 1.25rem;
+}
+/* 説明は、チェックボックスの右の文字とそろえる。 */
+.settings .note {
+  margin-left: calc(1rem + 8px);
+}
+.settings form {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
 }
 .watch-link {
   display: block;
@@ -416,12 +566,12 @@ button.secondary {
 
 #card-search {
   width: 100%;
-  box-sizing: border-box;
+  margin-bottom: 8px;
 }
 
 .card-list h3 {
   font-size: 0.9rem;
-  margin: 10px 0 2px;
+  margin: 12px 0 2px;
 }
 
 .card-row {
@@ -429,7 +579,7 @@ button.secondary {
   align-items: center;
   gap: 6px;
   border-bottom: 1px solid var(--line);
-  padding: 2px 0;
+  padding: 4px 0;
 }
 
 .card-label {
@@ -452,33 +602,44 @@ button.secondary {
   font-variant-numeric: tabular-nums;
 }
 
-.deck-count.full {
-  color: #1d6b3a;
+.deck-count {
+  margin: 0 0 8px;
 }
-
-.bot-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.5rem;
-  margin: 8px 0;
+.deck-count.full {
+  color: var(--ok);
 }
 
 .deck-code {
-  margin: 8px 0;
+  margin: 0 0 16px;
 }
 
 .deck-code-form {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 #deck-code {
-  width: 16rem;
+  width: 20rem;
   max-width: 100%;
+}
+
+.watch-seat {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.watch-seat > legend {
+  padding: 0 4px;
+  font-weight: bold;
+}
+.watch-seat > label + label {
+  margin-top: 8px;
 }
 
 /* 盤面。カードの幅だけを --w で決め、高さは実物の縦横比から出す。 */
@@ -917,10 +1078,6 @@ button.choice-card:enabled > .card {
  * 見えている高さと盤面の幅のうち、きついほうから決める。リプレイはページの流れの中にあるので、ここに含めない。
  */
 @media (min-width: 1024px) {
-  body:has(> .table:not([hidden])) {
-    max-width: none;
-    padding: 8px 16px;
-  }
   .table:not([hidden]) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 400px);
@@ -929,7 +1086,9 @@ button.choice-card:enabled > .card {
       "board status"
       "board panel";
     column-gap: 16px;
-    height: calc(100dvh - 16px);
+    box-sizing: border-box;
+    height: 100dvh;
+    padding: 8px 16px;
   }
   .table-status {
     grid-area: status;
@@ -1297,12 +1456,6 @@ button.choice-card:enabled > .card {
 .watch-move {
   min-height: 3.2em;
   margin: 6px 0 0;
-}
-.watch-seat {
-  margin: 0;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
 }
 /* 右クリックしたカードでできる手。popover の既定は画面の真ん中なので、置いた位置に出す。 */
 .move-menu {

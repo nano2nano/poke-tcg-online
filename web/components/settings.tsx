@@ -61,9 +61,7 @@ export function Settings({ children }: { children: ReactNode }) {
             "場のポケモンと、キーボードで開いたときは、いつもメニューを出します。"}
         </p>
         <form method="dialog">
-          <button id="settings-close" className="secondary">
-            閉じる
-          </button>
+          <button id="settings-close">閉じる</button>
         </form>
       </dialog>
     </SettingsContext>
@@ -74,7 +72,7 @@ export function Settings({ children }: { children: ReactNode }) {
 export function SettingsButton({ id }: { id: string }) {
   const { open } = use(SettingsContext);
   return (
-    <button id={id} type="button" className="secondary" onClick={open}>
+    <button id={id} type="button" onClick={open}>
       設定
     </button>
   );
