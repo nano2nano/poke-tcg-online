@@ -8,6 +8,7 @@ import type { CardDefId, Move, Player, PlayerView, SpectatorView } from "../../s
 import type { ReplayFrame } from "../../src/history.js";
 import type {
   AnswerDestination,
+  AttackView,
   DeckPlacementView,
   MulliganReveal,
   SetupView,
@@ -36,6 +37,7 @@ export interface SeatState {
   deckPlacement: DeckPlacementView | null;
   answerDestinations: (AnswerDestination | null)[] | null;
   revealedDeck: CardDefId[] | null;
+  attacks: AttackView[] | null;
   mulligans: MulliganReveal[];
   firstPlayer: Player | null;
   clock: ClockView | null;
@@ -64,6 +66,7 @@ export function initialSeatState(seat: Player): SeatState {
     deckPlacement: null,
     answerDestinations: null,
     revealedDeck: null,
+    attacks: null,
     mulligans: [],
     firstPlayer: null,
     clock: null,
@@ -91,6 +94,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
         deckPlacement: action.deckPlacement,
         answerDestinations: action.answerDestinations,
         revealedDeck: action.revealedDeck,
+        attacks: action.attacks,
         // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
         mulligans: action.mulligans ?? state.mulligans,
         clock: action.clock,
@@ -115,6 +119,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
           deckPlacement: null,
           answerDestinations: null,
           revealedDeck: null,
+          attacks: null,
           spectatorToken: null,
           ended,
         },

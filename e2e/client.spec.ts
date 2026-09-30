@@ -2499,6 +2499,7 @@ function crowdedSync(handSize: number): object {
     deckPlacement: null,
     answerDestinations: null,
     revealedDeck: null,
+    attacks: null,
     mulligans: [],
     firstPlayer: 0,
     clock: { bankMs: [600_000, 600_000], moveRemainingMs: 60_000, toMove: 0 },

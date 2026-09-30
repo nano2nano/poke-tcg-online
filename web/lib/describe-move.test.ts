@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChoiceAnswer, Move, PlayerView } from "../../src/engine.js";
-import { viewFor } from "../../src/match.js";
-import { ensureCards, newMatch } from "../../tests/helpers.js";
+import { toMove, viewFor } from "../../src/match.js";
+import { ensureCards, finishSetup, newMatch } from "../../tests/helpers.js";
 import type { CardTable } from "./cards.js";
 import { readerView } from "./describe.js";
 import { choicePrompt, describeMove, replayStatusText } from "./describe-move.js";
@@ -19,6 +19,27 @@ describe("describeMove", () => {
 
   it("HP を当てる答えは、答える HP で出す", () => {
     expect(answering({ kind: "hpGuess", value: 120 })).toBe("HP 120");
+  });
+});
+
+describe("ワザを使う手", () => {
+  it("特性やどうぐで使えるようになったワザは、名前と、どのカードのワザかで出す", () => {
+    ensureCards();
+    const match = newMatch("describe-move-attack");
+    finishSetup(match);
+    const player = toMove(match)!;
+    const view = viewFor(match, player);
+    const own = view.self.active?.stack.at(-1)?.defId;
+    if (own === undefined) throw new Error("バトルポケモンがいない");
+    const cards = { 与える: { name: "与えるカード" } } as unknown as CardTable;
+    const attacks = [
+      { name: "自分のワザ", from: own },
+      { name: "もらったワザ", from: "与える" },
+    ];
+    const attack = (attackIndex: number) =>
+      describeMove({ type: "Attack", player, attackIndex }, { view, cards, attacks });
+    expect(attack(0)).toBe("ワザ「自分のワザ」を使う");
+    expect(attack(1)).toBe("ワザ「もらったワザ」を使う（与えるカードのワザ）");
   });
 });
 

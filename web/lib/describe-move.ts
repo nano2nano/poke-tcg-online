@@ -7,7 +7,12 @@
 
 import type { ChoiceAnswer, Move, Player, Zone } from "../../src/engine.js";
 import type { ReplayFrame } from "../../src/history.js";
-import type { AnswerDestination, DeckPlacementView, SetupView } from "../../src/match.js";
+import type {
+  AnswerDestination,
+  AttackView,
+  DeckPlacementView,
+  SetupView,
+} from "../../src/match.js";
 import type { CardTable } from "./cards.js";
 import {
   abilityName,
@@ -27,6 +32,8 @@ type Pokemon = NonNullable<Side["active"]>;
 export interface MoveContext {
   view: ReaderView | null;
   cards: CardTable;
+  /** 座席のバトルポケモンが宣言できるワザ。リプレイと観戦には無い。 */
+  attacks?: readonly AttackView[] | null;
 }
 
 /**
@@ -200,10 +207,15 @@ export function describeMove(
     case "DiscardOwnPokemon":
       return `${target(move.target)} をトラッシュする`;
     case "Attack": {
-      const name = attackName(move, context);
-      return name === undefined
-        ? `${move.attackIndex + 1} 番目のワザを使う`
-        : `ワザ「${name}」を使う`;
+      const listed =
+        move.player === context.view?.viewer ? context.attacks?.[move.attackIndex] : undefined;
+      const name = listed?.name ?? attackName(move, context);
+      if (name === undefined) return `${move.attackIndex + 1} 番目のワザを使う`;
+      // 特性やどうぐで使えるようになったワザは、どのカードのワザかを添える。
+      const own = listed === undefined || listed.from === activeDefId(move.player, context);
+      return own
+        ? `ワザ「${name}」を使う`
+        : `ワザ「${name}」を使う（${nameOf(context.cards, listed.from)}のワザ）`;
     }
     case "EndTurn":
       return "番を終わる";
@@ -214,14 +226,16 @@ export function describeMove(
   }
 }
 
-function attackName(
-  move: Extract<Move, { type: "Attack" }>,
-  { view, cards }: MoveContext,
-): string | undefined {
-  const side = move.player === view?.viewer ? view.self : view?.opponent;
+function attackName(move: Extract<Move, { type: "Attack" }>, context: MoveContext) {
+  return printedAttack(context.cards, activeDefId(move.player, context), move.attackIndex);
+}
+
+/** `player` のバトルポケモンのいちばん上のカード。 */
+function activeDefId(player: Player, { view }: MoveContext): string | undefined {
+  const side = player === view?.viewer ? view.self : view?.opponent;
   const active = side?.active;
   if (active == null || "concealed" in active) return undefined;
-  return printedAttack(cards, active.stack.at(-1)?.defId, move.attackIndex);
+  return active.stack.at(-1)?.defId;
 }
 
 /**

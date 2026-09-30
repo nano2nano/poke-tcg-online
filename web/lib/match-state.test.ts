@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Player } from "../../src/engine.js";
 import {
   answerDestinationsFor,
+  attacksFor,
   clockView,
   deckPlacementFor,
   legalMovesFor,
@@ -60,6 +61,7 @@ function syncOf(match: Match, seat: Player): SyncMessage {
     deckPlacement: deckPlacementFor(match, seat),
     answerDestinations: answerDestinationsFor(match, seat),
     revealedDeck: revealedDeckFor(match, seat),
+    attacks: attacksFor(match, seat),
     mulligans: match.mulligans,
     firstPlayer: match.firstPlayer,
     clock: clockView(match, 0),
@@ -80,6 +82,7 @@ function deltaOf(sync: SyncMessage): DeltaMessage {
     deckPlacement: sync.deckPlacement,
     answerDestinations: sync.answerDestinations,
     revealedDeck: sync.revealedDeck,
+    attacks: sync.attacks,
     clock: sync.clock,
   };
 }

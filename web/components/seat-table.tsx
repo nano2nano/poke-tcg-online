@@ -52,8 +52,11 @@ export function SeatTable({
   const seating = useSeat(seated, feed.show);
   const { state, connection, events, shuffle, left, send } = seating;
   const { table } = useCardData();
-  const { view, legalMoves, setup, deckPlacement, answerDestinations } = state;
-  const context = useMemo<MoveContext>(() => ({ view, cards: table }), [view, table]);
+  const { view, legalMoves, setup, deckPlacement, answerDestinations, attacks } = state;
+  const context = useMemo<MoveContext>(
+    () => ({ view, cards: table, attacks }),
+    [view, table, attacks],
+  );
   const listed = useMemo(
     () => listMoves({ legalMoves, setup, deckPlacement, answerDestinations }, context),
     [legalMoves, setup, deckPlacement, answerDestinations, context],

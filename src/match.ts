@@ -12,6 +12,7 @@
 
 import {
   applyMove,
+  availableAttacks,
   benchCapacity,
   cardsInZone,
   createGame,
@@ -898,6 +899,26 @@ export function answerDestinationsFor(
   seat: Player,
 ): (AnswerDestination | null)[] | null {
   return toMove(match) === seat ? match.answerDestinations : null;
+}
+
+/** 宣言できるワザの 1 つ（3.2 節の `attacks`）。`from` はワザを印刷しているカード。 */
+export interface AttackView {
+  name: string;
+  from: CardDefId;
+}
+
+/**
+ * 手番の座席のバトルポケモンが宣言できるワザの表（3.2 節の `attacks`）。`Attack` の `attackIndex` はこの表の位置で、
+ * 特性やどうぐで使えるようになったワザは、印刷のワザのあとに並ぶ。画面は印刷のワザしか引けないので、
+ * これが無いとそのワザの名前が分からない。
+ */
+export function attacksFor(match: Match, seat: Player): AttackView[] | null {
+  const active = match.state.players[seat].active;
+  if (toMove(match) !== seat || active === null) return null;
+  return availableAttacks(match.state, active.inPlayId).map(({ from }) => ({
+    name: from.label,
+    from: from.defId,
+  }));
 }
 
 /**

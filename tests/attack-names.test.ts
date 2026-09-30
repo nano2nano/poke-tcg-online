@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { availableAttacks, type Player } from "../src/engine.js";
 import { cardIndex } from "../src/card-index.js";
+import { attacksFor, toMove } from "../src/match.js";
 import { newMatch, playToEnd } from "./helpers.js";
 
 describe("宣言できるワザの表", () => {
@@ -30,5 +31,25 @@ describe("宣言できるワザの表", () => {
     }
     // 1 種類のポケモンしか見ていなければ、並べ方の違いに気付けない。
     expect(checked.size).toBeGreaterThan(1);
+  });
+
+  it("手番の座席へだけ、表の並びのまま、ワザの名前と印刷しているカードを送る", () => {
+    let checked = 0;
+    playToEnd(newMatch("ワザの表を送る"), 7, {
+      maxMoves: 200,
+      inspect: (match, seat: Player) => {
+        const active = match.state.players[seat].active;
+        if (toMove(match) !== seat || active === null) {
+          expect(attacksFor(match, seat)).toBeNull();
+          return;
+        }
+        const table = availableAttacks(match.state, active.inPlayId);
+        expect(attacksFor(match, seat)).toEqual(
+          table.map(({ from }) => ({ name: from.label, from: from.defId })),
+        );
+        checked += 1;
+      },
+    });
+    expect(checked).toBeGreaterThan(0);
   });
 });
