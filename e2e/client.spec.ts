@@ -105,8 +105,11 @@ async function playOne(page: Page): Promise<boolean> {
       await page.locator("#setup-submit").click({ timeout: 1_000 });
       return true;
     }
-    // 番を終える手はほかの手と別に置く。ほかに指せる手があれば、そちらを先に指す。両方は同じ描画で出る。
+    // 番の中の手は畳んだ一覧に入るので、開いてから指す。開いた一覧は開いたままになる。
+    // 一覧の手があればそちらを先に指し、無ければ番を終える。両方は同じ描画で出る。
     await page.locator("#moves button, #end-turn").first().waitFor({ timeout: 1_000 });
+    const folded = page.locator("#all-moves:not([open]) > summary");
+    if (await folded.isVisible()) await folded.click({ timeout: 1_000 });
     const move = page.locator("#moves button").first();
     await ((await move.isVisible()) ? move : page.locator("#end-turn")).click({ timeout: 1_000 });
     return true;
@@ -2561,6 +2564,8 @@ for (const viewport of [
     for (const card of await page.locator("#table .card").all()) {
       expect(overlaps(endTurn, (await card.boundingBox()) as Box)).toBe(false);
     }
+    // 一覧を開いても、時計、投了、できごとの記録を画面の外へ押し出さない。
+    await page.click("#all-moves > summary");
     const screen = { x: 0, y: 0, ...viewport };
     for (const selector of ["#clock", "#concede-button", "#moves button >> nth=0", "#event-log"]) {
       await expectInside(page, selector, screen);
@@ -2692,11 +2697,23 @@ test("番を終える手は指せる手の並びに混ぜず、盤面の決ま�
   expect(sent[0]!.move).toEqual({ type: "EndTurn", player: 0 });
 });
 
+test("番の中の手は畳んだ「すべての手」に入れ、開けば並ぶ", async ({ page }) => {
+  const sync = crowdedSync(5) as CrowdedSync;
+  await openWith(page, sync);
+  const all = page.locator("#all-moves");
+  const first = page.locator("#moves button").first();
+  await expect(all).not.toHaveAttribute("open");
+  await expect(first).toBeHidden();
+  await page.click("#all-moves > summary");
+  await expect(first).toBeVisible();
+});
+
 test("つける先だけが違う手は見出しで見分けられ、ボタンに載せると盤面のつける先を囲む", async ({
   page,
 }) => {
   const sync = crowdedSync(20) as CrowdedSync;
   const sent = await openWith(page, sync);
+  await page.click("#all-moves > summary");
   const buttons = page.locator("#moves button");
   // 番を終える手は盤面のボタンで指す。
   await expect(buttons).toHaveCount(sync.legalMoves.length - 1);
@@ -3173,6 +3190,9 @@ test("効果でポケモンを選ぶあいだは、盤面の候補を押すと�
   const pokemon = (id: string | undefined) => page.locator(`#opponent [data-in-play-id="${id}"]`);
   await expect(page.locator("#table .pokemon[data-choosable]")).toHaveCount(2);
   await expect(page.locator("#choice-sheet")).toHaveCount(0);
+  // いま選ぶものなので、答えの一覧は畳まない。
+  await expect(page.locator("#all-moves")).toHaveCount(0);
+  await expect(page.locator("#moves button").first()).toBeVisible();
 
   await pokemon(third).click();
   await expect(page.locator("#card-zoom")).toBeVisible();

@@ -62,6 +62,8 @@ export function SeatTable({
   const [aim, setAim] = useState<Aim>({ hovered: null, focused: null });
   // カードを落とした先で指せる手が 2 つ以上あれば、ボタンをそれだけに絞って選ばせる。一覧が変わったら解く。
   const [narrowed, setNarrowed] = useState<readonly string[] | null>(null);
+  // 畳んだ「すべての手」を開いたら、選ぶ画面を挟んでも開いたままにする。
+  const [listOpen, setListOpen] = useState(false);
   // 右クリックしたカードでできる手を、その場に出す。一覧が変わったら閉じる。
   const [menu, setMenu] = useState<Menu | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -298,7 +300,13 @@ export function SeatTable({
               context={context}
               listed={listed}
               narrowed={narrowed}
-              onWiden={() => setNarrowed(null)}
+              // ほかの手を出すと頼まれたので、畳んだ一覧も開く。
+              onWiden={() => {
+                setNarrowed(null);
+                setListOpen(true);
+              }}
+              listOpen={listOpen}
+              onListToggle={setListOpen}
               disabled={disabled}
               onAim={onAim}
             />
@@ -509,6 +517,8 @@ function Moves({
   listed,
   narrowed,
   onWiden,
+  listOpen,
+  onListToggle,
   disabled,
   onAim,
 }: {
@@ -518,6 +528,9 @@ function Moves({
   /** カードを落とした先で指せる手。あれば、ボタンをそれだけにする。 */
   narrowed: readonly string[] | null;
   onWiden: () => void;
+  /** 畳んだ「すべての手」を開いているか。 */
+  listOpen: boolean;
+  onListToggle: (open: boolean) => void;
   disabled: boolean;
   onAim: (kind: "hovered" | "focused", key: string | null) => void;
 }) {
@@ -535,6 +548,37 @@ function Moves({
     narrowed === null ? listed.buttons : listed.buttons.filter(({ key }) => narrowed.includes(key));
   // 絞ったときは、絞って見せた手だけを見せたことにする。
   const offered = narrowed === null ? listed.offered : buttons.map(({ index }) => index);
+  // 番の中の手は盤面のカードから指すので、一覧は畳んでおく。選択への答えと、落とした先で絞った手は、
+  // いま選ぶものなので畳まない。
+  const foldable =
+    narrowed === null &&
+    buttons.length > 0 &&
+    buttons.every(({ move }) => move.type !== "AnswerChoice");
+
+  const list = (
+    <div id="moves" className="moves">
+      {moves === null
+        ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
+          playing && view !== null && view.phase !== "setup" && <WaitingNote state={state} />
+        : buttons.map(({ move, key, label }) => (
+            <button
+              key={key}
+              disabled={disabled}
+              // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
+              aria-disabled={awaiting}
+              onClick={() => {
+                if (!awaiting) playMove(seating, offered, move);
+              }}
+              onPointerEnter={() => onAim("hovered", key)}
+              onPointerLeave={() => onAim("hovered", null)}
+              onFocus={() => onAim("focused", key)}
+              onBlur={() => onAim("focused", null)}
+            >
+              {label}
+            </button>
+          ))}
+    </div>
+  );
 
   return (
     <>
@@ -559,28 +603,19 @@ function Moves({
           </button>
         </p>
       )}
-      <div id="moves" className="moves">
-        {moves === null
-          ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
-            playing && view !== null && view.phase !== "setup" && <WaitingNote state={state} />
-          : buttons.map(({ move, key, label }) => (
-              <button
-                key={key}
-                disabled={disabled}
-                // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
-                aria-disabled={awaiting}
-                onClick={() => {
-                  if (!awaiting) playMove(seating, offered, move);
-                }}
-                onPointerEnter={() => onAim("hovered", key)}
-                onPointerLeave={() => onAim("hovered", null)}
-                onFocus={() => onAim("focused", key)}
-                onBlur={() => onAim("focused", null)}
-              >
-                {label}
-              </button>
-            ))}
-      </div>
+      {foldable ? (
+        <details
+          id="all-moves"
+          className="all-moves"
+          open={listOpen}
+          onToggle={(event) => onListToggle(event.currentTarget.open)}
+        >
+          <summary>すべての手（{buttons.length}）</summary>
+          {list}
+        </details>
+      ) : (
+        list
+      )}
     </>
   );
 }
