@@ -152,10 +152,10 @@ export function SeatTable({
   }, [listed, disabled]);
   // 落とした先の手を選ぶあいだは、絞った手だけを見せたと記録するので、番を終えるボタンも出さない。
   const endTurn = narrowed === null ? listed.endTurn : undefined;
-  const cardChoice =
+  const sheetChoice =
     state.ended === null &&
     view?.phase !== "setup" &&
-    isCardChoice(view?.choices.at(-1)?.prompt?.kind, listed.buttons);
+    isSheetChoice(view?.choices.at(-1)?.prompt?.kind, listed.buttons);
 
   useEffect(() => {
     if (left !== null) onLeave(left.text, left.resumable);
@@ -274,7 +274,7 @@ export function SeatTable({
           </ReadyAbilities>
         </PokemonChoices>
         {menu !== null && !disabled && <MoveMenu menu={menu} onPlay={onPlay} onClose={closeMenu} />}
-        {cardChoice && (
+        {sheetChoice && (
           <ChoiceSheet
             key={view?.choices.at(-1)?.choiceId}
             state={state}
@@ -292,7 +292,7 @@ export function SeatTable({
           <p className="note">
             盤面のカードやポケモンを押して大きく出すと、そこでできる手も選べます。マウスなら右クリックでその場に出せます。
           </p>
-          {!cardChoice && (
+          {!sheetChoice && (
             <Moves
               seating={seating}
               context={context}
@@ -687,21 +687,19 @@ function answerCard(move: Move, context: MoveContext): string | null {
 }
 
 /**
- * 効果でカードを選ぶ選択か。カードを選ぶ答えと、選ぶのをやめる答えだけが並ぶ。エンジンは選べるカードが
- * 1 枚も無くても、やめるだけの選択を積む。そのときも選ぶ画面を出し、選べるカードが無いことを見せる。
+ * 選択を盤面の上の選ぶ画面に出すか。並ぶのが選択への答えだけなら出す。場のポケモンを選ぶ選択は、
+ * 盤面のポケモンを押して選ぶので出さない。エンジンは選べるものが 1 つも無くても、やめるだけの選択を
+ * 積む。そのときも選ぶ画面を出し、選べるものが無いことを見せる。
  */
-function isCardChoice(
+function isSheetChoice(
   prompt: Choice["prompt"]["kind"] | undefined,
   buttons: readonly ListedMove[],
 ): boolean {
-  const answers = buttons.map(({ move }) =>
-    move.type === "AnswerChoice" ? move.answer.kind : null,
-  );
   return (
-    (prompt === "selectCard" ||
-      prompt === "selectFromHiddenZone" ||
-      answers.some((kind) => kind === "card" || kind === "cardDef")) &&
-    answers.every((kind) => kind === "card" || kind === "cardDef" || kind === "decline")
+    prompt !== undefined &&
+    prompt !== "selectInPlay" &&
+    buttons.length > 0 &&
+    buttons.every(({ move }) => move.type === "AnswerChoice" && move.answer.kind !== "inPlay")
   );
 }
 
@@ -717,7 +715,8 @@ function pokemonMoves(buttons: readonly ListedMove[]): Map<string, Move> {
 }
 
 /**
- * 効果でカードを選ぶあいだ、候補を盤面の上に大きく並べ、押して選ばせる。
+ * 効果の選択を盤面の上に出す。カードを選ぶ選択では、候補を大きく並べ、押して選ばせる。
+ * 使うかどうかや、どの効果にするかのようなカードを選ばない選択は、答えのボタンだけを並べる。
  *
  * 山札を見て選ぶ効果では、見ている山札をすべて並べ、選べないカードは暗くする。エンジンの候補は条件に
  * 合うカードだけなので、候補だけでは山札に何が残っていて何がサイドに落ちたかを読めない。
@@ -781,16 +780,18 @@ function ChoiceSheet({
         : `山札 ${deckCount} 枚のうち、見た ${revealedDeck.length} 枚`;
 
   return (
-    <section id="choice-sheet" className="choice-sheet" aria-label="カードを選ぶ">
+    <section id="choice-sheet" className="choice-sheet" aria-label="効果の選択">
       <div className="choice-head">
         {source !== null && (
           <CardFace defId={source.defId} zoom={{ title: source.label, defIds: [source.defId] }} />
         )}
-        <p id="move-prompt" className="move-prompt">
-          {prompt}
-        </p>
+        {prompt !== "" && (
+          <p id="move-prompt" className="move-prompt">
+            {prompt}
+          </p>
+        )}
         <button id="choice-fold" className="secondary" onClick={() => setFolded(!folded)}>
-          {folded ? "選ぶカードを出す" : "盤面を見る"}
+          {folded ? "選ぶ画面を出す" : "盤面を見る"}
         </button>
       </div>
       {/* 畳んでも、選ぶのをやめるボタンは残す。 */}
@@ -799,8 +800,8 @@ function ChoiceSheet({
         {!folded &&
           buttons.every(
             ({ move }) => move.type === "AnswerChoice" && move.answer.kind === "decline",
-          ) && <p className="choice-empty">選べるカードはありません。</p>}
-        {!folded && (
+          ) && <p className="choice-empty">選べるものはありません。</p>}
+        {!folded && tiles.length > 0 && (
           <div
             id={revealedDeck === null ? undefined : "revealed-deck"}
             className="choice-cards"

@@ -2994,6 +2994,45 @@ test("効果で選べるカードが 1 枚も無く、やめるしかないと�
   expect(sent[0]!.move).toEqual(sync.legalMoves[0]);
 });
 
+test("カードを選ばない選択も、盤面の上の選ぶ画面に答えのボタンだけを出す", async ({ page }) => {
+  const sync = crowdedSync(10) as CrowdedSync;
+  const choiceId = "使うか";
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: true,
+      prompt: { kind: "confirm", count: 1 },
+      context: {
+        source: { defId: sync.view.self.hand[0]!.defId, label: "効果の元", instanceId: null },
+        sourceRole: "trainer",
+        step: null,
+        min: null,
+        max: null,
+        remaining: null,
+        picked: null,
+        destination: null,
+        revealsResult: null,
+        window: null,
+      },
+    },
+  ];
+  sync.legalMoves = ["accept", "decline"].map((kind) => ({
+    type: "AnswerChoice",
+    player: 0,
+    choiceId,
+    answer: { kind },
+  }));
+  const sent = await openWith(page, sync);
+  const sheet = page.locator("#choice-sheet");
+  await expect(sheet.locator("#moves button")).toHaveCount(2);
+  await expect(sheet.locator(".choice-card, .choice-empty")).toHaveCount(0);
+  await sheet.locator("#moves button").first().click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(sync.legalMoves[0]);
+});
+
 test("盤面のカードやポケモンを右クリックすると、そこでできる手をその場に出して選べる", async ({
   page,
 }) => {
