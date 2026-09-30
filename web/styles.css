@@ -203,7 +203,7 @@ details > summary {
 .builder-columns > .panel {
   margin: 0;
 }
-/* 項目名を上に置く入力欄の並び。狭い画面では 1 列になる。 */
+/* 項目名を上に置く入力欄の並び。 */
 .fields {
   display: flex;
   flex-wrap: wrap;
@@ -262,7 +262,7 @@ details > summary {
   text-align: center;
 }
 
-/* 保存したデッキの一覧。1 枚に絵と名前、対戦に使うボタンを並べる。 */
+/* 保存したデッキの一覧。デッキごとに絵と名前、対戦に使うボタンを並べる。 */
 .deck-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
