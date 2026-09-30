@@ -8,6 +8,12 @@ const LONG_PRESS_MS = 400;
 const LONG_PRESS_SLOP_PX = 10;
 const PREVIEW_MARGIN_PX = 8;
 const PREVIEW_GAP_PX = 12;
+/**
+ * iOS は指を離した直後に、同じ場所へ pointerType が mouse の pointerover も送る（WebKit bug 214609。
+ * React Aria の `useHover` も同じ長さだけ無視している）。マウスを載せたとみなすと、押したカードの
+ * プレビューが指を離したあとに出る。
+ */
+const EMULATED_MOUSE_MS = 500;
 
 type Pointer = "mouse" | "touch";
 
@@ -34,6 +40,7 @@ export function CardPreview() {
     let current: Shown | null = null;
     let lastMouse: { x: number; y: number } | null = null;
     let longPress: { pointerId: number; x: number; y: number; timer: number } | null = null;
+    let touchedAt = -Infinity;
     // 長押しで読んで指を離すと、そのクリックも届いて拡大が開いてしまう。
     let swallowClick = false;
 
@@ -85,7 +92,7 @@ export function CardPreview() {
     };
 
     const over = (event: PointerEvent) => {
-      if (event.pointerType === "touch") return;
+      if (event.pointerType === "touch" || event.timeStamp - touchedAt < EMULATED_MOUSE_MS) return;
       const card = previewable(event.target);
       if (card !== null) show(card, "mouse");
     };
@@ -97,7 +104,9 @@ export function CardPreview() {
     const down = (event: PointerEvent) => {
       swallowClick = false;
       if (event.pointerType !== "touch") return;
+      // マウスで出たまま残ったプレビューも、指で押せば閉じる。
       endLongPress();
+      hide();
       const card = previewable(event.target);
       if (card === null) return;
       const timer = window.setTimeout(() => {
@@ -117,6 +126,7 @@ export function CardPreview() {
       endLongPress();
     };
     const up = (event: PointerEvent) => {
+      if (event.pointerType === "touch") touchedAt = event.timeStamp;
       if (longPress?.pointerId !== event.pointerId) return;
       endLongPress();
       if (event.type === "pointercancel") swallowClick = false;

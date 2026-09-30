@@ -1975,6 +1975,44 @@ test.describe("タッチ端末", () => {
     await page.locator("#card-results .card-row button.add").first().press("Enter");
     await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
   });
+
+  test("指を離した直後に届くマウスの pointerover では、プレビューを出さない", async ({ page }) => {
+    await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+    await page.route("**/api/card-image/*", () => {});
+    await page.goto("/decks/new");
+    await page.fill("#card-search", "エネルギー");
+    const thumb = page.locator("#card-results .card-row .card").first();
+    await expect(thumb).toBeVisible();
+    // iOS と同じく、指を離したらその場所へマウスの pointerover を送る。
+    await page.evaluate(() => {
+      document.addEventListener("pointerup", (event) => {
+        if (event.pointerType !== "touch" || !(event.target instanceof Element)) return;
+        const { target } = event;
+        setTimeout(() => {
+          target.dispatchEvent(
+            new PointerEvent("pointerover", { pointerType: "mouse", bubbles: true }),
+          );
+        });
+      });
+    });
+
+    await thumb.tap();
+    await page.waitForTimeout(100);
+    await expect(page.locator("#card-preview")).toBeHidden();
+  });
+
+  test("マウスで出たプレビューも、指で押せば閉じる", async ({ page }) => {
+    await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
+    await page.route("**/api/card-image/*", () => {});
+    await page.goto("/decks/new");
+    await page.fill("#card-search", "エネルギー");
+    const thumb = page.locator("#card-results .card-row .card").first();
+    await thumb.hover();
+    await expect(page.locator("#card-preview")).toBeVisible();
+
+    await page.locator("#card-search").tap();
+    await expect(page.locator("#card-preview")).toBeHidden();
+  });
 });
 
 test("載せているあいだに画像が読めなかったと分かったら、プレビューに説明を書き添える", async ({
