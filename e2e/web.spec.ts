@@ -446,13 +446,14 @@ test("保存したあとに一覧を読み直せなくても、組んでいる�
   const deckId = await saveDeckAs(page, "くみなおす", await sampleEntries(page));
   await page.goto(`/decks/${deckId}`);
   await page.locator("#deck-cards .card-row button.remove").first().click();
-  await page.route("**/api/decks", (route) =>
-    route.fulfill({ status: 503, json: { error: "落とした" } }),
-  );
-  // 保存すると一覧を読み直す。
-  const failed = page.waitForResponse((response) => response.url().endsWith("/api/decks"));
+  let failed = 0;
+  await page.route("**/api/decks", async (route) => {
+    failed += 1;
+    await route.fulfill({ status: 503, json: { error: "落とした" } });
+  });
+  // 保存すると一覧を読み直す。読み直しは 3 度まで頼み直してから失敗になる。
   await page.click("#save-deck-button");
-  await failed;
+  await expect.poll(() => failed, { timeout: 20_000 }).toBe(4);
   await painted(page);
   await expect(page.locator("#deck-builder")).toBeVisible();
 });
