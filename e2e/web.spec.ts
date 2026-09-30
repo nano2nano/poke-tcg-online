@@ -1514,6 +1514,8 @@ test("落とした先でできる手が 2 つ以上あれば、ボタンをそ�
 
   await dragOver(page, card, target);
   await page.mouse.up();
+  // 絞る前に押すと、先に並ぶ番を終えるボタンを数えてしまう。
+  await expect(buttons).toHaveCount(2);
   await buttons.nth(1).click();
   await expect.poll(() => sent).toEqual([tool]);
   // 記録には、絞って見せた 2 つの手だけを見せたと残す。
