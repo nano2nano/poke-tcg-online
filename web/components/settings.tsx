@@ -1,42 +1,42 @@
 import { createContext, use, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { MotionToggle } from "./motion-setting.js";
 
-/** 1 つしか答えの無い選択を自動で進めるかを覚えておく localStorage のキー。進めるときだけ `on` を置く。 */
-const AUTO_ANSWER_KEY = "poke-auto-answer";
+/** 右クリックで手をすぐ指すかを覚えておく localStorage のキー。既定は指すので、指さないときだけ `off` を置く。 */
+const DIRECT_PLAY_KEY = "poke-direct-play";
 
-function storedAutoAnswer(): boolean {
+function storedDirectPlay(): boolean {
   try {
-    return localStorage.getItem(AUTO_ANSWER_KEY) === "on";
+    return localStorage.getItem(DIRECT_PLAY_KEY) !== "off";
   } catch {
-    return false;
+    return true;
   }
 }
 
-function storeAutoAnswer(on: boolean): void {
+function storeDirectPlay(on: boolean): void {
   try {
-    if (on) localStorage.setItem(AUTO_ANSWER_KEY, "on");
-    else localStorage.removeItem(AUTO_ANSWER_KEY);
+    if (on) localStorage.removeItem(DIRECT_PLAY_KEY);
+    else localStorage.setItem(DIRECT_PLAY_KEY, "off");
   } catch {
     // 覚えておけなくても、切り替えはそのページのあいだ効く。
   }
 }
 
-const SettingsContext = createContext<{ open: () => void; autoAnswer: boolean }>({
+const SettingsContext = createContext<{ open: () => void; directPlay: boolean }>({
   open: () => {},
-  autoAnswer: false,
+  directPlay: true,
 });
 
-/** 答えが 1 つしか無い選択を、押さずに進めるか。 */
-export function useAutoAnswer(): boolean {
-  return use(SettingsContext).autoAnswer;
+/** 右クリックした手札のカードでできる手が 1 つだけなら、メニューを出さずにすぐ指すか。 */
+export function useDirectPlay(): boolean {
+  return use(SettingsContext).directPlay;
 }
 
 /** 設定のダイアログ。どの画面の「設定」からも同じものを開くよう、ルートに 1 つ置く。 */
 export function Settings({ children }: { children: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [autoAnswer, setAutoAnswer] = useState(storedAutoAnswer);
+  const [directPlay, setDirectPlay] = useState(storedDirectPlay);
   const open = useCallback(() => dialog.current?.showModal(), []);
-  const value = useMemo(() => ({ open, autoAnswer }), [open, autoAnswer]);
+  const value = useMemo(() => ({ open, directPlay }), [open, directPlay]);
   return (
     <SettingsContext value={value}>
       {children}
@@ -45,21 +45,20 @@ export function Settings({ children }: { children: ReactNode }) {
         <MotionToggle />
         <label className="setting">
           <input
-            id="auto-answer-toggle"
+            id="direct-play-toggle"
             type="checkbox"
-            checked={autoAnswer}
+            checked={directPlay}
             onChange={(event) => {
               const on = event.currentTarget.checked;
-              setAutoAnswer(on);
-              storeAutoAnswer(on);
+              setDirectPlay(on);
+              storeDirectPlay(on);
             }}
           />
-          答えが 1 つしか無い選択は、押さずに進める
+          手札のカードでできる手が 1 つだけなら、右クリックですぐ使う
         </label>
         <p className="note">
-          {"選べるカードが無いときの「選ばない」や、ほかに出せるポケモンがいないときのバトル場へ出すポケモンなど。" +
-            "自分の番を終えるのと、山札や相手の手札を見ているときは自動で進めません。" +
-            "すぐに進むので、ほかに選べるものが無かったことが相手に伝わることがあります。"}
+          {"対象を取らないサポートやグッズなどを、メニューを出さずに使います。" +
+            "場のポケモンと、キーボードで開いたときは、いつもメニューを出します。"}
         </p>
         <form method="dialog">
           <button id="settings-close" className="secondary">

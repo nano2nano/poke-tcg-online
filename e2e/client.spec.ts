@@ -2982,54 +2982,6 @@ test("効果で選べるカードが 1 枚も無く、やめるしかないと�
   expect(sent[0]!.move).toEqual(sync.legalMoves[0]);
 });
 
-test("設定で選べば、答えが 1 つしか無い選択は押さずに進め、何を選んだかを知らせる", async ({
-  page,
-}) => {
-  const sync = crowdedSync(10) as CrowdedSync;
-  const choiceId = "やめるしかない選択";
-  sync.view.choices = [
-    {
-      choiceId,
-      owner: 0,
-      kind: "card-effect",
-      optional: true,
-      prompt: { kind: "selectCard", candidates: [] },
-    },
-  ];
-  const decline = { type: "AnswerChoice", player: 0, choiceId, answer: { kind: "decline" } };
-  sync.legalMoves = [decline];
-  const sent = await openWith(page, sync);
-  await expect(page.locator("#choice-sheet")).toBeVisible();
-  expect(sent).toHaveLength(0);
-
-  await page.click("#settings-button");
-  await page.check("#auto-answer-toggle");
-  await page.click("#settings-close");
-  await expect.poll(() => sent.length).toBe(1);
-  expect(sent[0]!.move).toEqual(decline);
-  await expect(page.locator("#results .result")).toHaveCount(1);
-  expect(await page.evaluate(() => localStorage.getItem("poke-auto-answer"))).toBe("on");
-
-  // 山札を見ている選択と、番を終える手だけの局面は進めない。
-  sync.view.choices = [
-    {
-      choiceId,
-      owner: 0,
-      kind: "card-effect",
-      optional: true,
-      prompt: { kind: "selectFromHiddenZone", zone: { kind: "deck", player: 0 }, candidates: [] },
-    },
-  ];
-  const shown = await openWith(page, sync);
-  await expect(page.locator("#choice-sheet")).toBeVisible();
-  sync.view.choices = [];
-  sync.legalMoves = [{ type: "EndTurn", player: 0 }];
-  const ending = await openWith(page, sync);
-  await expect(page.locator("#moves button")).toHaveCount(1);
-  await page.waitForTimeout(500);
-  expect([...shown, ...ending]).toHaveLength(0);
-});
-
 test("盤面のカードやポケモンを右クリックすると、そこでできる手をその場に出して選べる", async ({
   page,
 }) => {
@@ -3071,22 +3023,74 @@ test("盤面のカードやポケモンを右クリックすると、そこで�
   await expect(menu).toBeHidden();
 
   // キーボードでもメニューのキーで開け、Esc で閉じるとカードへフォーカスを戻す。
-  const card = page.locator(`#self [data-zone="hand"] .card[data-def-id="${item.defId}"]`).first();
-  await card.focus();
+  const benched = pokemon(bench[1]!.inPlayId);
+  await benched.focus();
   await page.keyboard.press("Shift+F10");
-  await expect(items).toHaveCount(1);
+  await expect(items).toHaveCount(3);
   await expect(items.first()).toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(card).toBeFocused();
+  await expect(benched).toBeFocused();
   // Tab でメニューの外へ出たら閉じる。
   await page.keyboard.press("Shift+F10");
   await expect(items.first()).toBeFocused();
-  await page.keyboard.press("Tab");
+  await page.keyboard.press("Shift+Tab");
   await expect(menu).toBeHidden();
 
+  // 手が 1 つだけのカードは、メニューを出さずにすぐ使う。
+  const card = page.locator(`#self [data-zone="hand"] .card[data-def-id="${item.defId}"]`).first();
   await card.click({ button: "right" });
-  await items.first().click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(play);
   await expect(menu).toBeHidden();
+});
+
+test("場のポケモンと、キーボードで開いたときは、手が 1 つだけでもメニューを出す", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync & {
+    view: { self: { bench: { inPlayId: string }[] } };
+  };
+  const item = sync.view.self.hand[4]!;
+  const source = sync.view.self.bench[1]!.inPlayId;
+  const play = { type: "PlayTrainer", player: 0, cardInstanceId: item.instanceId };
+  const ability = { type: "UseAbility", player: 0, source, abilityIndex: 0 };
+  sync.legalMoves = [play, ability, { type: "EndTurn", player: 0 }];
+  const sent = await openWith(page, sync);
+  const menu = page.locator("#move-menu");
+  const items = menu.getByRole("menuitem");
+
+  await page.locator(`[data-in-play-id="${source}"]`).click({ button: "right" });
+  await expect(items).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+
+  await page.locator(`#self [data-zone="hand"] .card[data-def-id="${item.defId}"]`).first().focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(items).toHaveCount(1);
+  expect(sent).toHaveLength(0);
+});
+
+test("設定で切れば、手が 1 つだけのカードでも右クリックでメニューを出し、押してから使う", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync;
+  const item = sync.view.self.hand[4]!;
+  const play = { type: "PlayTrainer", player: 0, cardInstanceId: item.instanceId };
+  sync.legalMoves = [play, ...sync.legalMoves];
+  const sent = await openWith(page, sync);
+  await page.click("#settings-button");
+  await page.uncheck("#direct-play-toggle");
+  await page.click("#settings-close");
+  expect(await page.evaluate(() => localStorage.getItem("poke-direct-play"))).toBe("off");
+
+  await page
+    .locator(`#self [data-zone="hand"] .card[data-def-id="${item.defId}"]`)
+    .first()
+    .click({ button: "right" });
+  const items = page.locator("#move-menu").getByRole("menuitem");
+  await expect(items).toHaveCount(1);
+  expect(sent).toHaveLength(0);
+  await items.first().click();
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0]!.move).toEqual(play);
 });
