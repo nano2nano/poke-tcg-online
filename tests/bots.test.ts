@@ -258,7 +258,7 @@ describe("AI に見せる候補", () => {
     expect(botCandidates(match, legal)).toEqual(legal);
 
     // 行き先が同じ番の既出の局面になりうる手を 1 つ選び、その行き先に既に来たことにする。同じ行き先へ進む手は
-    // どれも外れる。なりえない手（`cannotRevisit`）の行き先を既出にすると、エンジンが不変条件の違反として止める。
+    // どれも外れる。なりえない手（`cannotRevisit`）は行き先を当てずに残すので、既出にしても外れない。
     const key = (move: Move) => positionKey(applyMove(match.state, move).state);
     const picked = legal.find((move) => !cannotRevisit(move));
     if (picked === undefined) throw new Error("行き先が既出になりうる手が候補に無い");
