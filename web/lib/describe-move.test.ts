@@ -193,7 +193,7 @@ describe("エンジン自身が積む選択", () => {
       withChoice("use-second-attack", { kind: "confirm", count: 1 }),
       withChoice("select-attack", { kind: "selectAttack", candidates: [] }),
       withChoice("order-effects", { kind: "selectEffect", candidates: [], context: "trigger" }),
-      withChoice("place-check-effect", { kind: "selectPlacement", effect: source }, { source }),
+      withChoice("place-check-effect", { kind: "selectPlacement", effect: source }),
       withChoice("take-prize", {
         kind: "selectPrize",
         zone: { kind: "prizes", player: 0 },
@@ -230,13 +230,15 @@ describe("エンジン自身が積む選択", () => {
     expect(answer(context, { kind: "position", index: 3 })).toBe("オモテの オモテのカード を取る");
   });
 
-  it("効果の順番の答えは、効果の名前で出す", () => {
-    const candidates = [{ defId: "x", label: "先の効果", instanceId: null }];
+  it("効果の順番の答えは効果の名前で出し、同じ名前が並ぶときは何番目かを足す", () => {
+    const twin = { defId: "y", label: "同じ効果", instanceId: null };
+    const candidates = [{ defId: "x", label: "先の効果", instanceId: null }, twin, twin];
     const context = withChoice("order-effects", {
       kind: "selectEffect",
       candidates,
       context: "trigger",
     });
     expect(answer(context, { kind: "effectIndex", index: 0 })).toBe("先の効果");
+    expect(answer(context, { kind: "effectIndex", index: 2 })).toBe("同じ効果（3 番目）");
   });
 });

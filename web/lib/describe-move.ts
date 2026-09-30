@@ -228,7 +228,12 @@ function attackName(
  * エンジン自身が積む選択への答えのラベル。答えはカードか「はい」「いいえ」だけなので、
  * そのままではバトル場とベンチのどちらに出すのか、「はい」「いいえ」で何が起きるのかが読めない。
  */
-const RULE_ANSWERS: Record<string, { card?: string; accept?: string; decline?: string }> = {
+const RULE_ANSWERS: Partial<
+  Record<
+    ReaderView["choices"][number]["kind"],
+    { card?: string; accept?: string; decline?: string }
+  >
+> = {
   "setup-place-active": { card: "をバトル場に出す", decline: "出さずに手札を引き直す" },
   "setup-place-bench": { card: "をベンチに出す", decline: "ベンチに出し終える" },
   "setup-bonus-draw": { decline: "追加で引かない" },
@@ -280,7 +285,13 @@ function describeAnswer(
         choice?.prompt?.kind === "selectEffect"
           ? choice.prompt.candidates[answer.index]
           : undefined;
-      return listed === undefined ? `${answer.index + 1} 番目の効果` : listed.label;
+      if (listed === undefined) return `${answer.index + 1} 番目の効果`;
+      // 同じカードが 2 枚あれば、効果の名前も同じになる。
+      const twins =
+        choice?.prompt?.kind === "selectEffect"
+          ? choice.prompt.candidates.filter((each) => each.label === listed.label).length
+          : 0;
+      return twins > 1 ? `${listed.label}（${answer.index + 1} 番目）` : listed.label;
     }
     case "attackIndex": {
       const listed =
@@ -290,7 +301,7 @@ function describeAnswer(
       return listed === undefined ? `ワザ ${answer.index + 1}` : `ワザ「${listed.label}」`;
     }
     case "placement":
-      return answer.placement === "before" ? "先に" : "あとに";
+      return answer.placement === "before" ? "特殊状態の確認より先に" : "特殊状態の確認のあとに";
     case "bonusDrawCount":
       return `${answer.count} 枚引く`;
     case "condition":
@@ -418,8 +429,9 @@ const CHOICE_DESTINATIONS: Record<string, string> = {
 };
 
 /**
- * 効果の選択で、どのカードの効果で何を選んでいるのか。エンジンは 1 枚ずつ選ばせるので、書かないと、
- * 何の効果の選択か、あと何枚選ぶのかがボタンからは読めない。枚数と行き先は、エンジンが書いた効果でだけ出す。
+ * 選択で何を選んでいるのか。カードの効果の選択では、どのカードの効果か、あと何枚選ぶのかも書く。エンジンは
+ * 1 枚ずつ選ばせるので、書かないとボタンからは読めない。枚数と行き先は、エンジンが書いた効果でだけ出す。
+ * エンジン自身が積む選択（2 回目のワザ、サイドなど）は効果の元を持たないので、選択の種類から書く。
  */
 export function choicePrompt(context: MoveContext): string {
   const { view, cards } = context;
@@ -436,7 +448,8 @@ export function choicePrompt(context: MoveContext): string {
     case "order-effects":
       return "同時にはたらく効果の順番を決めます。先にはたらかせる効果を選んでください。";
     case "place-check-effect":
-      return `${choice.context?.source?.label ?? "効果"}：ポケモンチェックで、特殊状態の確認より先にはたらかせるか、あとにするかを選んでください。`;
+      if (prompt.kind !== "selectPlacement") return "";
+      return `${prompt.effect.label}：ポケモンチェックで、特殊状態の確認より先にはたらかせるか、あとにするかを選んでください。`;
     case "take-prize":
       if (prompt.kind !== "selectPrize") return "";
       return `取るサイドを選んでください（あと ${prompt.remaining[choice.owner]} 枚）。`;
