@@ -165,7 +165,10 @@ describe("座席から届く 1 通", () => {
 });
 
 describe("対戦準備をまとめて出す 1 通", () => {
-  it("手番でない座席からも受け取り、両座席がそろったところで局面が動く", async () => {
+  /** 当たる対戦に会うまでに作る数は seed しだいなので、上限の回数まで探しても時間切れにならないようにする。 */
+  const search = { timeout: 30_000 };
+
+  it("手番でない座席からも受け取り、両座席がそろったところで局面が動く", search, async () => {
     let seats: Opened[] = [];
     let syncs: Record<string, any>[] = [];
     // 片方だけが引き直す対戦では、引き直す側はまだまとめて出せない。両座席が出せる対戦を使う。
@@ -199,21 +202,23 @@ describe("対戦準備をまとめて出す 1 通", () => {
     for (const seat of seats) seat.socket.close();
   });
 
-  it("片方だけが引き直す対戦では、見せた手札が両座席へ同じ形で届く", async () => {
+  it("片方だけが引き直す対戦では、見せた手札が両座席へ同じ形で届く", search, async () => {
     let seats: Opened[] = [];
     let syncs: Record<string, any>[] = [];
     // どちらが引き直すかは seed で決まる。片方だけがまとめて出せない対戦を探す。
     // 最初の手札で両者ともたねが無いと、両者の引き直しがすでに済んでいるので、それも外す。
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    let found = false;
+    for (let attempt = 0; attempt < 30 && !found; attempt += 1) {
       const tokens = await seatTokens(`ひきなおし-${attempt}`);
       seats = await Promise.all(tokens.map((token) => open(token)));
       for (const seat of seats) seat.socket.send(JSON.stringify({ t: "hello" }));
       syncs = await Promise.all(seats.map((seat) => seat.next()));
       const kinds = new Set(syncs.map((sync) => sync.setup?.kind ?? null));
       const fresh = syncs.every((sync) => sync.mulligans.length === 0);
-      if (kinds.has("choose") && kinds.has(null) && fresh) break;
-      for (const seat of seats) seat.socket.close();
+      found = kinds.has("choose") && kinds.has(null) && fresh;
+      if (!found) for (const seat of seats) seat.socket.close();
     }
+    if (!found) throw new Error("片方だけが引き直す対戦が見つからない");
     const ahead = syncs.findIndex((sync) => sync.setup?.kind === "choose");
     const lacker = 1 - ahead;
     expect(syncs[lacker]!.setup).toBeNull();

@@ -613,10 +613,15 @@ export function botsOnly(match: Pick<Match, "bots">): boolean {
 
 /**
  * AI の座席に見せる候補。同じ番で既に来た局面へ戻る手を外す（`botRevisit`）。
- * 返す列は `legal` の部分列で、順を保つ。
+ * 返す列は `legal` の部分列で、順を保つ。`legal` は `legalMoves(match.state)` そのものを渡す。
+ *
+ * 行き先を見なくても外れない手は当てずに残す（`exhaustive` を偽にする）。外す手は全候補を当てたときと
+ * 同じである。全候補を当てると不変条件の検査が投げうり、対戦の中で投げると AI の投了になるので、検査は自己対戦に任せる。
  */
 export function botCandidates(match: Match, legal: Move[]): Move[] {
-  return match.botRevisit === null ? legal : match.botRevisit.filter(match.state, legal).admitted;
+  return match.botRevisit === null
+    ? legal
+    : match.botRevisit.filter(match.state, legal, false).admitted;
 }
 
 /** AI の座席の方策へ渡す導出値と記憶。要素の集合を読む方策（形式 6）だけが求める。 */

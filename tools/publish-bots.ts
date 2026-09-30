@@ -40,6 +40,8 @@ import {
 } from "../src/bots.js";
 import {
   createGame,
+  deckHashOf,
+  deckPoolOf,
   derivedView,
   GameKnowledge,
   legalMoves,
@@ -60,14 +62,35 @@ export interface RunPointers {
   current: string;
   /** 凍結した世代（走りの状態の `anchors`）。 */
   anchors: { generation: number; weights: string }[];
-  /** 学習の `--decks` の値。 */
+  /** 学習の `--decks` の値。母集団から組を引く走りでは `pool:` で始まる名前で、本は `pool` から読む。 */
   decks: string;
+  /**
+   * 母集団から組を引く走り（`--pool`）の母集団。母集団の書き方（`config.pool.spec`）、系統の均し方、カードを入れたデッキと、
+   * 始めに読んだ中身の SHA-256。構成を毎世代すべて回す走りでは null。
+   */
+  pool: RunPool | null;
+}
+
+export interface RunPool {
+  spec: string;
+  hash: string;
+  familyPower: number;
+  coverage: { spec: string; share: number } | null;
 }
 
 export function readRunPointers(run: string): RunPointers {
   const path = join(run, RUN_STATE);
   const state = JSON.parse(readFileSync(path, "utf8")) as {
-    config?: { gate?: unknown; decks?: unknown };
+    config?: {
+      gate?: unknown;
+      decks?: unknown;
+      pool?: {
+        spec?: unknown;
+        hash?: unknown;
+        familyPower?: unknown;
+        coverage?: { spec?: unknown; share?: unknown } | null;
+      } | null;
+    };
     current?: { weights?: unknown };
     anchors?: { generation?: unknown; weights?: unknown }[];
   };
@@ -85,14 +108,48 @@ export function readRunPointers(run: string): RunPointers {
   });
   const decks = state.config?.decks;
   if (typeof decks !== "string") throw new Error(`${path} に学習のデッキ（config.decks）が無い`);
-  return { gate, current, anchors, decks };
+  const pool = state.config?.pool;
+  if (pool === undefined || pool === null) return { gate, current, anchors, decks, pool: null };
+  const coverage = pool.coverage ?? null;
+  if (
+    typeof pool.spec !== "string" ||
+    typeof pool.hash !== "string" ||
+    typeof pool.familyPower !== "number" ||
+    (coverage !== null && (typeof coverage.spec !== "string" || typeof coverage.share !== "number"))
+  ) {
+    throw new Error(`${path} の母集団（config.pool）の形が違う`);
+  }
+  return {
+    gate,
+    current,
+    anchors,
+    decks,
+    pool: {
+      spec: pool.spec,
+      hash: pool.hash,
+      familyPower: pool.familyPower,
+      coverage:
+        coverage === null
+          ? null
+          : { spec: coverage.spec as string, share: coverage.share as number },
+    },
+  };
 }
 
 /**
- * 走りが学習で握った本が、AI の座席が握る本とちょうど同じか確かめ、違えば投げる。違う本で学んだ方策を置くと、
- * 画面で選べるデッキの一部を方策は学習で見ていないのに、何も知らせずに指し始める。
+ * 走りが学習で握った本に、AI の座席が握るデッキがどれも入っているかを確かめ、入っていなければ投げる。
+ * 学んでいない本で指す方策を置くと、画面で選べるデッキの一部を方策は学習で見ていないのに、何も知らせずに指し始める。
+ *
+ * 構成を毎世代すべて回す走りでは、学習の `--decks` が握らせる本が AI の座席の本とちょうど同じことを求める。
+ * 母集団から組を引く走りでは、母集団の中身が走りの始めと同じで、AI の座席のデッキがどれも中身の同じ実デッキとして
+ * 入っていることを求める。カードを入れたデッキは重みで引かれず相手にもならず、anchor の組にも入らないので、そこにあるだけでは数えない。
  */
-export function checkRunDecks(decks: string): void {
+export function checkRunDecks(run: Pick<RunPointers, "decks" | "pool">): void {
+  if (run.pool !== null) {
+    checkPoolDecks(run.pool);
+    return;
+  }
+  const decks = run.decks;
   const wanted = trainedDeckLabels(BOT_TRAINING_DECKS);
   let trained: Set<string>;
   try {
@@ -104,6 +161,30 @@ export function checkRunDecks(decks: string): void {
   if (!same) {
     throw new Error(
       `走りは --decks=${decks} で学んだ。AI の座席が握るのは ${BOT_TRAINING_DECKS} の本なので上げない（src/bots.ts の BOT_TRAINING_DECKS）`,
+    );
+  }
+}
+
+function checkPoolDecks(run: RunPool): void {
+  const pool = deckPoolOf(run.spec, run.familyPower, run.coverage);
+  // 走りは始めに読んだ中身で組を引き続ける。デッキのファイルかエンジンの表が変わっていれば、読み直した本は学んだ本ではない。
+  if (pool.hash !== run.hash) {
+    throw new Error(
+      `走りの母集団 ${run.spec} の中身が、走りの始めに読んだものと違うので上げない（デッキのファイルか、エンジンの表が変わった）`,
+    );
+  }
+  const trained = new Set(pool.decks.slice(0, pool.realCount).map((deck) => deck.sha256));
+  const missing = deckPresets()
+    .map((preset) => preset.label)
+    .filter((label) => {
+      const deck = presetDeck(label);
+      return (
+        deck === null || !trained.has(deckHashOf(deck.cards.map((defId) => [defId, 1] as const)))
+      );
+    });
+  if (missing.length > 0) {
+    throw new Error(
+      `走りの母集団の実デッキに、AI の座席が握るデッキ ${missing.join("、")} が入っていないので上げない（src/bots.ts の BOT_TRAINING_DECKS）`,
     );
   }
 }
@@ -290,7 +371,7 @@ function publishOnce(
     retry("走りの状態を読めない", error);
     return;
   }
-  checkRunDecks(pointers.decks);
+  checkRunDecks(pointers);
   if (seenGate.value !== pointers.gate) {
     seenGate.value = pointers.gate;
     console.log(

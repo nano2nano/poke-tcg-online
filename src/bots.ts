@@ -294,8 +294,8 @@ export interface DeckPreset {
 }
 
 /**
- * AI に握らせるデッキを決める、学習の `--decks` の値。方策は学習で握った本の間でしか学んでいないので、
- * 取り置いた本も表の外のデッキも握らせない。置く重みがこの値で学んだかは `tools/publish-bots.ts` が確かめる。
+ * AI に握らせるデッキを決める、学習の `--decks` の値。重みをアップロードする前に、その走りの学習の本にこの値の本が
+ * どれも入っていることを `tools/publish-bots.ts` が確かめる。確かめるのはこの値の本だけなので、取り置いた本も表の外のデッキも握らせない。
  */
 export const BOT_TRAINING_DECKS = "jp-2026h1:L-seen";
 

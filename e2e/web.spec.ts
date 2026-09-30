@@ -579,7 +579,10 @@ test("相手さがしの答えを待つあいだにページを移っても、�
   });
   await page.goto("/");
   await enterRoom(page, `まつまえに-${Date.now()}`);
+  // 頼む前にページを移ると、画面はリクエストを送らない。降ろすチケットが無いので、送ったのを見てから移る。
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
   await page.click("#join-button");
+  await sent;
   await page.click('.site-nav a[href="/decks"]');
   await expect(page.locator("#decks")).toBeVisible();
   const left = page.waitForRequest((request) => request.url().endsWith("/api/leave"));
