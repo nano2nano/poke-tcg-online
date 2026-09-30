@@ -231,7 +231,7 @@ export function useSeat(seated: StoredSeat, notify: (notice: Notice) => void): S
         }
         if (!known) {
           // 盤面の画面に留めると、繋がらない状態が続いたときに対戦を始める画面へ出られない。
-          leave("サーバへ繋がりませんでした。読み込み直すと、指していた対戦へ繋ぎ直します。", true);
+          leave("サーバへ繋がりませんでした。「指していた対戦へ戻る」で繋ぎ直せます。", true);
           return;
         }
         const attempt = retry.schedule();

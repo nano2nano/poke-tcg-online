@@ -9,68 +9,225 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as SplatRouteImport } from './routes/$'
+import { Route as SiteRouteImport } from './routes/_site'
+import { Route as MatchRouteImport } from './routes/match'
+import { Route as SiteIndexRouteImport } from './routes/_site/index'
+import { Route as SiteHistoryRouteImport } from './routes/_site/history'
+import { Route as SiteWatchRouteImport } from './routes/_site/watch'
+import { Route as WatchTokenRouteImport } from './routes/watch.$token'
+import { Route as SiteDecksIndexRouteImport } from './routes/_site/decks/index'
+import { Route as SiteDecksDeckIdRouteImport } from './routes/_site/decks/$deckId'
+import { Route as SiteDecksNewRouteImport } from './routes/_site/decks/new'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const SiteRoute = SiteRouteImport.update({
+  id: '/_site',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SplatRoute = SplatRouteImport.update({
-  id: '/$',
-  path: '/$',
+const MatchRoute = MatchRouteImport.update({
+  id: '/match',
+  path: '/match',
   getParentRoute: () => rootRouteImport,
+} as any)
+const SiteIndexRoute = SiteIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteHistoryRoute = SiteHistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteWatchRoute = SiteWatchRouteImport.update({
+  id: '/watch',
+  path: '/watch',
+  getParentRoute: () => SiteRoute,
+} as any)
+const WatchTokenRoute = WatchTokenRouteImport.update({
+  id: '/watch/$token',
+  path: '/watch/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SiteDecksIndexRoute = SiteDecksIndexRouteImport.update({
+  id: '/decks/',
+  path: '/decks/',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteDecksDeckIdRoute = SiteDecksDeckIdRouteImport.update({
+  id: '/decks/$deckId',
+  path: '/decks/$deckId',
+  getParentRoute: () => SiteRoute,
+} as any)
+const SiteDecksNewRoute = SiteDecksNewRouteImport.update({
+  id: '/decks/new',
+  path: '/decks/new',
+  getParentRoute: () => SiteRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/$': typeof SplatRoute
+  '/': typeof SiteIndexRoute
+  '/match': typeof MatchRoute
+  '/history': typeof SiteHistoryRoute
+  '/watch': typeof SiteWatchRoute
+  '/watch/$token': typeof WatchTokenRoute
+  '/decks/$deckId': typeof SiteDecksDeckIdRoute
+  '/decks/new': typeof SiteDecksNewRoute
+  '/decks/': typeof SiteDecksIndexRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/$': typeof SplatRoute
+  '/match': typeof MatchRoute
+  '/history': typeof SiteHistoryRoute
+  '/watch': typeof SiteWatchRoute
+  '/watch/$token': typeof WatchTokenRoute
+  '/': typeof SiteIndexRoute
+  '/decks/$deckId': typeof SiteDecksDeckIdRoute
+  '/decks/new': typeof SiteDecksNewRoute
+  '/decks': typeof SiteDecksIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/$': typeof SplatRoute
+  '/_site': typeof SiteRouteWithChildren
+  '/match': typeof MatchRoute
+  '/_site/history': typeof SiteHistoryRoute
+  '/_site/watch': typeof SiteWatchRoute
+  '/watch/$token': typeof WatchTokenRoute
+  '/_site/': typeof SiteIndexRoute
+  '/_site/decks/$deckId': typeof SiteDecksDeckIdRoute
+  '/_site/decks/new': typeof SiteDecksNewRoute
+  '/_site/decks/': typeof SiteDecksIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$'
+  fullPaths:
+    | '/'
+    | '/match'
+    | '/history'
+    | '/watch'
+    | '/watch/$token'
+    | '/decks/$deckId'
+    | '/decks/new'
+    | '/decks/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$'
-  id: '__root__' | '/' | '/$'
+  to:
+    | '/match'
+    | '/history'
+    | '/watch'
+    | '/watch/$token'
+    | '/'
+    | '/decks/$deckId'
+    | '/decks/new'
+    | '/decks'
+  id:
+    | '__root__'
+    | '/_site'
+    | '/match'
+    | '/_site/history'
+    | '/_site/watch'
+    | '/watch/$token'
+    | '/_site/'
+    | '/_site/decks/$deckId'
+    | '/_site/decks/new'
+    | '/_site/decks/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  SplatRoute: typeof SplatRoute
+  SiteRoute: typeof SiteRouteWithChildren
+  MatchRoute: typeof MatchRoute
+  WatchTokenRoute: typeof WatchTokenRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
+    '/_site': {
+      id: '/_site'
+      path: ''
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+      preLoaderRoute: typeof SiteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/$': {
-      id: '/$'
-      path: '/$'
-      fullPath: '/$'
-      preLoaderRoute: typeof SplatRouteImport
+    '/match': {
+      id: '/match'
+      path: '/match'
+      fullPath: '/match'
+      preLoaderRoute: typeof MatchRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_site/': {
+      id: '/_site/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof SiteIndexRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/history': {
+      id: '/_site/history'
+      path: '/history'
+      fullPath: '/history'
+      preLoaderRoute: typeof SiteHistoryRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/watch': {
+      id: '/_site/watch'
+      path: '/watch'
+      fullPath: '/watch'
+      preLoaderRoute: typeof SiteWatchRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/watch/$token': {
+      id: '/watch/$token'
+      path: '/watch/$token'
+      fullPath: '/watch/$token'
+      preLoaderRoute: typeof WatchTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_site/decks/': {
+      id: '/_site/decks/'
+      path: '/decks'
+      fullPath: '/decks/'
+      preLoaderRoute: typeof SiteDecksIndexRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/decks/$deckId': {
+      id: '/_site/decks/$deckId'
+      path: '/decks/$deckId'
+      fullPath: '/decks/$deckId'
+      preLoaderRoute: typeof SiteDecksDeckIdRouteImport
+      parentRoute: typeof SiteRoute
+    }
+    '/_site/decks/new': {
+      id: '/_site/decks/new'
+      path: '/decks/new'
+      fullPath: '/decks/new'
+      preLoaderRoute: typeof SiteDecksNewRouteImport
+      parentRoute: typeof SiteRoute
     }
   }
 }
 
+interface SiteRouteChildren {
+  SiteHistoryRoute: typeof SiteHistoryRoute
+  SiteWatchRoute: typeof SiteWatchRoute
+  SiteIndexRoute: typeof SiteIndexRoute
+  SiteDecksDeckIdRoute: typeof SiteDecksDeckIdRoute
+  SiteDecksNewRoute: typeof SiteDecksNewRoute
+  SiteDecksIndexRoute: typeof SiteDecksIndexRoute
+}
+
+const SiteRouteChildren: SiteRouteChildren = {
+  SiteHistoryRoute: SiteHistoryRoute,
+  SiteWatchRoute: SiteWatchRoute,
+  SiteIndexRoute: SiteIndexRoute,
+  SiteDecksDeckIdRoute: SiteDecksDeckIdRoute,
+  SiteDecksNewRoute: SiteDecksNewRoute,
+  SiteDecksIndexRoute: SiteDecksIndexRoute,
+}
+
+const SiteRouteWithChildren = SiteRoute._addFileChildren(SiteRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  SplatRoute: SplatRoute,
+  SiteRoute: SiteRouteWithChildren,
+  MatchRoute: MatchRoute,
+  WatchTokenRoute: WatchTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

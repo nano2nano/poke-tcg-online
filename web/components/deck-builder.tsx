@@ -1,25 +1,23 @@
-import { useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useBlocker, useNavigate } from "@tanstack/react-router";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData, type CardTable } from "../lib/cards.js";
 import {
   canAdd,
-  deckCards,
   deckCodeOf,
   deckSize,
   DECK_SIZE,
   fetchOfficialDeck,
-  parseDeck,
   saveDeck,
   searchCards,
   searchRows,
   searchWords,
-  storedDeck,
-  storedDeckJson,
-  subscribeDeck,
   withCount,
   type CardChoice,
   type DeckEntry,
   type OfficialFailure,
+  type SavedDeck,
 } from "../lib/deck.js";
 import { describeCard, KIND_ORDER, KINDS } from "../lib/describe.js";
 import { CardFace } from "./board.js";
@@ -36,75 +34,68 @@ interface PendingGroup {
 
 /**
  * 公式のデッキコードで読み込んだデッキの、取り込めなかったカードとまだ決まっていないカード。
- * `deck` はこの画面が最後に置いたデッキで、ほかの操作で組み替わっていたら出さない。
+ * `entries` はこの画面が最後に置いたデッキで、ほかの操作で組み替わったら出さない。
  * 候補を押させると、読み込んだのとは別のデッキにカードが足される。
- *
- * 検査の結果とは別に持つ。同じ欄にすると、対戦に入る画面が理由を書くたびに選ぶ欄が消える。
  */
 interface OfficialImport {
-  deck: string | null;
+  entries: readonly DeckEntry[];
   missing: string[];
   pending: PendingGroup[];
 }
 
-export interface DeckMessage {
+/** 欄に出す文。`entries` はどのデッキについての文かで、組み替わったら出さない。 */
+interface DeckMessage {
   messages: string[];
   tone: "ok" | "ng" | "";
-  /**
-   * 何についての文か。このデッキから組み替わったら出さない。別のタブで組み替えることもあり、
-   * 返事を待つあいだに組み替えることもある。
-   */
-  deck: string | null;
-}
-
-export const NO_DECK_STATUS: DeckMessage = { messages: [], tone: "", deck: null };
-
-/**
- * 組み替わったあとに届いた、前のデッキについての文を捨てる。欄に置くと、いまのデッキについての
- * 新しい文を上書きする。
- */
-export function forCurrentDeck(
-  show: (message: DeckMessage) => void,
-): (message: DeckMessage) => void {
-  return (message) => {
-    if (message.deck === storedDeckJson()) show(message);
-  };
+  entries: readonly DeckEntry[];
 }
 
 /**
- * デッキを組む。組んだデッキはこのブラウザに残り、対戦に入るときはそれを出す。
+ * デッキを組んで保存する。`saved` が null なら新しいデッキで、保存するとそのデッキのページへ移る。
  *
- * `status` は組む画面と対戦に入る画面が一緒に使う欄で、デッキが規則に通らない理由もここに出る。
- * `actions` は、組む画面のボタンの並びに添えるもの。
+ * 組みかけは保存するまでこの画面の中だけにある。規則に通るかは、保存したときにサーバが照らした結果を出す（仕様 5.5 節）。
  */
-export function DeckBuilder({
-  status,
-  onStatus,
-  actions,
-}: {
-  status: DeckMessage;
-  onStatus: (status: DeckMessage) => void;
-  actions: ReactNode;
-}) {
+export function DeckBuilder({ saved }: { saved: SavedDeck | null }) {
   const { table } = useCardData();
-  const post = forCurrentDeck(onStatus);
-  const deckJson = useSyncExternalStore(subscribeDeck, storedDeckJson);
-  const entries = useMemo(() => parseDeck(deckJson), [deckJson]);
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [name, setName] = useState(saved?.name ?? "");
+  const [entries, setEntries] = useState<readonly DeckEntry[]>(saved?.cards ?? []);
+  /** 読み込みの返事を待つあいだに組み替えたかを、描き直しを待たずに見る。 */
+  const latest = useRef(entries);
+  const [status, setStatus] = useState<DeckMessage | null>(null);
   const [query, setQuery] = useState("");
   const [code, setCode] = useState("");
   const [importing, setImporting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [official, setOfficial] = useState<OfficialImport | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const rows = useMemo(() => searchRows(table), [table]);
   const found = useMemo(() => searchCards(rows, query), [rows, query]);
   const loaded = Object.keys(table).length > 0;
 
+  const unsaved =
+    saved === null
+      ? name !== "" || entries.length > 0
+      : name !== saved.name || JSON.stringify(entries) !== JSON.stringify(saved.cards);
+  useBlocker({
+    shouldBlockFn: () => unsaved && !confirm("保存していない変更を捨てますか。"),
+    enableBeforeUnload: () => unsaved,
+  });
+
+  const put = (next: readonly DeckEntry[]) => {
+    latest.current = next;
+    setEntries(next);
+  };
+  const say = (messages: string[], tone: DeckMessage["tone"], about = latest.current) =>
+    setStatus({ messages, tone, entries: about });
+
   /**
    * 組み替える。押したボタンが押せなくなるなら、フォーカスを同じ行のもう片方か検索欄へ移す。
    * 押せないボタンに残ると、キーボードではページの先頭からたどり直すことになる。
    */
   const change = (defId: string, delta: number, button: HTMLButtonElement) => {
-    const next = withCount(storedDeck(), defId, delta);
+    const next = withCount(latest.current, defId, delta);
     const stillThere = next.some((entry) => entry.defId === defId);
     const pressable = delta > 0 ? canAdd(next, table, defId) : stillThere;
     if (!pressable && document.activeElement === button) {
@@ -115,40 +106,32 @@ export function DeckBuilder({
         : undefined;
       (sibling ?? search.current)?.focus();
     }
-    saveDeck(next);
-    // 前に出した検査の結果は、組み替えた時点で古くなる。
+    put(next);
     setOfficial(null);
-    say([], "");
   };
 
-  const say = (messages: string[], tone: DeckMessage["tone"], deck = storedDeckJson()) =>
-    post({ messages, tone, deck });
-
-  const check = async () => {
-    const deck = storedDeckJson();
-    if (parseDeck(deck).length === 0) {
-      say(["デッキにカードがありません。"], "ng", deck);
+  const save = async () => {
+    const cards = latest.current;
+    const sentName = name;
+    const deck = await saveDeck(queryClient, {
+      ...(saved === null ? {} : { deckId: saved.deckId }),
+      name: sentName,
+      cards,
+    });
+    if (saved === null) {
+      // 保存したので、捨てる変更は無い。移った先のページは、保存したデッキを一覧から読み直す。
+      await navigate({
+        to: "/decks/$deckId",
+        params: { deckId: deck.deckId },
+        replace: true,
+        ignoreBlocker: true,
+      });
       return;
     }
-    await validate(deck);
+    // サーバは見えない字を落として名前を付ける。待つあいだに打ち直した名前は残す。
+    setName((current) => (current === sentName ? deck.name : current));
+    say([], "", cards);
   };
-
-  /** 失敗の文も、確かめたデッキに付ける。選んだカードを置いてから確かめるので、押す前のデッキではない。 */
-  const validate = async (deck: string | null) => {
-    let outcome: { errors?: string[] };
-    try {
-      outcome = await postJson("/api/deck/validate", deckCards(parseDeck(deck)));
-    } catch (error) {
-      fail("確かめられませんでした", deck)(error);
-      return;
-    }
-    showVerdict(outcome.errors ?? [], deck);
-  };
-
-  const showVerdict = (errors: readonly string[], deck: string | null) =>
-    errors.length === 0
-      ? say([`デッキは ${deckSize(parseDeck(deck))} 枚で、規則を通ります。`], "ok", deck)
-      : say([...errors], "ng", deck);
 
   /**
    * 公式のデッキコードのデッキと置き換える。取り込めないカードがあっても、取り込めたぶんで
@@ -160,10 +143,9 @@ export function DeckBuilder({
       say(["デッキコードか、公式サイトのデッキのページの URL を入れてください。"], "ng");
       return;
     }
-    const before = storedDeckJson();
+    const before = latest.current;
     setOfficial(null);
     say(["公式サイトからデッキを読んでいます。"], "");
-    // 待つあいだに組み替えていたら、読み込みの結果は前のデッキについてのものなので出さない。
     const page = await fetchOfficialDeck(parsed);
     if (page === null) {
       say([`デッキコード ${parsed} のデッキは公式サイトにありません。`], "ng", before);
@@ -179,7 +161,7 @@ export function DeckBuilder({
       return;
     }
     // 待つあいだに組み替えられていたら、置き換えると組み替えたぶんが黙って消える。
-    if (storedDeckJson() !== before) {
+    if (latest.current !== before) {
       say(["読み込むあいだにデッキが変わったので、置き換えませんでした。"], "ng");
       return;
     }
@@ -204,165 +186,67 @@ export function DeckBuilder({
       say(missing, "ng");
       return;
     }
-    saveDeck(outcome.entries);
-    const deck = storedDeckJson();
-    setOfficial({ deck, missing, pending });
-    // 選び終えるまでの検査の結果は、足りない枚数を言うだけである。選び終えたら確かめ直す。
-    if (pending.length > 0) say([], "");
-    else showVerdict(outcome.errors ?? [], deck);
+    put(outcome.entries);
+    setOfficial({ entries: outcome.entries, missing, pending });
+    say([], "");
   };
 
   /**
    * 決まっていないカードを 1 枚選ぶ。左右 2 枚で 1 つのスタジアムは公式サイトでは 1 つのカードなので、
    * 枚数を左右にどう分けるかはデッキコードからは分からない。
    */
-  const pick = async (current: OfficialImport, group: number, defId: string) => {
-    if (current.pending[group]?.left === 0) return;
-    if (current.deck !== storedDeckJson()) {
-      say(["デッキが変わっています。もう一度デッキコードを読み込んでください。"], "ng");
-      return;
-    }
-    const next = withCount(storedDeck(), defId, 1);
-    saveDeck(next);
+  const pick = (current: OfficialImport, group: number, defId: string) => {
+    if (current.pending[group]?.left === 0 || current.entries !== latest.current) return;
+    const next = withCount(latest.current, defId, 1);
+    put(next);
     const pending = current.pending.map((each, index) =>
       index === group ? { ...each, left: each.left - 1 } : each,
     );
-    const deck = storedDeckJson();
-    setOfficial({ ...current, deck, pending });
-    if (pending.some((each) => each.left > 0)) return;
-    say(["デッキを確かめています。"], "", deck);
-    await validate(deck);
+    setOfficial({ ...current, entries: next, pending });
   };
 
-  /** `deck` は、失敗した操作が扱っていたデッキ。 */
-  const fail = (lead: string, deck: string | null) => (error: unknown) =>
-    say([`${lead}: ${messageOf(error)}`], "ng", deck);
+  const run = (task: () => Promise<void>, lead: string, setBusy: (busy: boolean) => void) => {
+    const about = latest.current;
+    setBusy(true);
+    task()
+      .catch((error: unknown) => say([`${lead}: ${messageOf(error)}`], "ng", about))
+      .finally(() => setBusy(false));
+  };
 
   const startImport = () => {
     if (importing) return;
-    if (entries.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
-    setImporting(true);
-    importCode()
-      .catch(fail("読み込めませんでした", storedDeckJson()))
-      .finally(() => setImporting(false));
+    if (latest.current.length > 0 && !confirm("いまのデッキと置き換えますか。")) return;
+    run(importCode, "読み込めませんでした", setImporting);
   };
 
   const total = deckSize(entries);
-  const picking = official !== null && official.deck === deckJson ? official : null;
-  const shown = shownStatus(picking, status, deckJson);
+  const picking = official !== null && official.entries === entries ? official : null;
+  const shown = shownStatus({ picking, status, entries, saved, unsaved });
   const words = searchWords(query);
 
   return (
-    <>
-      <div className="deck-code">
-        <label htmlFor="deck-code">公式のデッキコード</label>
+    <section id="deck-builder">
+      <p>
+        <Link to="/decks">デッキの一覧へ</Link>
+      </p>
+      <div className="builder-head">
         <input
-          id="deck-code"
-          placeholder="コードか、デッキのページの URL"
-          autoComplete="off"
-          value={code}
-          onChange={(event) => setCode(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") startImport();
-          }}
+          id="deck-name"
+          aria-label="デッキの名前"
+          placeholder="デッキの名前"
+          maxLength={40}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
         />
         <button
-          id="deck-code-button"
-          className="secondary"
-          // 公式サイトの返事を待つあいだに 2 度押されると、2 つの結果が前後して書き込まれる。
-          disabled={importing}
-          onClick={startImport}
+          id="save-deck-button"
+          className="primary"
+          // 返事を待つあいだに押し直すと、新しいデッキが 2 つできる。
+          disabled={saving || !unsaved}
+          onClick={() => run(save, "保存できませんでした", setSaving)}
         >
-          読み込む
+          保存する
         </button>
-      </div>
-      <input
-        ref={search}
-        id="card-search"
-        type="search"
-        placeholder="カード名で検索"
-        autoComplete="off"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-      />
-      <div id="card-results" className="card-list">
-        {words.length > 0 && !loaded && <p className="note">カードの一覧を読み込んでいます。</p>}
-        {words.length > 0 && loaded && found.length === 0 && (
-          <p className="note">見つかりません。</p>
-        )}
-        {found.slice(0, SEARCH_LIMIT).map(({ defId }) => {
-          const inDeck = entries.find((entry) => entry.defId === defId)?.count ?? 0;
-          return (
-            <CardRow key={defId} defId={defId} table={table}>
-              <span className="card-count">{inDeck === 0 ? "" : `${inDeck} 枚`}</span>
-              <button
-                type="button"
-                className="secondary add"
-                disabled={!canAdd(entries, table, defId)}
-                onClick={(event) => change(defId, 1, event.currentTarget)}
-              >
-                追加
-              </button>
-            </CardRow>
-          );
-        })}
-        {found.length > SEARCH_LIMIT && (
-          <p className="note">
-            ほかに {found.length - SEARCH_LIMIT}{" "}
-            件あります。ワザの名前などを空白のあとに打ち足すと絞れます。
-          </p>
-        )}
-      </div>
-      <p id="deck-count" className={total === DECK_SIZE ? "deck-count full" : "deck-count"}>
-        {total === 0 ? "デッキは空です。" : `${total} / ${DECK_SIZE} 枚`}
-      </p>
-      <div id="deck-cards" className="card-list">
-        {/* 名前の表が届くまでは、defId しか出せないので並べない。 */}
-        {!loaded && total > 0 && <p className="note">カードの一覧を読み込んでいます。</p>}
-        {loaded &&
-          groupByKind(entries, table).map(({ kind, group }) => (
-            <DeckGroup key={kind ?? ""} kind={kind} count={deckSize(group)}>
-              {group.map(({ defId, count }) => (
-                <CardRow key={defId} defId={defId} table={table}>
-                  <button
-                    type="button"
-                    className="secondary remove"
-                    onClick={(event) => change(defId, -1, event.currentTarget)}
-                  >
-                    −
-                  </button>
-                  <span className="card-count">{count}</span>
-                  <button
-                    type="button"
-                    className="secondary add"
-                    disabled={!canAdd(entries, table, defId)}
-                    onClick={(event) => change(defId, 1, event.currentTarget)}
-                  >
-                    ＋
-                  </button>
-                </CardRow>
-              ))}
-            </DeckGroup>
-          ))}
-      </div>
-
-      <div className="deck-actions">
-        <button id="check-button" className="secondary" onClick={() => void check()}>
-          デッキを確かめる
-        </button>
-        <button
-          id="clear-button"
-          className="secondary"
-          onClick={() => {
-            if (entries.length === 0 || !confirm("デッキを空にしますか。")) return;
-            saveDeck([]);
-            setOfficial(null);
-            say([], "");
-          }}
-        >
-          デッキを空にする
-        </button>
-        {actions}
       </div>
       <div id="deck-status" className={`deck-status ${shown.tone}`}>
         {shown.messages.map((message, index) => (
@@ -380,7 +264,7 @@ export function DeckBuilder({
                   <button
                     key={choice.defId}
                     type="button"
-                    onClick={() => void pick(picking, index, choice.defId)}
+                    onClick={() => pick(picking, index, choice.defId)}
                   >
                     {`${group.name}（${describeCard(choice) || choice.defId}）`}
                   </button>
@@ -389,7 +273,111 @@ export function DeckBuilder({
             ),
         )}
       </div>
-    </>
+      <details className="deck-code" open={saved === null}>
+        <summary>公式のデッキコードから読み込む</summary>
+        <div className="deck-code-form">
+          <input
+            id="deck-code"
+            aria-label="公式のデッキコード"
+            placeholder="コードか、デッキのページの URL"
+            autoComplete="off"
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") startImport();
+            }}
+          />
+          <button
+            id="deck-code-button"
+            className="secondary"
+            // 公式サイトの返事を待つあいだに 2 度押されると、2 つの結果が前後して書き込まれる。
+            disabled={importing}
+            onClick={startImport}
+          >
+            読み込む
+          </button>
+        </div>
+      </details>
+
+      <div className="builder-columns">
+        <div>
+          <h2>カードをさがす</h2>
+          <input
+            ref={search}
+            id="card-search"
+            type="search"
+            placeholder="カード名、ワザの名前、収録で検索"
+            autoComplete="off"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <div id="card-results" className="card-list">
+            {words.length > 0 && !loaded && (
+              <p className="note">カードの一覧を読み込んでいます。</p>
+            )}
+            {words.length > 0 && loaded && found.length === 0 && (
+              <p className="note">見つかりません。</p>
+            )}
+            {found.slice(0, SEARCH_LIMIT).map(({ defId }) => {
+              const inDeck = entries.find((entry) => entry.defId === defId)?.count ?? 0;
+              return (
+                <CardRow key={defId} defId={defId} table={table}>
+                  <span className="card-count">{inDeck === 0 ? "" : `${inDeck} 枚`}</span>
+                  <button
+                    type="button"
+                    className="secondary add"
+                    disabled={!canAdd(entries, table, defId)}
+                    onClick={(event) => change(defId, 1, event.currentTarget)}
+                  >
+                    追加
+                  </button>
+                </CardRow>
+              );
+            })}
+            {found.length > SEARCH_LIMIT && (
+              <p className="note">
+                ほかに {found.length - SEARCH_LIMIT}{" "}
+                件あります。ワザの名前などを空白のあとに打ち足すと絞れます。
+              </p>
+            )}
+          </div>
+        </div>
+        <div>
+          <h2 id="deck-count" className={total === DECK_SIZE ? "deck-count full" : "deck-count"}>
+            {total === 0 ? "デッキは空です" : `${total} / ${DECK_SIZE} 枚`}
+          </h2>
+          <div id="deck-cards" className="card-list">
+            {/* 名前の表が届くまでは、defId しか出せないので並べない。 */}
+            {!loaded && total > 0 && <p className="note">カードの一覧を読み込んでいます。</p>}
+            {loaded &&
+              groupByKind(entries, table).map(({ kind, group }) => (
+                <DeckGroup key={kind ?? ""} kind={kind} count={deckSize(group)}>
+                  {group.map(({ defId, count }) => (
+                    <CardRow key={defId} defId={defId} table={table}>
+                      <button
+                        type="button"
+                        className="secondary remove"
+                        onClick={(event) => change(defId, -1, event.currentTarget)}
+                      >
+                        −
+                      </button>
+                      <span className="card-count">{count}</span>
+                      <button
+                        type="button"
+                        className="secondary add"
+                        disabled={!canAdd(entries, table, defId)}
+                        onClick={(event) => change(defId, 1, event.currentTarget)}
+                      >
+                        ＋
+                      </button>
+                    </CardRow>
+                  ))}
+                </DeckGroup>
+              ))}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -447,15 +435,30 @@ function groupByKind(
 }
 
 /**
- * 欄に出すもの。読み込んだデッキの残りを先に、ほかの文をあとに並べる。
- * どちらも、いまのデッキについてのものだけ出す。
+ * 欄に出すもの。読み込んだデッキの残り、この画面の操作の文、保存したデッキを照らした結果の順に並べる。
+ * 照らした結果は、保存したときのデッキのままのときだけ出す。組み替えたら、保存していないことを出す。
  */
-function shownStatus(
-  picking: OfficialImport | null,
-  status: DeckMessage,
-  deck: string | null,
-): Pick<DeckMessage, "messages" | "tone"> {
-  const current = status.deck === deck;
+function shownStatus({
+  picking,
+  status,
+  entries,
+  saved,
+  unsaved,
+}: {
+  picking: OfficialImport | null;
+  status: DeckMessage | null;
+  entries: readonly DeckEntry[];
+  saved: SavedDeck | null;
+  unsaved: boolean;
+}): Pick<DeckMessage, "messages" | "tone"> {
+  const current = status !== null && status.entries === entries ? status : null;
+  const verdict = unsaved
+    ? { messages: ["保存していない変更があります。"], tone: "" as const }
+    : saved === null
+      ? null
+      : saved.errors.length === 0
+        ? { messages: [`${deckSize(saved.cards)} 枚で、規則を通ります。`], tone: "ok" as const }
+        : { messages: ["このままでは対戦に出せません。", ...saved.errors], tone: "ng" as const };
   const messages = [
     ...(picking?.missing ?? []),
     ...(picking?.pending ?? [])
@@ -464,8 +467,12 @@ function shownStatus(
         (group) =>
           `${group.name} は ${group.choices.length} 通りあります。あと ${group.left} 枚を選んでください。`,
       ),
-    ...(current ? status.messages : []),
+    ...(current?.messages ?? []),
+    ...(verdict?.messages ?? []),
   ];
-  const tone = (picking?.missing.length ?? 0) > 0 ? "ng" : current ? status.tone : "";
+  const tone =
+    (picking?.missing.length ?? 0) > 0 || current?.tone === "ng"
+      ? "ng"
+      : ((current?.tone || verdict?.tone) ?? "");
   return { messages, tone };
 }
