@@ -1,12 +1,14 @@
 /**
- * 画面はワザの手の見出しを、`attackIndex` を印刷されたワザの並びに当てて引く
- * （`web/lib/describe-move.ts` の `attackName`）。エンジンの宣言できるワザの表が、印刷されたワザを
- * 同じ順で前に並べている間だけ正しい。並べ方が変わったらここで落ちる。
+ * 座席の画面はワザの手の見出しを、サーバが送る宣言できるワザの表（`attacks`）から引く。リプレイと観戦には
+ * その表が無いので、`attackIndex` を印刷されたワザの並びに当てて引く（`web/lib/describe-move.ts` の
+ * `attackName`）。エンジンの宣言できるワザの表が、印刷されたワザを同じ順で前に並べている間だけ正しい。
+ * 並べ方が変わったらここで落ちる。
  */
 
 import { describe, expect, it } from "vitest";
 import { availableAttacks, type Player } from "../src/engine.js";
 import { cardIndex } from "../src/card-index.js";
+import { attacksFor, legalMovesFor, toMove } from "../src/match.js";
 import { newMatch, playToEnd } from "./helpers.js";
 
 describe("宣言できるワザの表", () => {
@@ -30,5 +32,22 @@ describe("宣言できるワザの表", () => {
     }
     // 1 種類のポケモンしか見ていなければ、並べ方の違いに気付けない。
     expect(checked.size).toBeGreaterThan(1);
+  });
+
+  it("宣言できるワザの表は、ワザを宣言できる座席へだけ送る", () => {
+    let sent = 0;
+    playToEnd(newMatch("ワザの表を送る"), 7, {
+      maxMoves: 200,
+      inspect: (match, seat: Player) => {
+        const attacks = attacksFor(match, seat);
+        const declarable = (legalMovesFor(match, seat) ?? []).some(
+          (move) => move.type === "Attack",
+        );
+        if (declarable) expect(attacks).not.toBeNull();
+        if (toMove(match) !== seat) expect(attacks).toBeNull();
+        if (attacks !== null) sent += 1;
+      },
+    });
+    expect(sent).toBeGreaterThan(0);
   });
 });

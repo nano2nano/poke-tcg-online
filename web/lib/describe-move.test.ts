@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ChoiceAnswer, Move, PlayerView } from "../../src/engine.js";
-import { viewFor } from "../../src/match.js";
-import { ensureCards, newMatch } from "../../tests/helpers.js";
+import { cardIndex } from "../../src/card-index.js";
+import { attacksFor, toMove, viewFor } from "../../src/match.js";
+import { ensureCards, finishSetup, newMatch } from "../../tests/helpers.js";
 import type { CardTable } from "./cards.js";
 import { readerView } from "./describe.js";
 import { choicePrompt, describeMove, replayStatusText } from "./describe-move.js";
@@ -19,6 +20,43 @@ describe("describeMove", () => {
 
   it("HP を当てる答えは、答える HP で出す", () => {
     expect(answering({ kind: "hpGuess", value: 120 })).toBe("HP 120");
+  });
+});
+
+describe("ワザを使う手", () => {
+  it("ベンチのポケモンのワザを使えるようになったら、ワザの名前と、どのポケモンのワザかで出す", () => {
+    ensureCards();
+    const match = newMatch("describe-move-attack");
+    finishSetup(match);
+    const player = toMove(match)!;
+    const side = match.state.players[player];
+    const active = side.active!;
+    const lent = active.stack.at(-1)!;
+    side.bench[0] = {
+      ...active,
+      inPlayId: "ベンチのポケモン",
+      stack: [{ instanceId: "ベンチのカード", defId: lent.defId }],
+    };
+    const index = cardIndex();
+    // バトル場に出すと、ベンチのポケモンのワザも宣言できるようになるポケモンを、カードプールから探す。
+    const lending = Object.keys(index).find((defId) => {
+      if (index[defId]?.kind !== "pokemon") return false;
+      active.stack = [{ ...lent, defId }];
+      return attacksFor(match, player)?.some((attack) => !attack.own) === true;
+    });
+    if (lending === undefined) throw new Error("ベンチのワザを使えるポケモンが見つからない");
+
+    const attacks = attacksFor(match, player)!;
+    const attackIndex = attacks.findIndex((attack) => !attack.own);
+    const cards = index as unknown as CardTable;
+    const label = describeMove(
+      { type: "Attack", player, attackIndex },
+      { view: viewFor(match, player), cards, attacks },
+    );
+    const name = index[lent.defId]!.name;
+    expect(label).toBe(
+      `ワザ「${index[lent.defId]!.attacks![0]}」を使う（自分のベンチの${name}のワザ）`,
+    );
   });
 });
 

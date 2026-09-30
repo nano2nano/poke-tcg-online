@@ -12,6 +12,7 @@
 
 import {
   applyMove,
+  availableAttacks,
   benchCapacity,
   cardsInZone,
   createGame,
@@ -32,6 +33,7 @@ import {
 import type {
   CardDefId,
   CardInstance,
+  CardInstanceId,
   Choice,
   ChoiceAnswer,
   DecisionExtras,
@@ -898,6 +900,32 @@ export function answerDestinationsFor(
   seat: Player,
 ): (AnswerDestination | null)[] | null {
   return toMove(match) === seat ? match.answerDestinations : null;
+}
+
+/** 宣言できるワザの 1 つ（3.2 節の `attacks`）。`card` はワザを印刷している場のカード。 */
+export interface AttackView {
+  name: string;
+  /** バトルポケモンが持っているワザか。特性やどうぐで使えるようになったワザは偽。 */
+  own: boolean;
+  card: CardInstanceId;
+}
+
+/**
+ * 手番の座席のバトルポケモンが宣言できるワザの表（3.2 節の `attacks`）。`Attack` の `attackIndex` はこの表の位置で、
+ * 特性やどうぐで使えるようになったワザは、印刷のワザのあとに並ぶ。画面は印刷のワザしか引けないので、
+ * これが無いとそのワザの名前が分からない。
+ */
+export function attacksFor(match: Match, seat: Player): AttackView[] | null {
+  const { state } = match;
+  const active = state.players[seat].active;
+  // ワザを宣言できるのは、選択の途中でない番の中だけである。
+  if (toMove(match) !== seat || state.phase !== "main" || state.choices.length > 0) return null;
+  if (active === null) return null;
+  return availableAttacks(state, active.inPlayId).map(({ own, from }) => ({
+    name: from.label,
+    own,
+    card: from.instanceId,
+  }));
 }
 
 /**

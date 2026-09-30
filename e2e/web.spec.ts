@@ -1039,6 +1039,7 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
           legalMoves: offered,
           ...choices,
           revealedDeck: null,
+          attacks: null,
           mulligans: [],
           firstPlayer: view.viewer,
           clock,
@@ -1060,6 +1061,7 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
         legalMoves: null,
         ...choices,
         revealedDeck: null,
+        attacks: null,
         clock,
       }),
     );

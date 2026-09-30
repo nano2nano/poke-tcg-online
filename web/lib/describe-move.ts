@@ -7,7 +7,12 @@
 
 import type { ChoiceAnswer, Move, Player, Zone } from "../../src/engine.js";
 import type { ReplayFrame } from "../../src/history.js";
-import type { AnswerDestination, DeckPlacementView, SetupView } from "../../src/match.js";
+import type {
+  AnswerDestination,
+  AttackView,
+  DeckPlacementView,
+  SetupView,
+} from "../../src/match.js";
 import type { CardTable } from "./cards.js";
 import {
   abilityName,
@@ -27,6 +32,8 @@ type Pokemon = NonNullable<Side["active"]>;
 export interface MoveContext {
   view: ReaderView | null;
   cards: CardTable;
+  /** 座席のバトルポケモンが宣言できるワザ。リプレイと観戦には無い。 */
+  attacks?: readonly AttackView[] | null;
 }
 
 /**
@@ -200,10 +207,13 @@ export function describeMove(
     case "DiscardOwnPokemon":
       return `${target(move.target)} をトラッシュする`;
     case "Attack": {
-      const name = attackName(move, context);
-      return name === undefined
-        ? `${move.attackIndex + 1} 番目のワザを使う`
-        : `ワザ「${name}」を使う`;
+      const listed =
+        move.player === context.view?.viewer ? context.attacks?.[move.attackIndex] : undefined;
+      const name = listed?.name ?? attackName(move, context);
+      if (name === undefined) return `${move.attackIndex + 1} 番目のワザを使う`;
+      return listed === undefined || listed.own
+        ? `ワザ「${name}」を使う`
+        : `ワザ「${name}」を使う（${grantedBy(listed.card, context)}のワザ）`;
     }
     case "EndTurn":
       return "番を終わる";
@@ -222,6 +232,16 @@ function attackName(
   const active = side?.active;
   if (active == null || "concealed" in active) return undefined;
   return printedAttack(cards, active.stack.at(-1)?.defId, move.attackIndex);
+}
+
+/**
+ * 特性やどうぐで使えるようになったワザを印刷しているカード。ポケモンならその場所で書く。同じポケモンが
+ * ベンチに並んでも、どれのワザかを見分けられる。
+ */
+function grantedBy(instanceId: string, context: MoveContext): string {
+  const found = locateCard(instanceId, context);
+  if (found === null) return instanceId;
+  return found.zone === "stack" ? found.place : nameOf(context.cards, found.defId);
 }
 
 /**

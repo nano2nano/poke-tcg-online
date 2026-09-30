@@ -17,6 +17,7 @@ import type {
 } from "./engine.js";
 import type {
   AnswerDestination,
+  AttackView,
   DeckPlacementView,
   MatchResult,
   MulliganReveal,
@@ -120,6 +121,8 @@ export interface SyncMessage {
   answerDestinations: (AnswerDestination | null)[] | null;
   /** 山札全体を見せる効果で山札から選んでいるなら、見せた山札のうちまだ山札にあるカード。選ぶ座席にだけ入る（3.2 節）。 */
   revealedDeck: CardDefId[] | null;
+  /** バトルポケモンが宣言できるワザ。`Attack` の `attackIndex` はこの表の位置である。手番側の座席にだけ入る（3.2 節）。 */
+  attacks: AttackView[] | null;
   /** 対戦準備で引き直すときに見せた手札。両座席に同じものが入る（2.4 節）。 */
   mulligans: MulliganReveal[];
   /** 先攻。決めた `game-started` は対戦を作るときのイベントで、`delta` には載らない。 */
@@ -142,6 +145,7 @@ export interface DeltaMessage {
   deckPlacement: DeckPlacementView | null;
   answerDestinations: (AnswerDestination | null)[] | null;
   revealedDeck: CardDefId[] | null;
+  attacks: AttackView[] | null;
   /** 対戦準備のあいだだけ載せる。無ければ、前に届いたものから変わっていない。 */
   mulligans?: MulliganReveal[];
   clock: ClockView;
