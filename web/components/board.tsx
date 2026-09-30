@@ -34,6 +34,7 @@ import {
   type DropSpot,
 } from "../lib/card-drops.js";
 import { MOVE_SECONDS, SETTLE_MS } from "../lib/motion.js";
+import { handSubject, pokemonSubject, STADIUM_SUBJECT } from "../lib/card-menu.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 import {
   CardDragArea,
@@ -484,6 +485,7 @@ function PokemonBox({
         ...pokemon.stack.map((card) => card.defId).reverse(),
         ...pokemon.attached.map((card) => card.defId),
       ],
+      subject: pokemonSubject(pokemon.inPlayId),
     },
     choosable ? () => choices?.choose(pokemon.inPlayId) : undefined,
   );
@@ -708,7 +710,7 @@ function HandCard({ card }: { card: CardInstance }) {
     <CardFace
       defId={card.defId}
       instanceId={card.instanceId}
-      zoom={{ title: "手札", defIds: [card.defId] }}
+      zoom={{ title: "手札", defIds: [card.defId], subject: handSubject(card.defId) }}
     />
   );
 }
@@ -719,7 +721,7 @@ function GripCard({ card }: { card: CardInstance }) {
     <CardFace
       defId={card.defId}
       instanceId={card.instanceId}
-      zoom={{ title: "手札", defIds: [card.defId] }}
+      zoom={{ title: "手札", defIds: [card.defId], subject: handSubject(card.defId) }}
       gripRef={attach}
       grippable={grippable}
       picked={picked}
@@ -757,7 +759,7 @@ export const Stadium = memo(function Stadium({ stadium }: { stadium: SpectatorVi
           key={stadium.instanceId}
           defId={stadium.defId}
           instanceId={stadium.instanceId}
-          zoom={{ title: "スタジアム", defIds: [stadium.defId] }}
+          zoom={{ title: "スタジアム", defIds: [stadium.defId], subject: STADIUM_SUBJECT }}
         />
       ) : (
         [stadium.left, stadium.right].map((card) => (
@@ -765,7 +767,7 @@ export const Stadium = memo(function Stadium({ stadium }: { stadium: SpectatorVi
             key={card.instanceId}
             defId={card.defId}
             instanceId={card.instanceId}
-            zoom={{ title: "スタジアム", defIds: [card.defId] }}
+            zoom={{ title: "スタジアム", defIds: [card.defId], subject: STADIUM_SUBJECT }}
           />
         ))
       )}

@@ -821,6 +821,9 @@ button.choice-card:enabled > .card {
   font-size: 0.8rem;
   opacity: 0.8;
 }
+.card-zoom .moves {
+  margin: 12px 0;
+}
 
 .card-preview {
   position: fixed;
@@ -1310,10 +1313,4 @@ button.choice-card:enabled > .card {
 }
 .move-menu button {
   text-align: left;
-}
-/* 右クリックはマウスの操作なので、タッチだけの端末には案内しない。 */
-@media not ((hover: hover) and (pointer: fine)) {
-  .menu-hint {
-    display: none;
-  }
 }

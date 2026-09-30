@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
@@ -19,6 +19,7 @@ import { isHandSubject, menuSubjectAt, planMenus } from "../lib/card-menu.js";
 import { setupOffer, type SeatState } from "../lib/match-state.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
+import { ZoomMovesContext } from "../lib/zoom.js";
 import {
   Board,
   CardFace,
@@ -116,6 +117,28 @@ export function SeatTable({
   useLayoutEffect(() => {
     latestPlay.current = onPlay;
   });
+  // カードを大きく出したら、そのカードでできる手も並べる。右クリックのメニューと同じ手を出す。
+  const showZoomMoves = use(ZoomMovesContext);
+  useEffect(() => {
+    if (disabled || seating.awaiting) return;
+    showZoomMoves({
+      list: (subject) => {
+        const keys = menus.get(subject) ?? [];
+        return listed.buttons
+          .filter(({ key }) => keys.includes(key))
+          .map(({ key, label, move }) => ({
+            key,
+            label,
+            play: () => {
+              // 落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
+              setNarrowed(null);
+              latestPlay.current(move);
+            },
+          }));
+      },
+    });
+    return () => showZoomMoves(null);
+  }, [showZoomMoves, menus, listed, disabled, seating.awaiting]);
   const pokemonChoices = useMemo(() => {
     const moves = pokemonMoves(listed.buttons);
     if (disabled || moves.size === 0) return null;
@@ -266,8 +289,8 @@ export function SeatTable({
         <div className="table-panel">
           <Mulligans state={state} />
           <h2>指せる手</h2>
-          <p className="note menu-hint">
-            盤面のカードやポケモンを右クリックすると、そこでできる手を選べます。
+          <p className="note">
+            盤面のカードやポケモンを押して大きく出すと、そこでできる手も選べます。マウスなら右クリックでその場に出せます。
           </p>
           {!cardChoice && (
             <Moves
