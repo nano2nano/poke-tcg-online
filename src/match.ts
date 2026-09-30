@@ -33,6 +33,7 @@ import {
 import type {
   CardDefId,
   CardInstance,
+  CardInstanceId,
   Choice,
   ChoiceAnswer,
   DecisionExtras,
@@ -901,10 +902,12 @@ export function answerDestinationsFor(
   return toMove(match) === seat ? match.answerDestinations : null;
 }
 
-/** 宣言できるワザの 1 つ（3.2 節の `attacks`）。`from` はワザを印刷しているカード。 */
+/** 宣言できるワザの 1 つ（3.2 節の `attacks`）。`card` はワザを印刷している場のカード。 */
 export interface AttackView {
   name: string;
-  from: CardDefId;
+  /** バトルポケモンが持っているワザか。特性やどうぐで使えるようになったワザは偽。 */
+  own: boolean;
+  card: CardInstanceId;
 }
 
 /**
@@ -913,11 +916,15 @@ export interface AttackView {
  * これが無いとそのワザの名前が分からない。
  */
 export function attacksFor(match: Match, seat: Player): AttackView[] | null {
-  const active = match.state.players[seat].active;
-  if (toMove(match) !== seat || active === null) return null;
-  return availableAttacks(match.state, active.inPlayId).map(({ from }) => ({
+  const { state } = match;
+  const active = state.players[seat].active;
+  // ワザを宣言できるのは、選択の途中でない番の中だけである。
+  if (toMove(match) !== seat || state.phase !== "main" || state.choices.length > 0) return null;
+  if (active === null) return null;
+  return availableAttacks(state, active.inPlayId).map(({ own, from }) => ({
     name: from.label,
-    from: from.defId,
+    own,
+    card: from.instanceId,
   }));
 }
 

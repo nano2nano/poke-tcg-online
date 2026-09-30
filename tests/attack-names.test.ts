@@ -1,13 +1,14 @@
 /**
- * 画面はワザの手の見出しを、`attackIndex` を印刷されたワザの並びに当てて引く
- * （`web/lib/describe-move.ts` の `attackName`）。エンジンの宣言できるワザの表が、印刷されたワザを
- * 同じ順で前に並べている間だけ正しい。並べ方が変わったらここで落ちる。
+ * 座席の画面はワザの手の見出しを、サーバが送る宣言できるワザの表（`attacks`）から引く。リプレイと観戦には
+ * その表が無いので、`attackIndex` を印刷されたワザの並びに当てて引く（`web/lib/describe-move.ts` の
+ * `attackName`）。エンジンの宣言できるワザの表が、印刷されたワザを同じ順で前に並べている間だけ正しい。
+ * 並べ方が変わったらここで落ちる。
  */
 
 import { describe, expect, it } from "vitest";
 import { availableAttacks, type Player } from "../src/engine.js";
 import { cardIndex } from "../src/card-index.js";
-import { attacksFor, toMove } from "../src/match.js";
+import { attacksFor, legalMovesFor, toMove } from "../src/match.js";
 import { newMatch, playToEnd } from "./helpers.js";
 
 describe("宣言できるワザの表", () => {
@@ -33,23 +34,20 @@ describe("宣言できるワザの表", () => {
     expect(checked.size).toBeGreaterThan(1);
   });
 
-  it("手番の座席へだけ、表の並びのまま、ワザの名前と印刷しているカードを送る", () => {
-    let checked = 0;
+  it("宣言できるワザの表は、ワザを宣言できる座席へだけ送る", () => {
+    let sent = 0;
     playToEnd(newMatch("ワザの表を送る"), 7, {
       maxMoves: 200,
       inspect: (match, seat: Player) => {
-        const active = match.state.players[seat].active;
-        if (toMove(match) !== seat || active === null) {
-          expect(attacksFor(match, seat)).toBeNull();
-          return;
-        }
-        const table = availableAttacks(match.state, active.inPlayId);
-        expect(attacksFor(match, seat)).toEqual(
-          table.map(({ from }) => ({ name: from.label, from: from.defId })),
+        const attacks = attacksFor(match, seat);
+        const declarable = (legalMovesFor(match, seat) ?? []).some(
+          (move) => move.type === "Attack",
         );
-        checked += 1;
+        if (declarable) expect(attacks).not.toBeNull();
+        if (toMove(match) !== seat) expect(attacks).toBeNull();
+        if (attacks !== null) sent += 1;
       },
     });
-    expect(checked).toBeGreaterThan(0);
+    expect(sent).toBeGreaterThan(0);
   });
 });

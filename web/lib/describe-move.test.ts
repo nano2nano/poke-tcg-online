@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChoiceAnswer, Move, PlayerView } from "../../src/engine.js";
-import { toMove, viewFor } from "../../src/match.js";
+import { cardIndex } from "../../src/card-index.js";
+import { attacksFor, toMove, viewFor } from "../../src/match.js";
 import { ensureCards, finishSetup, newMatch } from "../../tests/helpers.js";
 import type { CardTable } from "./cards.js";
 import { readerView } from "./describe.js";
@@ -23,23 +24,39 @@ describe("describeMove", () => {
 });
 
 describe("ワザを使う手", () => {
-  it("特性やどうぐで使えるようになったワザは、名前と、どのカードのワザかで出す", () => {
+  it("ベンチのポケモンのワザを使えるようになったら、ワザの名前と、どのポケモンのワザかで出す", () => {
     ensureCards();
     const match = newMatch("describe-move-attack");
     finishSetup(match);
     const player = toMove(match)!;
-    const view = viewFor(match, player);
-    const own = view.self.active?.stack.at(-1)?.defId;
-    if (own === undefined) throw new Error("バトルポケモンがいない");
-    const cards = { 与える: { name: "与えるカード" } } as unknown as CardTable;
-    const attacks = [
-      { name: "自分のワザ", from: own },
-      { name: "もらったワザ", from: "与える" },
-    ];
-    const attack = (attackIndex: number) =>
-      describeMove({ type: "Attack", player, attackIndex }, { view, cards, attacks });
-    expect(attack(0)).toBe("ワザ「自分のワザ」を使う");
-    expect(attack(1)).toBe("ワザ「もらったワザ」を使う（与えるカードのワザ）");
+    const side = match.state.players[player];
+    const active = side.active!;
+    const lent = active.stack.at(-1)!;
+    side.bench[0] = {
+      ...active,
+      inPlayId: "ベンチのポケモン",
+      stack: [{ instanceId: "ベンチのカード", defId: lent.defId }],
+    };
+    const index = cardIndex();
+    // バトル場に出すと、ベンチのポケモンのワザも宣言できるようになるポケモンを、カードプールから探す。
+    const lending = Object.keys(index).find((defId) => {
+      if (index[defId]?.kind !== "pokemon") return false;
+      active.stack = [{ ...lent, defId }];
+      return attacksFor(match, player)?.some((attack) => !attack.own) === true;
+    });
+    if (lending === undefined) throw new Error("ベンチのワザを使えるポケモンが見つからない");
+
+    const attacks = attacksFor(match, player)!;
+    const attackIndex = attacks.findIndex((attack) => !attack.own);
+    const cards = index as unknown as CardTable;
+    const label = describeMove(
+      { type: "Attack", player, attackIndex },
+      { view: viewFor(match, player), cards, attacks },
+    );
+    const name = index[lent.defId]!.name;
+    expect(label).toBe(
+      `ワザ「${index[lent.defId]!.attacks![0]}」を使う（自分のベンチの${name}のワザ）`,
+    );
   });
 });
 

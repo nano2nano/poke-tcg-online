@@ -211,11 +211,9 @@ export function describeMove(
         move.player === context.view?.viewer ? context.attacks?.[move.attackIndex] : undefined;
       const name = listed?.name ?? attackName(move, context);
       if (name === undefined) return `${move.attackIndex + 1} 番目のワザを使う`;
-      // 特性やどうぐで使えるようになったワザは、どのカードのワザかを添える。
-      const own = listed === undefined || listed.from === activeDefId(move.player, context);
-      return own
+      return listed === undefined || listed.own
         ? `ワザ「${name}」を使う`
-        : `ワザ「${name}」を使う（${nameOf(context.cards, listed.from)}のワザ）`;
+        : `ワザ「${name}」を使う（${grantedBy(listed.card, context)}のワザ）`;
     }
     case "EndTurn":
       return "番を終わる";
@@ -226,16 +224,24 @@ export function describeMove(
   }
 }
 
-function attackName(move: Extract<Move, { type: "Attack" }>, context: MoveContext) {
-  return printedAttack(context.cards, activeDefId(move.player, context), move.attackIndex);
-}
-
-/** `player` のバトルポケモンのいちばん上のカード。 */
-function activeDefId(player: Player, { view }: MoveContext): string | undefined {
-  const side = player === view?.viewer ? view.self : view?.opponent;
+function attackName(
+  move: Extract<Move, { type: "Attack" }>,
+  { view, cards }: MoveContext,
+): string | undefined {
+  const side = move.player === view?.viewer ? view.self : view?.opponent;
   const active = side?.active;
   if (active == null || "concealed" in active) return undefined;
-  return active.stack.at(-1)?.defId;
+  return printedAttack(cards, active.stack.at(-1)?.defId, move.attackIndex);
+}
+
+/**
+ * 特性やどうぐで使えるようになったワザを印刷しているカード。ポケモンならその場所で書く。同じポケモンが
+ * ベンチに並んでも、どれのワザかを見分けられる。
+ */
+function grantedBy(instanceId: string, context: MoveContext): string {
+  const found = locateCard(instanceId, context);
+  if (found === null) return instanceId;
+  return found.zone === "stack" ? found.place : nameOf(context.cards, found.defId);
 }
 
 /**
