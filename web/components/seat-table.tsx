@@ -1,13 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
@@ -23,7 +15,7 @@ import {
   type MoveContext,
 } from "../lib/describe-move.js";
 import { NO_DROPS, planDrops } from "../lib/card-drops.js";
-import { menuSubjectAt, planMenus } from "../lib/card-menu.js";
+import { isHandSubject, menuSubjectAt, planMenus } from "../lib/card-menu.js";
 import { setupOffer, type SeatState } from "../lib/match-state.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
@@ -38,7 +30,7 @@ import {
 } from "./board.js";
 import type { CardDrops } from "./card-drag.js";
 import { EventLog } from "./event-log.js";
-import { SettingsButton, useAutoAnswer } from "./settings.js";
+import { SettingsButton, useDirectPlay } from "./settings.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
 /**
@@ -88,6 +80,7 @@ export function SeatTable({
   const disabled = connection !== null;
   const plan = useMemo(() => planDrops(listed.buttons, context), [listed, context]);
   const menus = useMemo(() => planMenus(listed.buttons, context), [listed, context]);
+  const directPlay = useDirectPlay();
   const abilities = useMemo(
     () =>
       new Set(
@@ -134,34 +127,6 @@ export function SeatTable({
       },
     };
   }, [listed, disabled]);
-  // 答えが 1 つしか無い選択は、設定で選んでいれば押さずに進める。番を終える手と、山札や相手の手札を
-  // 見ている選択は、何があったかを確かめてから自分で進める。
-  const autoAnswer = useAutoAnswer();
-  const [alone] = listed.buttons;
-  const answerAlone =
-    autoAnswer &&
-    listed.buttons.length === 1 &&
-    alone?.move.type === "AnswerChoice" &&
-    state.ended === null &&
-    view?.phase !== "setup" &&
-    view?.choices.at(-1)?.prompt?.kind !== "selectFromHiddenZone"
-      ? alone
-      : null;
-  // 同じ局面へは 1 度だけ送る。サーバが断った手や、返事の無かった手を送り直し続けない。
-  const answerFor = answerAlone === null ? null : `${state.stateVersion} ${answerAlone.key}`;
-  const answered = useRef<string | null>(null);
-  const answer = useEffectEvent(() => {
-    if (answerAlone === null) return;
-    playMove(seating, listed.offered, answerAlone.move);
-    feed.show({ text: `「${answerAlone.label}」を自動で選びました。` });
-  });
-  useEffect(() => {
-    if (answerFor === null || answered.current === answerFor || disabled || seating.awaiting) {
-      return;
-    }
-    answered.current = answerFor;
-    answer();
-  }, [answerFor, disabled, seating.awaiting]);
   const cardChoice =
     state.ended === null &&
     view?.phase !== "setup" &&
@@ -201,15 +166,29 @@ export function SeatTable({
           const keys = subject === null ? undefined : menus.get(subject);
           if (keys === undefined || disabled || seating.awaiting) return;
           event.preventDefault();
-          // キーボードで開いたときは、開いたカードの下に出す。
-          const box = (target as Element).getBoundingClientRect();
-          const mouse = event.button === 2;
           // 落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
           setNarrowed(null);
+          const buttons = listed.buttons.filter(({ key }) => keys.includes(key));
+          const mouse = event.button === 2;
+          // 対象を取らないサポートのように手札のカードでできる手が 1 つだけなら、メニューは確かめるボタンに
+          // しかならない。場のポケモンはワザやにげるを見るつもりで押すことがあり、キーボードではメニューで
+          // 手を読むので、どちらもメニューを出す。
+          if (
+            directPlay &&
+            mouse &&
+            subject !== null &&
+            isHandSubject(subject) &&
+            buttons.length === 1
+          ) {
+            onPlay(buttons[0]!.move);
+            return;
+          }
+          // キーボードで開いたときは、開いたカードの下に出す。
+          const box = (target as Element).getBoundingClientRect();
           setMenu({
             x: mouse ? event.clientX : box.left,
             y: mouse ? event.clientY : box.bottom,
-            buttons: listed.buttons.filter(({ key }) => keys.includes(key)),
+            buttons,
           });
         }}
       >
