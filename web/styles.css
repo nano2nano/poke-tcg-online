@@ -229,7 +229,7 @@ details > summary {
   font-size: 0.9rem;
   margin: 8px 0 4px;
 }
-/* 効果でカードを選ぶあいだ、候補を盤面の上に重ねて大きく並べる。狭い画面では下の端に出す。 */
+/* 効果の選択は盤面の上に重ねて出す。狭い画面では下の端に出す。 */
 .choice-sheet {
   position: fixed;
   inset: auto 8px 8px;
@@ -955,7 +955,7 @@ button.choice-card:enabled > .card {
     margin: 8px 0 0;
   }
 
-  /* 選ぶカードは盤面の上に重ね、右の欄の時計と投了は隠さない。 */
+  /* 選ぶ画面は盤面の上に重ね、右の欄の時計と投了は隠さない。 */
   .table > .choice-sheet {
     position: relative;
     inset: auto;
