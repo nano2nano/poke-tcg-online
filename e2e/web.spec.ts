@@ -1690,6 +1690,32 @@ test.describe("タッチ端末の座席", () => {
     await expect(card).not.toHaveAttribute("data-picked");
   });
 
+  test("場のポケモンを押して大きく出すと、そのポケモンでできる手も並べ、押すと指す", async ({
+    page,
+  }) => {
+    const turn = firstTurn();
+    const attack: Move = { type: "Attack", player: turn.view.viewer, attackIndex: 0 };
+    const { sent } = await mockSeat(page, turn.view, [...turn.moves, attack]);
+    await page.goto("/");
+    const zoom = page.locator("#card-zoom");
+    const moves = page.locator("#card-zoom-moves button");
+
+    // 相手のポケモンでできる手は無いので、大きく出すだけにする。
+    await page.locator("#opponent .pokemon").first().tap();
+    await expect(zoom).toBeVisible();
+    await expect(moves).toHaveCount(0);
+    await page.locator("#card-zoom-close").tap();
+
+    await page.locator('#self [data-zone="active"] .pokemon').tap();
+    await expect(zoom).toBeVisible();
+    // 開いたキーを続けて押しても指さないよう、「閉じる」にいる。
+    await expect(page.locator("#card-zoom-close")).toBeFocused();
+    // ワザは最後に足したので、ここでも最後に並ぶ。
+    await moves.last().tap();
+    await expect.poll(() => sent).toEqual([attack]);
+    await expect(zoom).toBeHidden();
+  });
+
   test("カードを選んでいるあいだに盤面の番を終えるボタンを押すと、1 度でカードを放して番を終える", async ({
     page,
   }) => {

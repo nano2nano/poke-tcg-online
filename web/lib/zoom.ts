@@ -4,14 +4,25 @@
  */
 
 import { createContext, useContext, type KeyboardEvent } from "react";
+import type { MenuSubject } from "./card-menu.js";
 
 /** 出す見出しとカード。場のポケモンなら、進化の下のカードとついているカードもまとめて出す。 */
 export interface ZoomTarget {
   title: string;
   defIds: readonly string[];
+  /** 盤面の何を大きく出したか。座席の画面は、それでできる手を添える。 */
+  subject?: MenuSubject;
 }
 
 export const ZoomContext = createContext<(target: ZoomTarget) => void>(() => {});
+
+/** 大きく出したものでできる手。 */
+export interface ZoomMoves {
+  list: (subject: MenuSubject) => readonly { key: string; label: string; play: () => void }[];
+}
+
+/** 座席の画面が、大きく出したものでできる手を渡す。座席を離れたら null を渡す。 */
+export const ZoomMovesContext = createContext<(moves: ZoomMoves | null) => void>(() => {});
 
 /**
  * 押すかキーで選ぶと `target` を大きく出す要素の属性。`instead` を渡すと、大きく出す代わりにそれを呼ぶ
