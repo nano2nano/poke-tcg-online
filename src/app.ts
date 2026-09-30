@@ -22,11 +22,11 @@ import { frameAt, isMatchId, replayability } from "./history.js";
 import { clientMessageSchema } from "./protocol.js";
 import {
   createAccountSchema,
-  deckListSchema,
   deleteDeckSchema,
   joinBotRequestSchema,
   watchBotsRequestSchema,
   joinRequestSchema,
+  leaveRequestSchema,
   officialDeckSchema,
   replayRequestSchema,
   saveDeckSchema,
@@ -390,11 +390,6 @@ async function route(request: Request, origin: string, context: RouteContext): P
       failures,
     });
   }
-  if (request.method === "POST" && url.pathname === "/api/deck/validate") {
-    const deck = parseBody(deckListSchema, await readBody(request));
-    const errors = validateDeck(deck).map(describeViolation);
-    return json(200, { ok: errors.length === 0, errors });
-  }
   // 保存したデッキ（5.5 節）。どれも自分のデッキしか読み書きしない。
   if (request.method === "POST" && url.pathname === "/api/decks") {
     const { secret } = parseBody(secretRequestSchema, await readBody(request));
@@ -423,10 +418,16 @@ async function route(request: Request, origin: string, context: RouteContext): P
     return (await deckStore.remove(account.playerId, deckId)) ? json(200, {}) : deckNotFound();
   }
   if (request.method === "POST" && url.pathname === "/api/join") {
-    const body = parseBody(joinRequestSchema, await readBody(request));
+    const {
+      deck: built,
+      deckPreset,
+      ...body
+    } = parseBody(joinRequestSchema, await readBody(request));
+    const deck = chosenDeck(built, deckPreset);
+    if (deck === null) return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
     // 前の対戦のレーティングが動き終わってから席に着ける。記録に残るのは始めた時点の値である。
     await archive.settled();
-    const outcome = lobby.join(body, await accounts.find(body.secret));
+    const outcome = lobby.join({ ...body, deck }, await accounts.find(body.secret));
     return json(outcome.ok ? 200 : 400, outcome);
   }
   // AI の一覧と、AI が握れるデッキ（7.3 節）。
@@ -436,7 +437,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
   if (request.method === "POST" && url.pathname === "/api/join-bot") {
     const body = parseBody(joinBotRequestSchema, await readBody(request));
     await archive.settled();
-    const deck = body.deck ?? presetDeck(body.deckPreset ?? "");
+    const deck = chosenDeck(body.deck, body.deckPreset);
     const botDeck = presetDeck(body.botDeck);
     if (deck === null || botDeck === null) {
       return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
@@ -497,7 +498,16 @@ async function route(request: Request, origin: string, context: RouteContext): P
   if (request.method === "GET" && url.pathname === "/api/claim") {
     return json(200, lobby.claim(url.searchParams.get("ticket") ?? ""));
   }
+  if (request.method === "POST" && url.pathname === "/api/leave") {
+    const { ticket } = parseBody(leaveRequestSchema, await readBody(request));
+    return json(200, lobby.leave(ticket));
+  }
   return json(404, { error: "not found" });
+}
+
+/** 組んだデッキか、表のデッキの名前から引いたデッキ。表に無い名前なら null。 */
+function chosenDeck(built: DeckList | undefined, preset: string | undefined): DeckList | null {
+  return built ?? presetDeck(preset ?? "");
 }
 
 /**

@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Link, useBlocker } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import {
   accountQuery,
   accountText,
@@ -11,35 +12,31 @@ import {
 } from "../lib/account.js";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
+import { useSavedDecks, type SavedDeck } from "../lib/deck.js";
 import {
   botListQuery,
   claim,
-  builtDeck,
+  deckRequest,
+  leaveQueue,
   liveSeatOf,
   newSeedShare,
   presetName,
+  rememberDeckChoice,
   shareFor,
+  storedDeckChoice,
   withShare,
-  type DeckList,
+  type DeckChoice,
   type DeckPreset,
   type JoinOutcome,
   type SeedShare,
 } from "../lib/join.js";
-import { parseDeck, storedDeckJson, subscribeDeck } from "../lib/deck.js";
 import type { StoredSeat } from "../lib/seat.js";
-import { BotWatchForm } from "./bot-watch.js";
-import { DeckBuilder, forCurrentDeck, NO_DECK_STATUS, type DeckMessage } from "./deck-builder.js";
-
-const SAMPLE_NOTE = {
-  messages: ["デッキが空なので、サンプルデッキを使います。"],
-  tone: "",
-} satisfies Omit<DeckMessage, "deck">;
 
 /** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
 const SHARES_KEPT = 8;
 
 /**
- * 対戦に入る画面。席が決まったら `onSeated` へ渡す。
+ * 対戦に入る画面。使うデッキを 1 つ選び、人の相手をさがすか AI と対戦する。席が決まったら `onSeated` へ渡す。
  *
  * `status` は開いたときに出す一言で、座席を離れた理由が入る。
  */
@@ -58,8 +55,6 @@ export function Lobby({
   const queryClient = useQueryClient();
   const { table } = useCardData();
   const [status, setStatus] = useState(initialStatus);
-  const [deckStatus, setDeckStatus] = useState<DeckMessage>(NO_DECK_STATUS);
-  const showDeckStatus = forCurrentDeck(setDeckStatus);
   const [room, setRoom] = useState("");
   /** 送る時点のルームコード。名前と同じく、押してから送るまでに直した分も送る。 */
   const roomNow = useRef("");
@@ -85,16 +80,34 @@ export function Lobby({
   const deckName = (deck: DeckPreset) => presetName(deck, table);
   const [bot, setBot] = useState<string | null>(null);
   const [botDeck, setBotDeck] = useState<string | null>(null);
-  /**
-   * 自分のデッキの欄で人が選んだもの。選ぶまでは、組んだデッキが無ければ表の先頭のデッキにする。
-   * 空のまま押すとサンプルデッキになり、AI が学んだことの無い相手になる。
-   */
-  const [ownDeck, setOwnDeck] = useState<string | null>(null);
-  const deckJson = useSyncExternalStore(subscribeDeck, storedDeckJson);
-  const hasDeck = useMemo(() => parseDeck(deckJson).length > 0, [deckJson]);
   const chosenBot = bot ?? botNames[0]?.name ?? "";
   const chosenBotDeck = botDeck ?? decks[0]?.label ?? "";
-  const chosenOwnDeck = ownDeck ?? (hasDeck ? "" : (decks[0]?.label ?? ""));
+
+  const saved = useSavedDecks();
+  const savedDecks = saved.decks.data ?? [];
+  /**
+   * 人が選んだデッキ。前に選んだものが一覧に無ければ（消したデッキ、表から外れたデッキ）、
+   * 規則を通る保存したデッキの先頭か、サンプルデッキにする。
+   */
+  const [picked, setPicked] = useState<DeckChoice | null>(storedDeckChoice);
+  const firstPlayable = savedDecks.find(({ errors }) => errors.length === 0);
+  const listed = (option: DeckChoice) =>
+    option === "sample" ||
+    savedDecks.some(({ deckId }) => `saved:${deckId}` === option) ||
+    decks.some(({ label }) => `preset:${label}` === option);
+  const choice: DeckChoice =
+    picked !== null && listed(picked)
+      ? picked
+      : firstPlayable === undefined
+        ? "sample"
+        : `saved:${firstPlayable.deckId}`;
+  /** 一覧が届くまでは、選ぶデッキが決まらない。押させると、選んだつもりのないデッキで入る。 */
+  const choosing = (account.data !== undefined && saved.decks.isPending) || bots.isPending;
+  const chosenSaved = savedDecks.find(({ deckId }) => `saved:${deckId}` === choice) ?? null;
+  const choose = (next: DeckChoice) => {
+    setPicked(next);
+    rememberDeckChoice(next);
+  };
 
   /**
    * サーバへリクエストを送っているあいだは、次のリクエストを送らせない。
@@ -114,7 +127,9 @@ export function Lobby({
    * なので、デッキで断られたときなどに先にポーリングをやめると、前のチケットがキューに残ったまま誰も席を取りに行かない。
    */
   const waitingFor = useRef<object | null>(null);
-  /** 画面を離れたら、相手を待つのをやめる。席はもう別の画面が持っている。 */
+  /** 待っているチケットと、席に着いたときに開くシェア。ページを移るときに降ろす。 */
+  const waitingTicket = useRef<{ ticket: string; share: string | undefined } | null>(null);
+  /** 画面を離れたら、相手を待つのをやめる。席に着いたか、ページを移ってチケットを降ろした。 */
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -129,6 +144,28 @@ export function Lobby({
    * 最後の 1 つだけでは足りない。待っているチケットの席が決まる前に、次のリクエストが届かずに失敗することがある。
    */
   const sentShares = useRef<SeedShare[]>([]);
+
+  /**
+   * 相手を待つのをやめる。降ろす前に席が決まっていたら、その卓へ移って true を返す。
+   * 降ろさないままページを移ると、相手が見つかっても誰も取りに行かず、座らないまま時間切れで負ける。
+   */
+  const abandon = async (ticket: string, share: string | undefined): Promise<boolean> => {
+    const outcome = await leaveQueue(ticket);
+    if (outcome?.kind !== "seated") return false;
+    onSeated(withShare(outcome.seat, share));
+    return true;
+  };
+  useBlocker({
+    shouldBlockFn: async ({ next }) => {
+      const pending = waitingTicket.current;
+      // 卓へ移るのは、席に着いたときである。
+      if (pending === null || next.pathname === "/match") return false;
+      if (!confirm("相手をさがすのをやめて、このページを離れますか。")) return true;
+      waitingFor.current = null;
+      return abandon(pending.ticket, pending.share);
+    },
+    enableBeforeUnload: false,
+  });
 
   const run = (task: (mine: object) => Promise<void>) => {
     const mine = {};
@@ -157,7 +194,9 @@ export function Lobby({
     if (outcome.code === "account-not-found") {
       forgetAccount(queryClient);
     }
-    setStatus(`対戦に入れませんでした:\n${outcome.errors.join("\n")}`);
+    // `code` の無い断りは、デッキの違反である。
+    const lead = outcome.code === undefined ? "デッキが規則を通りません" : "対戦に入れませんでした";
+    setStatus(`${lead}:\n${outcome.errors.join("\n")}`);
   };
 
   /** 受け付けられたリクエストは表示名を変えている。戻ってきたときに、前の名前を欄に出さない。 */
@@ -186,7 +225,8 @@ export function Lobby({
     const outcome = await postJson<JoinOutcome>(path, request);
     const live = liveSeatOf(outcome);
     if (live !== null) {
-      if (mounted.current) onSeated(withShare(live, shareFor(live, sentShares.current)));
+      // ページを移っていても、続いている対戦の卓へ移る。その対戦の時計は流れている。
+      onSeated(withShare(live, shareFor(live, sentShares.current)));
       return null;
     }
     if (!outcome.ok) {
@@ -200,33 +240,22 @@ export function Lobby({
 
   const join = async (mine: object) => {
     setStatus("デッキを送っています");
-    // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
-    const sent = storedDeckJson();
-    const { deck, sample } = await builtDeck();
-    // 組んだデッキなら、欄はいまのデッキについてのものなので残す。確かめている途中の表示も消さない。
-    if (sample) showDeckStatus({ ...SAMPLE_NOTE, deck: sent });
+    const deck = await deckRequest(choice, savedDecks);
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
     const outcome = await send(
       "/api/join",
-      { ...request, deck: { cards: deck.cards }, ...(roomCode === "" ? {} : { roomCode }) },
+      { ...request, ...deck, ...(roomCode === "" ? {} : { roomCode }) },
       share,
     );
-    // 画面を離れていたら、この答えは使わない。キューに残ったチケットは、次に頼んだときにサーバが降ろすか、その席を返す。
-    if (outcome === null || !mounted.current) return;
-    if (!outcome.ok) {
-      if (outcome.code !== undefined) return refused(outcome);
-      // `code` の無い断りは、デッキの違反である。
-      // 待つあいだに組み替えていたら、理由は送ったデッキのものなので出さない。
-      if (sent !== storedDeckJson()) {
-        setStatus("待つあいだにデッキが変わりました。もう一度おしてください。");
-        return;
-      }
-      showDeckStatus({ messages: outcome.errors, tone: "ng", deck: sent });
-      setStatus("デッキを直してから、もう一度おしてください。");
+    if (outcome === null) return;
+    // 答えを待つあいだにページを移った。待つだけならチケットを降ろし、席が決まっていればその卓へ移る。
+    if (!mounted.current) {
+      if (outcome.ok) void abandon(outcome.ticket, share?.share);
       return;
     }
+    if (!outcome.ok) return refused(outcome);
     // 前のチケットはサーバが降ろした。前のポーリングの答えで、このリクエストの表示を上書きさせない。
     waitingFor.current = mine;
     if ("seat" in outcome) return onSeated(withShare(outcome.seat, share?.share));
@@ -250,6 +279,7 @@ export function Lobby({
       if (current()) setStatus(text);
     };
     setWaiting(true);
+    waitingTicket.current = { ticket, share };
     try {
       while (current()) {
         const claimed = await claim(ticket);
@@ -269,7 +299,7 @@ export function Lobby({
               return onSeated(withShare(claimed.seat, share));
             case "finished":
               // 席に着く前に終わっている。指していなくても記録には残り、レーティングも動いている。
-              show("この対戦は、席に着く前に終わりました。「一覧を出す」から読み返せます。");
+              show("この対戦は、席に着く前に終わりました。「対戦の記録」から読み返せます。");
               refreshAccount(queryClient).catch(() => {});
               return;
             case "dropped":
@@ -294,6 +324,7 @@ export function Lobby({
     } finally {
       if (waitingFor.current === mine) {
         waitingFor.current = null;
+        waitingTicket.current = null;
         if (mounted.current) setWaiting(false);
       }
     }
@@ -301,16 +332,7 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    let deck: { deckPreset: string } | { deck: DeckList };
-    if (chosenOwnDeck === "") {
-      // 規則はサーバに照らさせる。サーバは続いている対戦を先に見るので、組み直しかけのデッキでもそこへ戻れる。
-      const sent = storedDeckJson();
-      const built = await builtDeck();
-      if (built.sample) showDeckStatus({ ...SAMPLE_NOTE, deck: sent });
-      deck = { deck: { cards: built.deck.cards } };
-    } else {
-      deck = { deckPreset: chosenOwnDeck };
-    }
+    const deck = await deckRequest(choice, savedDecks);
     const share = await newSeedShare();
     const request = await common(share);
     const outcome = await send(
@@ -320,8 +342,8 @@ export function Lobby({
     );
     if (outcome === null) return;
     if (!outcome.ok) return refused(outcome);
-    // 画面を離れていたら座席を覚えない。AI との対戦は、次に頼んだときにサーバがその席を返す。
-    if (mounted.current && "seat" in outcome) onSeated(withShare(outcome.seat, share?.share));
+    // ページを移っていても卓へ移る。AI は待たずに指し始める。
+    if ("seat" in outcome) onSeated(withShare(outcome.seat, share?.share));
   };
 
   const botStatus = bots.isError
@@ -332,131 +354,169 @@ export function Lobby({
         ? "AI が握れるデッキがサーバにありません。"
         : "";
 
+  const unplayable = chosenSaved !== null && chosenSaved.errors.length > 0;
   return (
-    <section id="join">
-      <h2>対戦に入る</h2>
-      {remembered !== null && (
-        <p>
-          {/* 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。
-              リクエストやポーリングの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。 */}
-          <button
-            id="resume-button"
-            disabled={requesting || waiting}
-            onClick={() => onResume(remembered)}
-          >
-            指していた対戦へ戻る
-          </button>
+    <>
+      <section id="join" className="panel">
+        <h1>対戦する</h1>
+        <p id="account" className="note">
+          {account.data !== undefined
+            ? accountText(account.data)
+            : account.isError
+              ? `アカウントを読めませんでした: ${messageOf(account.error)}`
+              : ""}
         </p>
-      )}
-      <label>
-        名前{" "}
-        <input
-          id="name"
-          value={name}
-          onChange={(event) => {
-            typedNow.current = event.target.value;
-            setTypedName(event.target.value);
-          }}
-        />
-      </label>
-      <p id="account" className="note">
-        {account.data !== undefined
-          ? accountText(account.data)
-          : account.isError
-            ? `アカウントを読めませんでした: ${messageOf(account.error)}`
-            : ""}
-      </p>
-      <label>
-        ルームコード{" "}
-        <input
-          id="room"
-          placeholder="空ならマッチングキューへ"
-          value={room}
-          onChange={(event) => {
-            roomNow.current = event.target.value;
-            setRoom(event.target.value);
-          }}
-        />
-      </label>
-
-      <h2>デッキ</h2>
-      <p className="note">
-        カード名で検索して、候補の「追加」を押します。ワザの名前や収録でも探せます。同じ名前のカードは
-        HP やワザ、収録で見分けます。
-        組んだデッキはこのブラウザに残ります。空のままならサンプルデッキを使います。
-      </p>
-      <DeckBuilder
-        status={deckStatus}
-        onStatus={setDeckStatus}
-        actions={
-          <button id="join-button" disabled={requesting} onClick={() => run((mine) => join(mine))}>
+        {remembered !== null && (
+          <p>
+            {/* 新しく対戦に入ると、覚えている座席を置き換える。指していた対戦へ戻る道を先に出す。
+                リクエストやポーリングの途中で戻ると、その答えが戻った座席を置き換えるか、誰も取らないチケットが残る。 */}
+            <button
+              id="resume-button"
+              disabled={requesting || waiting}
+              onClick={() => onResume(remembered)}
+            >
+              指していた対戦へ戻る
+            </button>
+          </p>
+        )}
+        <div className="fields">
+          <label>
+            名前
+            <input
+              id="name"
+              value={name}
+              onChange={(event) => {
+                typedNow.current = event.target.value;
+                setTypedName(event.target.value);
+              }}
+            />
+          </label>
+          <label>
+            デッキ
+            <select
+              id="deck-choice"
+              value={choice}
+              onChange={(event) => choose(event.target.value as DeckChoice)}
+            >
+              {savedDecks.length > 0 && (
+                <optgroup label="保存したデッキ">
+                  {savedDecks.map((deck) => (
+                    <option key={deck.deckId} value={`saved:${deck.deckId}`}>
+                      {savedDeckLabel(deck)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="用意されたデッキ">
+                <option value="sample">サンプルデッキ</option>
+                {decks.map((deck) => (
+                  <option key={deck.label} value={`preset:${deck.label}`}>
+                    {deckName(deck)}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </label>
+        </div>
+        <p id="deck-note" className="note">
+          {unplayable ? (
+            <>
+              このデッキは規則を通りません（{chosenSaved.errors.join("、")}）。{" "}
+              <Link to="/decks/$deckId" params={{ deckId: chosenSaved.deckId }}>
+                デッキを直す
+              </Link>
+            </>
+          ) : saved.failure !== null ? (
+            `保存したデッキを読めませんでした: ${messageOf(saved.failure)}`
+          ) : (
+            <>
+              デッキは<Link to="/decks">デッキのページ</Link>で組んで保存できます。
+            </>
+          )}
+        </p>
+        <p>
+          <button
+            id="join-button"
+            className="primary"
+            disabled={requesting || choosing}
+            onClick={() => run((mine) => join(mine))}
+          >
             対戦をさがす
           </button>
-        }
-      />
+        </p>
+        <details className="room">
+          <summary>友だちと対戦する</summary>
+          <label>
+            ルームコード
+            <input
+              id="room"
+              placeholder="同じコードを入れた 2 人が対戦します"
+              value={room}
+              onChange={(event) => {
+                roomNow.current = event.target.value;
+                setRoom(event.target.value);
+              }}
+            />
+          </label>
+          <p className="note">
+            入れたら「対戦をさがす」を押します。空ならマッチングキューへ入ります。
+          </p>
+        </details>
+        <p>
+          <output id="join-status">{status}</output>
+        </p>
+      </section>
 
-      <h2>AI と対戦する</h2>
-      <p className="note">
-        学習した AI と指します。レーティングは動きません。自分のデッキは、上で組んだものか、AI
-        と同じ表のデッキから選べます。
-      </p>
-      <div className="bot-form">
-        <label>
-          AI{" "}
-          <select id="bot" value={chosenBot} onChange={(event) => setBot(event.target.value)}>
-            {botNames.map(({ name: botName }) => (
-              <option key={botName} value={botName}>
-                {botName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          AI のデッキ{" "}
-          <select
-            id="bot-deck"
-            value={chosenBotDeck}
-            onChange={(event) => setBotDeck(event.target.value)}
+      <section id="bot-join" className="panel">
+        <h2>AI と対戦する</h2>
+        <p className="note">
+          学習した AI と、上で選んだデッキで指します。レーティングは動きません。
+        </p>
+        <div className="bot-form">
+          <label>
+            AI
+            <select id="bot" value={chosenBot} onChange={(event) => setBot(event.target.value)}>
+              {botNames.map(({ name: botName }) => (
+                <option key={botName} value={botName}>
+                  {botName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            AI のデッキ
+            <select
+              id="bot-deck"
+              value={chosenBotDeck}
+              onChange={(event) => setBotDeck(event.target.value)}
+            >
+              {decks.map((deck) => (
+                <option key={deck.label} value={deck.label}>
+                  {deckName(deck)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            id="bot-button"
+            disabled={
+              requesting || waiting || choosing || botNames.length === 0 || decks.length === 0
+            }
+            onClick={() => run(joinBot)}
           >
-            {decks.map((deck) => (
-              <option key={deck.label} value={deck.label}>
-                {deckName(deck)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          自分のデッキ{" "}
-          <select
-            id="own-deck"
-            value={chosenOwnDeck}
-            onChange={(event) => setOwnDeck(event.target.value)}
-          >
-            <option value="">上で組んだデッキ</option>
-            {decks.map((deck) => (
-              <option key={deck.label} value={deck.label}>
-                {deckName(deck)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          id="bot-button"
-          disabled={requesting || waiting || botNames.length === 0 || decks.length === 0}
-          onClick={() => run(joinBot)}
-        >
-          AI と対戦する
-        </button>
-      </div>
-      <p id="bot-status" className="note">
-        {botStatus}
-      </p>
-      <p>
-        <output id="join-status">{status}</output>
-      </p>
-      <BotWatchForm />
-    </section>
+            AI と対戦する
+          </button>
+        </div>
+        <p id="bot-status" className="note">
+          {botStatus}
+        </p>
+      </section>
+    </>
   );
+}
+
+function savedDeckLabel(deck: SavedDeck): string {
+  return deck.errors.length === 0 ? deck.name : `${deck.name}（規則を通りません）`;
 }
 
 async function secretOf(ensureAccount: () => Promise<unknown>): Promise<string> {

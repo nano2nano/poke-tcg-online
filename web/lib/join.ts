@@ -6,20 +6,53 @@ import type { BotEntry, DeckPreset } from "../../src/bots.js";
 import type { DeckList } from "../../src/engine.js";
 import type { ClaimOutcome, JoinOutcome, Seated } from "../../src/lobby.js";
 import { queryOptions } from "@tanstack/react-query";
-import { getJson } from "./api.js";
+import { getJson, postJson } from "./api.js";
 import type { CardTable } from "./cards.js";
-import { deckCards, storedDeck } from "./deck.js";
+import { deckCards, type SavedDeck } from "./deck.js";
 import { sha256Hex, storedSeat, toHex, type StoredSeat } from "./seat.js";
 
 export type { DeckList, DeckPreset };
 
-/** 組んだデッキ。組んでいなければサンプルデッキ。規則には照らさない。 */
-export async function builtDeck(): Promise<{ deck: DeckList; sample: boolean }> {
-  const entries = storedDeck();
-  if (entries.length === 0) {
-    return { deck: await getJson<DeckList>("/api/sample-deck"), sample: true };
+/**
+ * 対戦に使うデッキの選び方。保存したデッキは `saved:<deckId>`、サンプルデッキは `sample`、
+ * AI と同じ表のデッキは `preset:<ラベル>`。選んだものは、次に開いたときのためにこのブラウザに残す。
+ */
+export type DeckChoice = `saved:${string}` | "sample" | `preset:${string}`;
+
+const CHOICE_KEY = "poke-deck-choice";
+
+export function storedDeckChoice(): DeckChoice | null {
+  try {
+    const choice = localStorage.getItem(CHOICE_KEY);
+    return choice === "sample" || /^(saved|preset):./.test(choice ?? "")
+      ? (choice as DeckChoice)
+      : null;
+  } catch {
+    return null;
   }
-  return { deck: deckCards(entries), sample: false };
+}
+
+export function rememberDeckChoice(choice: DeckChoice): void {
+  try {
+    localStorage.setItem(CHOICE_KEY, choice);
+  } catch {
+    // 残せなくても、この画面では選んだデッキで対戦に入れる。
+  }
+}
+
+/**
+ * 送るデッキ。規則には照らさない。照らすのはサーバで、続いている対戦があればデッキより先にその席を返す。
+ * 保存したデッキが一覧に無ければ（別のブラウザで消したときなど）投げる。
+ */
+export async function deckRequest(
+  choice: DeckChoice,
+  saved: readonly SavedDeck[],
+): Promise<{ deck: DeckList } | { deckPreset: string }> {
+  if (choice === "sample") return { deck: await getJson<DeckList>("/api/sample-deck") };
+  if (choice.startsWith("preset:")) return { deckPreset: choice.slice("preset:".length) };
+  const deck = saved.find(({ deckId }) => `saved:${deckId}` === choice);
+  if (deck === undefined) throw new Error("選んだデッキが見つかりません");
+  return { deck: deckCards(deck.cards) };
 }
 
 export interface SeedShare {
@@ -83,6 +116,14 @@ export function presetName(deck: DeckPreset, cards: CardTable): string {
   return names.length > 0 && names.every((one) => one !== undefined)
     ? names.join("・")
     : deck.label;
+}
+
+/**
+ * 相手を待つのをやめる。もう席が決まっていれば、引き換えと同じ答えが返る。
+ * 届かなければ null で、チケットはキューに残っているかもしれない。
+ */
+export async function leaveQueue(ticket: string): Promise<ClaimOutcome | null> {
+  return postJson<ClaimOutcome>("/api/leave", { ticket }).catch(() => null);
 }
 
 /** 成功を返したのに読めない答え。入れ替えのあとの古いタブが、新しいサーバに尋ねたときに起きる。 */

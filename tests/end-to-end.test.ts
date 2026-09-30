@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import { INITIAL_RATING } from "../src/accounts.js";
 import { objectKey } from "../src/archive.js";
+import { deckPresets } from "../src/bots.js";
 import { engineFingerprint } from "../src/fingerprint.js";
 import type { MatchRecord } from "../src/log.js";
 import type { ClientMessage, ServerMessage } from "../src/protocol.js";
@@ -229,10 +230,31 @@ describe("入れなかった理由", () => {
     expect((body.errors as string[]).length).toBeGreaterThan(0);
   });
 
+  it("人の対戦にも表のデッキの名前で入れ、表に無い名前と、組んだデッキとの両方は断る", async () => {
+    const { secret } = await postJson("/api/account", { displayName: "表のデッキの人" });
+    const join = (body: JsonBody) =>
+      fetch(`http://${base}/api/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret, roomCode: `ひょう-${randomUUID()}`, ...body }),
+      });
+    const [preset] = deckPresets();
+
+    const unknown = await join({ deckPreset: "表に無いデッキ" });
+    expect(unknown.status).toBe(400);
+    expect(((await unknown.json()) as JsonBody).errors).toEqual(["デッキの名前が表に無い"]);
+    expect((await join({ deck: legalDecks()[0], deckPreset: preset!.label })).status).toBe(400);
+    expect((await join({})).status).toBe(400);
+
+    const joined = await join({ deckPreset: preset!.label });
+    expect(joined.status).toBe(200);
+    expect(((await joined.json()) as JsonBody).ok).toBe(true);
+  });
+
   const malformedEndpoints = [
     "/api/join",
     "/api/join-bot",
-    "/api/deck/validate",
+    "/api/leave",
     "/api/deck/official",
     "/api/matches",
     "/api/replay",
@@ -280,6 +302,7 @@ describe("入れなかった理由", () => {
         JSON.stringify({ secret, name: 7, cards: [] }),
         JSON.stringify({ secret, name: "で", cards: [{ defId: 7, count: "1" }] }),
         JSON.stringify({ secret, deckId: 7 }),
+        JSON.stringify({ ticket: 7 }),
       ];
 
       for (const body of malformed) {

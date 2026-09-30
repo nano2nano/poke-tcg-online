@@ -1,23 +1,20 @@
 /**
- * 組んだデッキ。検索して足す規則、公式のデッキコードの読み方、ブラウザへの残し方。
+ * 保存したデッキ（仕様 5.5 節）。検索して足す規則と、公式のデッキコードの読み方。
  *
  * 枚数の上限は画面にも持つが、決めるのはサーバの検査である（仕様 5.1 節）。画面の上限は押せるボタンを絞るだけ。
  */
 
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { CardChoice } from "../../src/card-index.js";
+import type { DeckEntry } from "../../src/deck.js";
+import type { SavedDeck } from "../../src/decks.js";
 import type { DeckList } from "../../src/engine.js";
 import type { OfficialCard, OfficialFailure } from "../../src/official-deck.js";
+import { accountQuery, postAsPlayer } from "./account.js";
 import type { CardTable } from "./cards.js";
 
-export type { CardChoice, OfficialFailure };
+export type { CardChoice, DeckEntry, OfficialFailure, SavedDeck };
 
-export interface DeckEntry {
-  defId: string;
-  count: number;
-}
-
-/** 組んだデッキを置く localStorage のキー。 */
-const DECK_KEY = "poke-deck";
 /** `src/deck.ts` の値を import すると、エンジンのカード定義まで画面に入る。 */
 export const DECK_SIZE = 60;
 const SAME_NAME_LIMIT = 4;
@@ -26,27 +23,52 @@ const ACE_SPEC_LIMIT = 1;
 const OFFICIAL_DECK_PAGE = "https://www.pokemon-card.com/deck/confirm.html/deckID/";
 
 /**
- * 残せなかったデッキ。localStorage が使えなくても組むことはできる。投げると、画面と送る中身が食い違う。
- * `undefined` なら localStorage にあるものがいまのデッキである。
+ * 保存したデッキの一覧。プレイヤーを用意できてから頼む。プレイヤーが替わったら、前のプレイヤーの一覧を出さない。
+ * `failure` は、プレイヤーを用意できなかったか一覧を読めなかった理由。どちらでも一覧は届かない。
  */
-let unsaved: string | null | undefined;
-const listeners = new Set<() => void>();
+export function useSavedDecks() {
+  const queryClient = useQueryClient();
+  const account = useQuery(accountQuery());
+  const playerId = account.data?.playerId ?? null;
+  const decks = useQuery({
+    queryKey: [...DECKS_KEY, playerId],
+    queryFn: () => loadDecks(queryClient),
+    enabled: playerId !== null,
+  });
+  const failure = decks.isError ? decks.error : account.isError ? account.error : null;
+  return { decks, failure };
+}
 
-export function storedDeckJson(): string | null {
-  if (unsaved !== undefined) return unsaved;
+const DECKS_KEY = ["decks"] as const;
+
+async function loadDecks(queryClient: QueryClient): Promise<SavedDeck[]> {
+  await moveBrowserDeck(queryClient);
+  const { decks } = await postAsPlayer<{ decks: SavedDeck[] }>(queryClient, "/api/decks", {});
+  return decks;
+}
+
+/**
+ * 前の版は、組んだデッキをこのブラウザの localStorage に 1 つだけ残していた。保存したデッキへ移してから消す。
+ * 消さずに移すと、開くたびに同じデッキが増える。移せなかったら残しておき、次に開いたときにまた移す。
+ * 移せないことで一覧まで出せなくはしない。
+ */
+async function moveBrowserDeck(queryClient: QueryClient): Promise<void> {
+  const key = "poke-deck";
   try {
-    return localStorage.getItem(DECK_KEY);
+    const cards = parseBrowserDeck(localStorage.getItem(key));
+    if (cards.length === 0) return;
+    await postAsPlayer(queryClient, "/api/decks/save", {
+      name: "このブラウザで組んだデッキ",
+      cards,
+    });
+    localStorage.removeItem(key);
   } catch {
-    return null;
+    // 一覧を読む要求が、プレイヤーが忘れられていたことなどを同じように知らせる。
   }
 }
 
-/** 組んだデッキ。読めない値や壊れた行は捨てる。 */
-export function storedDeck(): DeckEntry[] {
-  return parseDeck(storedDeckJson());
-}
-
-export function parseDeck(json: string | null): DeckEntry[] {
+/** 読めない行は捨て、サーバが受ける形（同じカードは 1 行、合わせて 60 枚まで）にそろえる。 */
+export function parseBrowserDeck(json: string | null): DeckEntry[] {
   let saved: unknown = null;
   try {
     saved = JSON.parse(json ?? "[]");
@@ -54,37 +76,37 @@ export function parseDeck(json: string | null): DeckEntry[] {
     return [];
   }
   if (!Array.isArray(saved)) return [];
-  return saved
-    .filter(
-      (entry: Partial<DeckEntry> | null): entry is DeckEntry =>
-        typeof entry?.defId === "string" && Number.isInteger(entry.count) && (entry.count ?? 0) > 0,
-    )
-    .map((entry) => ({ defId: entry.defId, count: Math.min(entry.count, DECK_SIZE) }));
-}
-
-export function saveDeck(entries: readonly DeckEntry[]): void {
-  const json = entries.length === 0 ? null : JSON.stringify(entries);
-  try {
-    if (json === null) localStorage.removeItem(DECK_KEY);
-    else localStorage.setItem(DECK_KEY, json);
-    unsaved = undefined;
-  } catch {
-    unsaved = json;
+  let entries: DeckEntry[] = [];
+  for (const entry of saved as (Partial<DeckEntry> | null)[]) {
+    if (typeof entry?.defId !== "string" || !Number.isInteger(entry.count)) continue;
+    const room = DECK_SIZE - deckSize(entries);
+    const count = Math.min(entry.count ?? 0, room);
+    if (count > 0) entries = withCount(entries, entry.defId, count);
   }
-  for (const listener of listeners) listener();
+  return entries;
 }
 
-/** このタブで組み替えたときと、別のタブが組み替えたときに呼ぶ。`storage` は書いたタブには届かない。 */
-export function subscribeDeck(onChange: () => void): () => void {
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === DECK_KEY || event.key === null) onChange();
-  };
-  listeners.add(onChange);
-  addEventListener("storage", onStorage);
-  return () => {
-    listeners.delete(onChange);
-    removeEventListener("storage", onStorage);
-  };
+/**
+ * 保存する。`deckId` が無ければ新しいデッキになる。一覧は取り直す。
+ * 新しいデッキのページを初めて開いたブラウザは、まだプレイヤーを持たないので、ここで用意する。
+ */
+export async function saveDeck(
+  queryClient: QueryClient,
+  deck: { deckId?: string; name: string; cards: readonly DeckEntry[] },
+): Promise<SavedDeck> {
+  await queryClient.fetchQuery(accountQuery());
+  const { deck: saved } = await postAsPlayer<{ deck: SavedDeck }>(
+    queryClient,
+    "/api/decks/save",
+    deck,
+  );
+  await queryClient.invalidateQueries({ queryKey: DECKS_KEY });
+  return saved;
+}
+
+export async function deleteDeck(queryClient: QueryClient, deckId: string): Promise<void> {
+  await postAsPlayer(queryClient, "/api/decks/delete", { deckId });
+  await queryClient.invalidateQueries({ queryKey: DECKS_KEY });
 }
 
 export function deckCards(entries: readonly DeckEntry[]): DeckList {

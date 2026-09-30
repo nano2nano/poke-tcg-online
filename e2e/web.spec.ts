@@ -10,13 +10,7 @@ import {
   type WebSocketRoute,
 } from "@playwright/test";
 import type { Bot } from "../src/bots.js";
-import {
-  legalMoves,
-  loadGeneratedCards,
-  type Move,
-  type Player,
-  type PlayerView,
-} from "../src/engine.js";
+import { legalMoves, type Move, type Player, type PlayerView } from "../src/engine.js";
 import { MatchHub } from "../src/hub.js";
 import type { Seated } from "../src/lobby.js";
 import { concede, createMatch, submitMove, toMove, viewFor } from "../src/match.js";
@@ -29,12 +23,19 @@ import {
   newMatch,
 } from "../tests/helpers.js";
 
+/** ルームコードの欄は畳んであるので、開いてから入れる。 */
+async function enterRoom(page: Page, room: string): Promise<void> {
+  const details = page.locator("details.room");
+  if ((await details.getAttribute("open")) === null) await details.locator("summary").click();
+  await page.fill("#room", room);
+}
+
 test("画面を開くとロビーが描け、アセットに無いパスでも画面の骨組みが返る", async ({ page }) => {
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
 
   await page.goto("/");
-  await expect(page.locator("#home")).toBeVisible();
+  await expect(page.locator(".site-header")).toBeVisible();
   await expect(page.locator("#join")).toBeVisible();
 
   // アセットに無いパスにも、画面の骨組みを返す（`wrangler.jsonc` の `not_found_handling`）。
@@ -45,10 +46,11 @@ test("画面を開くとロビーが描け、アセットに無いパスでも�
   expect(errors).toEqual([]);
 });
 
-test("`/` のほかのパスは、検索の部分を残して `/` で開き直す", async ({ page }) => {
-  await page.goto("/no-such-page?watch=e2e-link");
-  await expect(page).toHaveURL(/\/\?watch=e2e-link$/);
-  await expect(page.locator("#watch")).toBeVisible();
+test("無いページは、見つからないと出してトップへの道を残す", async ({ page }) => {
+  await page.goto("/no-such-page");
+  await expect(page.locator("#not-found")).toBeVisible();
+  await page.locator("#not-found a").click();
+  await expect(page.locator("#join")).toBeVisible();
 });
 
 test("相手さがしを頼んでいるあいだは、「対戦をさがす」を押し直せない", async ({ page }) => {
@@ -62,7 +64,7 @@ test("相手さがしを頼んでいるあいだは、「対戦をさがす」�
   });
 
   await page.goto("/");
-  await page.fill("#room", `おしなおし-${Date.now()}`);
+  await enterRoom(page, `おしなおし-${Date.now()}`);
   await page.click("#join-button");
   // 先のリクエストで席が決まると、あとのリクエストがキューに残り、誰も開かない席として組まれる。
   await expect(page.locator("#join-button")).toBeDisabled();
@@ -147,7 +149,7 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   const status = page.locator("#join-status");
 
   await page.goto("/");
-  await page.fill("#room", `まちつづける-${Date.now()}`);
+  await enterRoom(page, `まちつづける-${Date.now()}`);
   const first = claimed();
   await page.click("#join-button");
   await first;
@@ -167,9 +169,7 @@ test("相手を待つあいだに押し直して断られても、前のチケ�
   // 待ち続けても、断られた理由を待っている一言で消さない。2 度目の答えは 1 度目の答えを出したあとに届く。
   await claimed();
   await claimed();
-  // `code` の無い断りはデッキの違反なので、違反はデッキの欄に出る。
-  expect(await status.textContent()).toContain("デッキを直して");
-  await expect(page.locator("#deck-status")).toContainText("断った");
+  expect(await status.textContent()).toContain("断った");
 });
 
 /** 座席へ繋ぐ URL から、座席トークンと開いたシェアを読む。 */
@@ -190,7 +190,7 @@ test("待っているあいだに席が決まってから押し直すと、あ�
   await page.route("**/api/claim?**", (route) => route.fulfill({ json: { kind: "waiting" } }));
   const room = `きまっていた-${Date.now()}`;
   await page.goto("/");
-  await page.fill("#room", room);
+  await enterRoom(page, room);
   const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
   const { ticket } = (await (await answered).json()) as { ticket: string };
@@ -199,7 +199,7 @@ test("待っているあいだに席が決まってから押し直すと、あ�
   try {
     const opponent = await other.newPage();
     await opponent.goto("/");
-    await opponent.fill("#room", room);
+    await enterRoom(opponent, room);
     const seated = opponent.waitForResponse((response) => response.url().endsWith("/api/join"));
     await opponent.click("#join-button");
     await seated;
@@ -236,7 +236,9 @@ test("返事の届かなかったリクエストで席が決まっていたら�
     await route.abort();
   });
   await page.goto("/");
-  await page.fill("#room", room);
+  const unplayable = await saveDeckAs(page, "くみかけ", [{ defId: "組みかけ", count: 1 }]);
+  await page.reload();
+  await enterRoom(page, room);
   await page.click("#join-button");
   await expect(page.locator("#join-status")).toContainText("つながらなかった");
 
@@ -244,16 +246,14 @@ test("返事の届かなかったリクエストで席が決まっていたら�
   try {
     const opponent = await other.newPage();
     await opponent.goto("/");
-    await opponent.fill("#room", room);
+    await enterRoom(opponent, room);
     const seated = opponent.waitForResponse((response) => response.url().endsWith("/api/join"));
     await opponent.click("#join-button");
     const outcome = (await (await seated).json()) as { seat: Seated };
     // 相手は座席 1 に座るので、こちらの席は座席 0 である。
     const commit = outcome.seat.seedShareCommits[0];
-    // 組み直しかけで規則に通らないデッキでも、続いている対戦へは戻れる。
-    await page.evaluate(() => {
-      localStorage.setItem("poke-deck", JSON.stringify([{ defId: "組みかけ", count: 1 }]));
-    });
+    // 規則に通らないデッキを選んでも、続いている対戦へは戻れる。
+    await page.locator("#deck-choice").selectOption(`saved:${unplayable}`);
 
     const opened = openedSeat(page.waitForEvent("websocket"));
     await page.click("#join-button");
@@ -264,287 +264,297 @@ test("返事の届かなかったリクエストで席が決まっていたら�
   }
 });
 
+type Entry = { defId: string; count: number };
+
+/** このページのプレイヤーとしてデッキを保存する。プレイヤーを用意し終えるのを待ってから送る。 */
+async function saveDeckAs(page: Page, name: string, cards: Entry[]): Promise<string> {
+  const secret = () => page.evaluate(() => localStorage.getItem("poke-account-secret"));
+  await expect.poll(secret).not.toBeNull();
+  const response = await page.request.post("/api/decks/save", {
+    data: { secret: await secret(), name, cards },
+  });
+  const { deck } = (await response.json()) as { deck: { deckId: string } };
+  return deck.deckId;
+}
+
+async function sampleEntries(page: Page): Promise<Entry[]> {
+  const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
+  const counts = new Map<string, number>();
+  for (const defId of deck.cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
+  return [...counts].map(([defId, count]) => ({ defId, count }));
+}
+
 /** サンプルデッキの先頭のカードを、検索から 1 枚足す。 */
 async function addFirstSampleCard(page: Page): Promise<string> {
-  const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
+  const [{ defId }] = (await sampleEntries(page)) as [Entry];
   const cards = (await (await page.request.get("/api/cards")).json()) as Record<
     string,
     { name: string; set?: string; number?: string }
   >;
-  const defId = deck.cards[0] as string;
   const card = cards[defId] as { name: string; set?: string; number?: string };
   await page.fill("#card-search", [card.name, card.set, card.number].filter(Boolean).join(" "));
   await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
   return defId;
 }
 
-test("確かめる返事を待つあいだに組み替えたら、その返事の結果を出さない", async ({ page }) => {
-  await page.goto("/");
+test("新しく組んだデッキを保存すると、そのデッキのページへ移り、一覧に並ぶ", async ({ page }) => {
+  await page.goto("/decks/new");
+  await page.fill("#deck-name", "  はじめての\u0000デッキ ");
   const defId = await addFirstSampleCard(page);
-  await page.locator(`#card-results .card-row[data-def-id="${defId}"] button.add`).click();
-  let release = (): void => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route("**/api/deck/validate", async (route) => {
-    await held;
-    await route.fulfill({ json: { ok: true, errors: [] } });
-  });
+  await page.click("#save-deck-button");
+  await expect(page).not.toHaveURL(/\/decks\/new$/);
+  // サーバが整えた名前を出す。1 枚では規則を通らないことも出す。
+  await expect(page.locator("#deck-name")).toHaveValue("はじめてのデッキ");
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+  await expect(page.locator("#save-deck-button")).toBeDisabled();
 
-  await page.click("#check-button");
-  await page.locator(`#deck-cards .card-row[data-def-id="${defId}"] button.remove`).click();
-  const answered = page.waitForResponse((response) =>
-    response.url().endsWith("/api/deck/validate"),
-  );
-  release();
-  await answered;
-  // 確かめたのは 2 枚のデッキで、いまは 1 枚である。
-  await expect(page.locator("#deck-cards .card-count")).toHaveText("1");
-  await expect(page.locator("#deck-status")).not.toContainText("規則を通ります");
-});
-
-test("組み替える前に確かめた返事があとから届いても、組み替えてから確かめた結果を消さない", async ({
-  page,
-}) => {
-  await page.goto("/");
-  const defId = await addFirstSampleCard(page);
-  let release = (): void => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let calls = 0;
-  // どちらの検査も通ったことにする。1 度目の返事だけ、2 度目の結果が出たあとに届ける。
-  await page.route("**/api/deck/validate", async (route) => {
-    calls += 1;
-    if (calls === 1) await held;
-    await route.fulfill({ json: { ok: true, errors: [] } });
-  });
-
-  await page.click("#check-button");
-  await page.locator(`#deck-cards .card-row[data-def-id="${defId}"] button.add`).click();
-  await page.click("#check-button");
-  await expect(page.locator("#deck-status")).toContainText("デッキは 2 枚で、規則を通ります");
-  const late = page.waitForResponse((response) => response.url().endsWith("/api/deck/validate"));
-  release();
-  await late;
-  // 返事が届いてから欄に書くまでを待つ。待たないと、書く前の欄を見て通ってしまう。
-  await page.evaluate(
-    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-  );
-  await expect(page.locator("#deck-status")).toContainText("デッキは 2 枚で、規則を通ります");
-});
-
-/** 公式のカード ID のうち、このサーバで複数のカードに当たるもの。読み込むと、どれかを選ぶ欄が出る。 */
-function sharedCardId(): string {
-  const byCardId = new Map<string, string[]>();
-  for (const def of loadGeneratedCards()) {
-    for (const print of def.prints) {
-      byCardId.set(print.cardID, [...(byCardId.get(print.cardID) ?? []), def.defId]);
-    }
-  }
-  const [cardId] = [...byCardId].find(([, defIds]) => defIds.length > 1) as [string, string[]];
-  return cardId;
-}
-
-test("公式のデッキコードで選んでいる途中に対戦をさがしても、選ぶ欄を残す", async ({ page }) => {
-  const cardId = sharedCardId();
-  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
-    route.fulfill({
-      contentType: "text/html; charset=UTF-8",
-      headers: { "access-control-allow-origin": "*" },
-      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_2_1" /></form>`,
-    }),
-  );
-  await page.route("**/api/join", (route) =>
-    route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
-  );
-
-  await page.goto("/");
-  await page.fill("#deck-code", "abc123-DEF456-ghi789");
-  await page.click("#deck-code-button");
-  const choices = page.locator("#deck-status .choices button");
-  await expect(choices.first()).toBeVisible();
-  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
-  await page.click("#join-button");
-  await joined;
-  await expect(page.locator("#join-status")).toContainText("デッキを直して");
-  await expect(page.locator("#deck-status")).toContainText("あと 2 枚を選んでください");
-  await expect(page.locator("#deck-status")).toContainText("デッキは 60 枚にしてください");
-  await choices.first().click();
-  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
-});
-
-test("公式のデッキコードで選んでいる途中でも、別のタブで組み替えたら、対戦をさがして断られた理由を出す", async ({
-  page,
-}) => {
-  const cardId = sharedCardId();
-  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
-    route.fulfill({
-      contentType: "text/html; charset=UTF-8",
-      headers: { "access-control-allow-origin": "*" },
-      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_2_1" /></form>`,
-    }),
-  );
-  await page.route("**/api/join", (route) =>
-    route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } }),
-  );
-
-  await page.goto("/");
-  const defId = await addFirstSampleCard(page);
-  await page.fill("#deck-code", "abc123-DEF456-ghi789");
-  page.once("dialog", (dialog) => void dialog.accept());
-  await page.click("#deck-code-button");
-  await expect(page.locator("#deck-status .choices button").first()).toBeVisible();
-
-  const other = await page.context().newPage();
-  await other.goto(page.url());
-  await other.evaluate(
-    (card) => localStorage.setItem("poke-deck", JSON.stringify([{ defId: card, count: 1 }])),
-    defId,
-  );
-  await other.close();
-  await expect(page.locator("#deck-status .choices button")).toHaveCount(0);
-  await page.click("#join-button");
-  await expect(page.locator("#deck-status")).toContainText("デッキは 60 枚にしてください");
-});
-
-test("対戦をさがす返事を待つあいだに最後の 1 枚を選んだら、選び終えたデッキを確かめた結果を出す", async ({
-  page,
-}) => {
-  const cardId = sharedCardId();
-  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
-    route.fulfill({
-      contentType: "text/html; charset=UTF-8",
-      headers: { "access-control-allow-origin": "*" },
-      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_1_1" /></form>`,
-    }),
-  );
-  // 1 枚のデッキは規則に通らない。通ったことにして、その結果が残るのを見る。
-  await page.route("**/api/deck/validate", (route) =>
-    route.fulfill({ json: { ok: true, errors: [] } }),
-  );
-  let release = (): void => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route("**/api/join", async (route) => {
-    await held;
-    await route.fulfill({ json: { ok: false, errors: ["選ぶ前のデッキの理由"] } });
-  });
-
-  await page.goto("/");
-  await page.fill("#deck-code", "abc123-DEF456-ghi789");
-  await page.click("#deck-code-button");
-  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
-  await page.locator("#deck-status .choices button").first().waitFor();
-  await page.click("#join-button");
-  await page.locator("#deck-status .choices button").first().click();
-  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
-  release();
-  await joined;
-  await expect(page.locator("#join-status")).toContainText("デッキが変わりました");
-  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
-  await expect(page.locator("#deck-status")).not.toContainText("選ぶ前のデッキの理由");
-});
-
-test("対戦をさがす返事を待つあいだに組み替えたら、断られた理由を出さない", async ({ page }) => {
-  let release = (): void => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route("**/api/join", async (route) => {
-    await held;
-    await route.fulfill({ json: { ok: false, errors: ["デッキは 60 枚にしてください"] } });
-  });
-
-  await page.goto("/");
-  await addFirstSampleCard(page);
-  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
-  await page.click("#join-button");
-  await page.locator("#deck-cards .card-row button.add").first().click();
-  release();
-  await joined;
-  await expect(page.locator("#join-status")).toContainText("デッキが変わりました");
-  await expect(page.locator("#deck-status")).not.toContainText("60 枚にしてください");
-});
-
-test("デッキを確かめた結果は、対戦をさがしても残す", async ({ page }) => {
-  let release = (): void => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await page.route("**/api/join", async (route) => {
-    await held;
-    await route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } });
-  });
-  // 1 枚のデッキは規則に通らない。通ったことにして、その結果が残るのを見る。
-  await page.route("**/api/deck/validate", (route) =>
-    route.fulfill({ json: { ok: true, errors: [] } }),
-  );
-
-  await page.goto("/");
-  await addFirstSampleCard(page);
-  await page.click("#check-button");
-  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
-  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
-  await page.click("#join-button");
-  await expect(page.locator("#join-status")).toContainText("デッキを送っています");
-  release();
-  await joined;
-  await expect(page.locator("#join-status")).toContainText("断った");
-  await expect(page.locator("#deck-status")).toContainText("規則を通ります");
-});
-
-test("サンプルデッキを使うと出たあとに別のタブでデッキを組んだら、その文を消す", async ({
-  page,
-}) => {
-  await page.route("**/api/join", (route) =>
-    route.fulfill({ json: { ok: false, code: "account-not-found", errors: ["断った"] } }),
-  );
-  await page.goto("/");
-  const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
-  await page.click("#join-button");
-  await joined;
-  await expect(page.locator("#deck-status")).toContainText("サンプルデッキを使います");
-
-  const other = await page.context().newPage();
-  await other.goto(page.url());
-  const defId = await addFirstSampleCard(other);
-  await other.close();
+  await page.reload();
   await expect(page.locator(`#deck-cards .card-row[data-def-id="${defId}"]`)).toHaveCount(1);
-  await expect(page.locator("#deck-status")).not.toContainText("サンプルデッキを使います");
+  await page.locator(".site-nav a", { hasText: "デッキ" }).click();
+  await expect(page.locator("#deck-list .deck-item")).toHaveCount(1);
+  await expect(page.locator("#deck-list .deck-meta")).toHaveClass(/ng/);
 });
 
-test("最後の 1 枚を選んだあとの確かめに失敗したら、その失敗を出す", async ({ page }) => {
-  const cardId = sharedCardId();
-  await page.route("https://www.pokemon-card.com/deck/confirm.html/deckID/**", (route) =>
-    route.fulfill({
-      contentType: "text/html; charset=UTF-8",
-      headers: { "access-control-allow-origin": "*" },
-      body: `<!DOCTYPE html><form><input type="hidden" id="deck_sta" value="${cardId}_1_1" /></form>`,
-    }),
-  );
-  await page.route("**/api/deck/validate", (route) => route.abort());
-
-  await page.goto("/");
-  await page.fill("#deck-code", "abc123-DEF456-ghi789");
-  await page.click("#deck-code-button");
-  await page.locator("#deck-status .choices button").first().click();
-  await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
-});
-
-test("デッキを確かめるのに失敗したら、その失敗を出す", async ({ page }) => {
-  await page.route("**/api/deck/validate", (route) => route.abort());
-  await page.goto("/");
+test("保存していない変更があれば、ページを離れる前に捨ててよいかを尋ねる", async ({ page }) => {
+  await page.goto("/decks/new");
   await addFirstSampleCard(page);
-  await page.click("#check-button");
-  await expect(page.locator("#deck-status")).toContainText("確かめられませんでした");
+  const nav = page.locator(".site-nav a", { hasText: "デッキ" });
+
+  page.once("dialog", (dialog) => void dialog.dismiss());
+  await nav.click();
+  await expect(page).toHaveURL(/\/decks\/new$/);
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+
+  page.once("dialog", (dialog) => void dialog.accept());
+  await nav.click();
+  await expect(page.locator("#decks")).toBeVisible();
+});
+
+test("保存できなかったら理由を出し、組んだデッキを残す", async ({ page }) => {
+  await page.route("**/api/decks/save", (route) => route.abort());
+  await page.goto("/decks/new");
+  await addFirstSampleCard(page);
+  await page.click("#save-deck-button");
+  await expect(page.locator("#deck-status")).toContainText("保存できませんでした");
+  await expect(page).toHaveURL(/\/decks\/new$/);
+  await expect(page.locator("#deck-cards .card-row")).toHaveCount(1);
+  await expect(page.locator("#save-deck-button")).toBeEnabled();
+});
+
+test("保存を待つあいだに打ち直した名前は、保存の答えで戻さない", async ({ page }) => {
+  await page.goto("/");
+  const deckId = await saveDeckAs(page, "まえの名前", await sampleEntries(page));
+  const [held, release] = gate();
+  await page.route("**/api/decks/save", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto(`/decks/${deckId}`);
+  await page.fill("#deck-name", "送った名前");
+  await page.click("#save-deck-button");
+  await page.fill("#deck-name", "あとで打った名前");
+  const saved = page.waitForResponse((response) => response.url().endsWith("/api/decks/save"));
+  release();
+  await saved;
+  await expect(page.locator("#save-deck-button")).toBeEnabled();
+  await expect(page.locator("#deck-name")).toHaveValue("あとで打った名前");
+});
+
+test("前の版がこのブラウザに残した組みかけは、一度だけ保存したデッキへ移す", async ({ page }) => {
+  // ロビーが一覧を読み終えてから置く。読んでいる途中に置くと、ロビーとデッキのページの両方が移す。
+  const listed = page.waitForResponse((response) => response.url().endsWith("/api/decks"));
+  await page.goto("/");
+  await listed;
+  await page.evaluate(() => {
+    localStorage.setItem("poke-deck", JSON.stringify([{ defId: "組みかけ", count: 2 }]));
+  });
+  await page.goto("/decks");
+  await expect(page.locator("#deck-list .deck-item")).toHaveCount(1);
+  await page.reload();
+  await expect(page.locator("#deck-list .deck-item")).toHaveCount(1);
+  expect(await page.evaluate(() => localStorage.getItem("poke-deck"))).toBeNull();
+});
+
+test("保存したデッキを選んで対戦をさがすとそのデッキを送り、選んだデッキを次に開いたときも選ぶ", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const cards = await sampleEntries(page);
+  const deckId = await saveDeckAs(page, "つかうデッキ", cards);
+  const sent: unknown[] = [];
+  await page.route("**/api/join", async (route) => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: false, code: "queue-full", errors: ["断った"] } });
+  });
+  await page.reload();
+  // 規則を通る保存したデッキがあれば、はじめはそれを選んでおく。
+  await expect(page.locator("#deck-choice")).toHaveValue(`saved:${deckId}`);
+  await page.click("#join-button");
+  await expect(page.locator("#join-status")).toContainText("断った");
+  const [request] = sent as [{ deck: { cards: string[] } }];
+  expect([...request.deck.cards].sort()).toEqual(
+    cards.flatMap(({ defId, count }) => Array<string>(count).fill(defId)).sort(),
+  );
+
+  await page.locator("#deck-choice").selectOption("sample");
+  await page.reload();
+  await expect(page.locator("#deck-choice")).toHaveValue("sample");
+});
+
+test("規則を通らない保存したデッキを選ぶと、直すページへの道を出す", async ({ page }) => {
+  await page.goto("/");
+  const deckId = await saveDeckAs(page, "くみかけ", [{ defId: "組みかけ", count: 1 }]);
+  await page.reload();
+  // 規則を通らないデッキは、はじめからは選ばない。
+  await expect(page.locator("#deck-choice")).toHaveValue("sample");
+  await page.locator("#deck-choice").selectOption(`saved:${deckId}`);
+  await page.locator("#deck-note a").click();
+  await expect(page).toHaveURL(new RegExp(`/decks/${deckId}$`));
+  await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+});
+
+test("一覧から、対戦に使うデッキを選んでトップへ戻れ、デッキを消せる", async ({ page }) => {
+  await page.goto("/");
+  const deckId = await saveDeckAs(page, "つかうデッキ", await sampleEntries(page));
+  await page.goto("/decks");
+  const item = page.locator(`#deck-list .deck-item[data-deck-id="${deckId}"]`);
+  await item.locator(".play-deck").click();
+  await expect(page.locator("#deck-choice")).toHaveValue(`saved:${deckId}`);
+
+  await page.goto("/decks");
+  page.once("dialog", (dialog) => void dialog.accept());
+  await item.locator(".delete-deck").click();
+  await expect(item).toHaveCount(0);
+});
+
+test("前に選んだデッキが一覧に無ければ、ほかのデッキで入る", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("poke-deck-choice", "saved:消したデッキ"));
+  const sent: unknown[] = [];
+  await page.route("**/api/join", async (route) => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: false, code: "queue-full", errors: ["断った"] } });
+  });
+  await page.goto("/");
+  await expect(page.locator("#deck-choice")).toHaveValue("sample");
+  await page.click("#join-button");
+  await expect(page.locator("#join-status")).toContainText("断った");
+  expect(sent).toHaveLength(1);
+});
+
+test("保存したあとに一覧を読み直せなくても、組んでいる画面を閉じない", async ({ page }) => {
+  await page.goto("/");
+  const deckId = await saveDeckAs(page, "くみなおす", await sampleEntries(page));
+  await page.goto(`/decks/${deckId}`);
+  await page.locator("#deck-cards .card-row button.remove").first().click();
+  await page.route("**/api/decks", (route) =>
+    route.fulfill({ status: 503, json: { error: "落とした" } }),
+  );
+  // 保存すると一覧を読み直す。
+  const failed = page.waitForResponse((response) => response.url().endsWith("/api/decks"));
+  await page.click("#save-deck-button");
+  await failed;
+  await painted(page);
+  await expect(page.locator("#deck-builder")).toBeVisible();
+});
+
+test("プレイヤーを用意できなければ、デッキの一覧にその理由を出す", async ({ page }) => {
+  await page.route("**/api/account", (route) =>
+    route.fulfill({ status: 503, json: { error: "作れなかった" } }),
+  );
+  await page.goto("/decks");
+  await expect(page.locator("#decks-status")).toContainText("作れなかった");
+});
+
+test("相手を待っているあいだにページを移るときは、確かめてからチケットを降ろす", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await enterRoom(page, `やめる-${Date.now()}`);
+  const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  const { ticket } = (await (await answered).json()) as { ticket: string };
+  await page.waitForResponse((response) => response.url().includes("/api/claim?"));
+  const nav = page.locator('.site-nav a[href="/decks"]');
+
+  page.once("dialog", (dialog) => void dialog.dismiss());
+  await nav.click();
+  await expect(page.locator("#join")).toBeVisible();
+
+  const left = page.waitForRequest((request) => request.url().endsWith("/api/leave"));
+  page.once("dialog", (dialog) => void dialog.accept());
+  await nav.click();
+  expect((await left).postDataJSON()).toEqual({ ticket });
+  await expect(page.locator("#decks")).toBeVisible();
+  const claimed = await page.request.get(`/api/claim?ticket=${encodeURIComponent(ticket)}`);
+  expect(((await claimed.json()) as { kind: string }).kind).toBe("dropped");
+});
+
+test("相手さがしの答えを待つあいだにページを移っても、届いたチケットを降ろす", async ({ page }) => {
+  const [held, release] = gate();
+  await page.route("**/api/join", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto("/");
+  await enterRoom(page, `まつまえに-${Date.now()}`);
+  await page.click("#join-button");
+  await page.click('.site-nav a[href="/decks"]');
+  await expect(page.locator("#decks")).toBeVisible();
+  const left = page.waitForRequest((request) => request.url().endsWith("/api/leave"));
+  release();
+  await left;
+});
+
+test("チケットを降ろす前に相手が見つかっていたら、移ろうとしたページではなく卓へ移る", async ({
+  page,
+  browser,
+}) => {
+  // 待つあいだの取り直しでは席を渡さない。降ろすときにサーバが返す席だけで着くようにする。
+  await page.route("**/api/claim?**", (route) => route.fulfill({ json: { kind: "waiting" } }));
+  const room = `みつかっていた-${Date.now()}`;
+  await page.goto("/");
+  await enterRoom(page, room);
+  const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
+  await page.click("#join-button");
+  await answered;
+  await expect(page.locator("#join-status")).toContainText("相手を待っています");
+
+  const other = await browser.newContext();
+  try {
+    const opponent = await other.newPage();
+    await opponent.goto("/");
+    await enterRoom(opponent, room);
+    const seated = opponent.waitForResponse((response) => response.url().endsWith("/api/join"));
+    await opponent.click("#join-button");
+    const { seat } = (await (await seated).json()) as { seat: Seated };
+
+    const opened = openedSeat(page.waitForEvent("websocket"));
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.click('.site-nav a[href="/decks"]');
+    await expect(page).toHaveURL(/\/match$/);
+    // 相手は座席 1 に座るので、こちらは座席 0 である。待っていたチケットのシェアで着く。
+    expect(commitOf((await opened).share)).toBe(seat.seedShareCommits[0]);
+  } finally {
+    await other.close();
+  }
+});
+
+test("対戦の記録のページは、開くたびに一覧を取り直す", async ({ page }) => {
+  let listed = 0;
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/matches")) listed += 1;
+  });
+  await page.goto("/history");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await page.click('.site-nav a[href="/"]');
+  await page.click('.site-nav a[href="/history"]');
+  await expect.poll(() => listed).toBe(2);
 });
 
 test("画像を読めなかったカードは、候補の行に小さな面を残さない", async ({ page }) => {
   await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
   await page.route("**/api/card-image/*", (route) => route.fulfill({ status: 502, body: "" }));
-  await page.goto("/");
+  await page.goto("/decks/new");
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card.thumb")).toHaveCount(0);
@@ -559,7 +569,7 @@ test("読んでいる最中の画像は、あとから出た同じカードの�
     await held;
     await route.fulfill({ status: 502, body: "" });
   });
-  await page.goto("/");
+  await page.goto("/decks/new");
   await page.fill("#card-search", "エネルギー");
   const last = page.locator("#card-results .card-row").last();
   await expect(last.locator("img")).toHaveCount(1);
@@ -669,8 +679,7 @@ function gate(): [Promise<void>, () => void] {
 /** リプレイを開いて、盤面の手札のカードを返す。 */
 async function replayHand(page: Page) {
   await mockHistory(page, async () => "ok");
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   const hand = page.locator('#replay [data-zone="hand"] .card[data-def-id]');
   await expect(hand.first()).toBeVisible();
@@ -703,8 +712,7 @@ async function openPlacing(page: Page, ...frames: PlayerView[][]) {
     null,
     (ply) => frames[Math.min(ply, frames.length - 1)]!,
   );
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   const zone = page.locator('#replay-self [data-zone="active"]');
   await expect(page.locator('#replay-self [data-zone="hand"] .card').first()).toBeVisible();
@@ -1660,6 +1668,8 @@ test("載せているカードが別のカードに描き替わったら、プ�
 });
 
 test("載せているカードが描き直しで少し動いたら、プレビューも付いていく", async ({ page }) => {
+  // プレビューが画面の上下の端で止まらない高さにして、カードとの位置の関係だけを見る。
+  await page.setViewportSize({ width: 1280, height: 1600 });
   const hand = await replayHand(page);
   const preview = page.locator("#card-preview");
   const card = hand.first();
@@ -1680,6 +1690,8 @@ test("載せているカードが描き直しで少し動いたら、プレビ�
 });
 
 test("載せているカードが動き終えたら、収まった位置でプレビューを置き直す", async ({ page }) => {
+  // プレビューが画面の上下の端で止まらない高さにして、カードとの位置の関係だけを見る。
+  await page.setViewportSize({ width: 1280, height: 1600 });
   const hand = await replayHand(page);
   const preview = page.locator("#card-preview");
   const card = hand.first();
@@ -1703,7 +1715,7 @@ test("載せているあいだに画面が低くなっても、プレビュー�
   await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
   // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
   await page.route("**/api/card-image/*", () => {});
-  await page.goto("/");
+  await page.goto("/decks/new");
   await page.fill("#card-search", "エネルギー");
   const add = page.locator("#card-results .card-row button.add");
   for (let i = 0; i < 3; i++) await add.nth(i).click();
@@ -1808,7 +1820,7 @@ test.describe("タッチ端末", () => {
     await page.route("**/api/config", (route) => route.fulfill({ json: { cardImages: true } }));
     // 返さない。読み込んでいるあいだも、候補の行には小さな面が出る。
     await page.route("**/api/card-image/*", () => {});
-    await page.goto("/");
+    await page.goto("/decks/new");
     await page.fill("#card-search", "エネルギー");
     const thumb = page.locator("#card-results .card-row .card").first();
     await expect(thumb).toBeVisible();
@@ -1861,8 +1873,7 @@ test("閉じて別の対戦を開いたあとに、閉じた対戦を開けな�
     await slow;
     return "fail";
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   const rows = page.locator("#history-list button");
   await rows.nth(0).click();
   await page.click("#replay-close");
@@ -1884,8 +1895,7 @@ test("追い越された問い合わせの失敗は、描けた局面の見出�
     await slow;
     return "fail";
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
   await page.click("#replay-next");
@@ -1905,8 +1915,7 @@ test("最初の局面が描けるまでは、辿るボタンを押せない", as
     await slow;
     return "ok";
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-next")).toBeDisabled();
   release();
@@ -1916,8 +1925,7 @@ test("最初の局面が描けるまでは、辿るボタンを押せない", as
 
 test("辿れなかったときも、描けている局面の手数を出したままにする", async ({ page }) => {
   await mockHistory(page, async (_matchId, ply) => (ply === 1 ? "fail" : "ok"));
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
   await page.click("#replay-next");
@@ -1929,8 +1937,7 @@ test("サーバがプレイヤーを忘れて作り直したら、前のプレ�
   page,
 }) => {
   await mockHistory(page, async () => "ok");
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
 
@@ -1943,20 +1950,20 @@ test("サーバがプレイヤーを忘れて作り直したら、前のプレ�
     route.fulfill({ status: 404, json: { error: "いない", code: "account-not-found" } }),
   );
   // 1 度目で断られ、2 度目の前にプレイヤーを作り直す。
+  await page.click('.site-nav a[href="/"]');
   for (let round = 0; round < 2; round += 1) {
     const joined = page.waitForResponse((response) => response.url().endsWith("/api/join"));
     await page.click("#join-button");
     await joined;
     await expect(page.locator("#join-button")).toBeEnabled();
   }
+  await page.click('.site-nav a[href="/history"]');
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
-  await expect(page.locator("#replay")).toHaveCount(0);
 });
 
 test("一覧を取り直せなかったあとに開けなかったら、開けなかった理由を出す", async ({ page }) => {
   await mockHistory(page, async () => "fail");
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await expect(page.locator("#history-list button")).toHaveCount(2);
   await page.route("**/api/matches", (route) =>
     route.fulfill({ status: 503, json: { error: "落とした" } }),
@@ -1973,8 +1980,7 @@ test("端でさらに押しても、同じ局面を取りに行かない", async
     asked.push(ply);
     return "ok";
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
   await page.click("#replay-prev");
@@ -1994,8 +2000,7 @@ test("一覧を取りに行けなかった理由は、取り直しているあ�
     await slow;
     return route.fulfill({ json: { matches: [] } });
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   // 一覧を持っている取り直しの失敗は、次の取り直しのあいだも失敗のまま残る。
   await page.click("#history-button");
@@ -2009,8 +2014,8 @@ test("一覧を取りに行けなかった理由は、取り直しているあ�
 test("サーバがプレイヤーを忘れていたら、次に一覧を出すときにプレイヤーを作り直す", async ({
   page,
 }) => {
-  await page.goto("/");
-  await expect(page.locator("#history-button")).toBeEnabled();
+  await page.goto("/history");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   await page.route("**/api/matches", (route) => route.fulfill(accountMissing));
   await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
   await page.click("#history-button");
@@ -2024,10 +2029,14 @@ test("サーバがプレイヤーを忘れていたら、次に一覧を出す�
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
 });
 
-test("プレイヤーを作っているあいだに押しても、作り終えたら一覧を出す", async ({ page }) => {
+test("プレイヤーを作っているあいだに押しても、作るのは 1 人だけで、作り終えたら一覧を出す", async ({
+  page,
+}) => {
   const [slow, release] = gate();
+  let created = 0;
   // 初めて開いた画面はシークレットを持たないので、プレイヤーを作るところで止める。
   await page.route("**/api/account", async (route) => {
+    created += 1;
     await slow;
     await route.continue();
   });
@@ -2035,11 +2044,13 @@ test("プレイヤーを作っているあいだに押しても、作り終え�
   page.on("request", (request) => {
     if (request.url().endsWith("/api/matches")) listed += 1;
   });
-  await page.goto("/");
+  await page.goto("/history");
+  await expect.poll(() => created).toBe(1);
   await page.click("#history-button");
   release();
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   await painted(page);
+  expect(created).toBe(1);
   expect(listed).toBe(1);
 });
 
@@ -2047,8 +2058,7 @@ test("リプレイでサーバがプレイヤーを忘れていたと分かっ�
   page,
 }) => {
   await mockHistory(page, async () => "ok");
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await expect(page.locator("#history-list button")).toHaveCount(2);
   await page.route("**/api/replay", (route) => route.fulfill(accountMissing));
   await page.route("**/api/account/me", (route) => route.fulfill(accountMissing));
@@ -2060,7 +2070,7 @@ test("リプレイでサーバがプレイヤーを忘れていたと分かっ�
   await created;
 });
 
-test("席に着いたまま開き直しても、一覧の欄はプレイヤーを読みに行かない", async ({ page }) => {
+test("席に着いたまま開き直したら卓へ移り、プレイヤーを読みに行かない", async ({ page }) => {
   const asked: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/api/account")) asked.push(request.url());
@@ -2077,7 +2087,6 @@ test("席に着いたまま開き直しても、一覧の欄はプレイヤー�
   });
   await page.goto("/");
   await expect(page.locator("#table")).toBeVisible();
-  await expect(page.locator("#history")).toBeAttached();
   await painted(page);
   expect(asked).toEqual([]);
 });
@@ -2089,8 +2098,7 @@ test("返ってこない問い合わせは、同じ手数を押し直せば頼�
     if (ply === 10 && lastAsked++ === 0) await never;
     return "ok";
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
   await page.click("#replay-last");
@@ -2100,8 +2108,7 @@ test("返ってこない問い合わせは、同じ手数を押し直せば頼�
 
 test("再現できない地点は、手前へ戻っても出したままにする", async ({ page }) => {
   await mockHistory(page, async () => "ok", 4);
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
   await page.click("#replay-last");
@@ -2118,8 +2125,7 @@ test("最初の局面が返ってこなくても、同じ対戦を押し直せ�
     if (opened++ === 0) await never;
     return "ok";
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   const row = page.locator("#history-list button").first();
   await row.click();
   await expect(page.locator("#replay-next")).toBeDisabled();
@@ -2131,14 +2137,13 @@ test("プレイヤーを用意できなかったら、その理由を一覧の�
   await page.route("**/api/account", (route) =>
     route.fulfill({ status: 503, json: { error: "作れなかった" } }),
   );
-  const failed = page.waitForResponse((response) => response.url().endsWith("/api/account"));
-  await page.goto("/");
-  await failed;
-  // ロビーが開いたときに用意できなかったことは、一覧の欄では言わない。
-  await painted(page);
-  await expect(page.locator("#history-status")).toBeEmpty();
-  await page.click("#history-button");
+  await page.goto("/history");
   await expect(page.locator("#history-status")).toContainText("作れなかった");
+  // 読み直すと、プレイヤーを用意し直す。
+  await page.unroute("**/api/account");
+  await page.click("#history-button");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
+  await expect(page.locator("#history-status")).toBeEmpty();
 });
 
 test("覚えているプレイヤーを読み直しているあいだに押しても、一覧は 1 度だけ頼む", async ({
@@ -2158,7 +2163,7 @@ test("覚えているプレイヤーを読み直しているあいだに押し�
   page.on("request", (request) => {
     if (request.url().endsWith("/api/matches")) listed += 1;
   });
-  await page.reload();
+  await page.goto("/history");
   await page.click("#history-button");
   release();
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
@@ -2175,8 +2180,7 @@ test("忘れられていたと言われても同じプレイヤーが読めた�
     once = false;
     return route.fulfill(accountMissing);
   });
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
   await page.click("#history-button");
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
@@ -2184,10 +2188,8 @@ test("忘れられていたと言われても同じプレイヤーが読めた�
 });
 
 test("プレイヤーを作り直している途中に続けて押しても、作るのは 1 人だけ", async ({ page }) => {
-  await page.goto("/");
-  await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
-    .not.toBeNull();
+  await page.goto("/history");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   await page.route("**/api/matches", (route) => route.fulfill(accountMissing));
   await page.click("#history-button");
   await expect(page.locator("#history-status")).toContainText("アカウントが見つからない");
@@ -2228,7 +2230,7 @@ test("ロビーでプレイヤーが忘れられていたと分かったら、�
   page.on("request", (request) => {
     if (request.url().endsWith("/api/matches")) sent.push(request.postDataJSON());
   });
-  await page.click("#history-button");
+  await page.click('.site-nav a[href="/history"]');
   await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   expect(sent).not.toContainEqual({ secret: old });
 });
@@ -2236,10 +2238,8 @@ test("ロビーでプレイヤーが忘れられていたと分かったら、�
 test("別のタブがシークレットを消していたら、次に一覧を出すときにプレイヤーを作り直す", async ({
   page,
 }) => {
-  await page.goto("/");
-  await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("poke-account-secret")))
-    .not.toBeNull();
+  await page.goto("/history");
+  await expect(page.locator("#history-list")).toContainText("まだ読み返せる対戦がありません");
   await page.evaluate(() => localStorage.removeItem("poke-account-secret"));
   await page.click("#history-button");
   await expect(page.locator("#history-status")).toContainText("プレイヤーを用意できなかった");
@@ -2257,8 +2257,7 @@ test("追い越された局面の再現できない地点は、見出しに出�
     },
     4,
   );
-  await page.goto("/");
-  await page.click("#history-button");
+  await page.goto("/history");
   await page.locator("#history-list button").first().click();
   await expect(page.locator("#replay-status")).toContainText(atPly(0));
   await page.click("#replay-next");
@@ -2319,7 +2318,7 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     for (const message of messages) ws.send(message);
   });
-  await page.goto("/?watch=e2e-bot-watch");
+  await page.goto("/watch/e2e-bot-watch");
 
   const position = page.locator("#watch-position");
   await expect(position).toHaveAttribute("data-latest", "5");

@@ -75,8 +75,15 @@ test.describe.configure({ mode: "parallel" });
  * 参加の返事が届くまで待つ。画面は送る前から「デッキを送っています」と出すので、見出しを待つだけでは
  * 続けて入ったほうの参加が先にサーバへ着くことがあり、先に待っていたほうが座る座席 0 が入れ替わる。
  */
-async function join(page: Page, room: string): Promise<void> {
+/** ルームコードの欄は畳んであるので、開いてから入れる。 */
+async function enterRoom(page: Page, room: string): Promise<void> {
+  const details = page.locator("details.room");
+  if ((await details.getAttribute("open")) === null) await details.locator("summary").click();
   await page.fill("#room", room);
+}
+
+async function join(page: Page, room: string): Promise<void> {
+  await enterRoom(page, room);
   const answered = page.waitForResponse((response) => response.url().endsWith("/api/join"));
   await page.click("#join-button");
   await answered;
@@ -168,11 +175,11 @@ test("押してから送るまでのあいだに直した名前とルームコ�
   await page.goto("./");
   const room = `うちたし-${Date.now()}`;
   await page.fill("#name", "たろ");
-  await page.fill("#room", `${room}-まちがい`);
+  await enterRoom(page, `${room}-まちがい`);
   const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
   await page.click("#join-button");
   await page.fill("#name", "たろう");
-  await page.fill("#room", room);
+  await enterRoom(page, room);
   release();
 
   expect((await sent).postDataJSON()).toMatchObject({ displayName: "たろう", roomCode: room });
@@ -799,6 +806,9 @@ async function replayOfFinishedMatch(
    * 一覧の応答を待ってから次を出す。重ねて出すと、遅れて届いた古い空の一覧が出た一覧を消す。
    */
   const listed = a.locator("#history-list button").first();
+  await a.goto("./history");
+  // プレイヤーを読み直して最初の一覧が届くまで待つ。届く前に押すと、一覧の応答を待ち続ける。
+  await expect(a.locator("#history-list")).not.toBeEmpty();
   await expect(async () => {
     const answered = a.waitForResponse((response) => response.url().endsWith("/api/matches"));
     await a.click("#history-button");
@@ -1027,7 +1037,7 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   await close();
 });
 
-test("横に広い画面では、対戦のあいだリプレイの欄を出さず、決着したら戻す", async ({
+test("横に広い画面で対戦しているあいだは、ページがスクロールしない", async ({
   browser,
   pageErrors,
 }) => {
@@ -1036,15 +1046,10 @@ test("横に広い画面では、対戦のあいだリプレイの欄を出さ�
   await a.setViewportSize({ width: 1920, height: 900 });
 
   await seatPair(a, b, room);
-  await expect(a.locator("#history")).toBeHidden();
   // ページがスクロールできると、盤面の上でホイールを回したときに盤面ごとずれる。
   expect(
     await a.evaluate(() => document.documentElement.scrollHeight - innerHeight),
   ).toBeLessThanOrEqual(0);
-
-  a.once("dialog", (dialog) => void dialog.accept());
-  await a.click("#concede-button");
-  await expect(a.locator("#history")).toBeVisible();
 
   await close();
 });
@@ -1311,7 +1316,7 @@ test("観戦のリンクを開くと、プレイヤーを作らずに両者の�
 });
 
 test("観戦のリンクが通らなければ、そう出して終わる", async ({ page }) => {
-  await page.goto("./?watch=もう無い対戦");
+  await page.goto(`./watch/${encodeURIComponent("もう無い対戦")}`);
   await expect(page.locator("#watch")).toBeVisible();
   await expect(page.locator("#watch-status")).not.toBeEmpty();
 });
@@ -1624,13 +1629,13 @@ function toHiragana(text: string): string {
   return text.replace(/[ァ-ヶ]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0x60));
 }
 
-test("検索して組んだデッキで対戦に入り、開き直してもデッキが残る", async ({
+test("検索して組んだデッキを保存し、開き直しても残り、そのデッキで対戦に入る", async ({
   browser,
   pageErrors,
 }) => {
   const room = `くみたて-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
-  await Promise.all([a.goto("./"), b.goto("./")]);
+  await Promise.all([a.goto("./decks/new"), b.goto("./")]);
 
   const entries = await sampleDeckEntries(a);
   for (const entry of entries) {
@@ -1643,11 +1648,15 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
     if (entry.count === 4) await expect(add).toBeDisabled();
   }
   await expect(a.locator("#deck-count")).toHaveClass(/full/);
+  await a.click("#save-deck-button");
+  // 保存すると、そのデッキのページへ移ってサーバが照らした結果を出す。
+  await expect(a.locator("#deck-status")).toHaveClass(/ok/);
 
   await a.reload();
   await expect(a.locator("#deck-cards .card-row")).toHaveCount(entries.length);
   await expect(a.locator("#deck-count")).toHaveClass(/full/);
 
+  await a.goto("./");
   const joined = a.waitForRequest((request) => request.url().endsWith("/api/join"));
   await join(a, room);
   const sent = (await joined).postDataJSON() as { deck: { cards: string[] } };
@@ -1662,37 +1671,8 @@ test("検索して組んだデッキで対戦に入り、開き直してもデ�
   await close();
 });
 
-test("別のタブで組み替えたら、こちらのデッキも合わせ、「規則を通ります」を消す", async ({
-  page,
-}) => {
-  await page.goto("./");
-  const [first, second] = await sampleDeckEntries(page);
-  if (first === undefined || second === undefined) throw new Error("サンプルデッキが短い");
-  await page.fill(
-    "#card-search",
-    `${first.name} ${[first.set, first.number].filter(Boolean).join(" ")}`,
-  );
-  await page.locator(`#card-results .card-row[data-def-id="${first.defId}"] button.add`).click();
-  // 1 枚のデッキは規則に通らない。通ったことにして、結果が消えるのを見る。
-  await page.route("**/api/deck/validate", (route) =>
-    route.fulfill({ json: { ok: true, errors: [] } }),
-  );
-  await page.click("#check-button");
-  await expect(page.locator("#deck-status")).toHaveClass(/ok/);
-
-  const other = await page.context().newPage();
-  await other.goto(page.url());
-  await other.evaluate(
-    (defId) => localStorage.setItem("poke-deck", JSON.stringify([{ defId, count: 1 }])),
-    second.defId,
-  );
-  await expect(page.locator(`#deck-cards .card-row[data-def-id="${second.defId}"]`)).toHaveCount(1);
-  await expect(page.locator("#deck-status")).not.toContainText("規則を通ります");
-  await other.close();
-});
-
 test("減らしきった行は、デッキから消える", async ({ page }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const [entry] = await sampleDeckEntries(page);
   if (entry === undefined) throw new Error("サンプルデッキが空");
   const { defId, name, set, number } = entry;
@@ -1707,7 +1687,7 @@ test("減らしきった行は、デッキから消える", async ({ page }) => 
 });
 
 test("同じ名前のカードが並びきらなくても、ワザの名前を打ち足せば絞れる", async ({ page }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const cards = (await (await page.request.get("/api/cards")).json()) as Record<
     string,
     { name: string; attacks?: string[] }
@@ -1732,7 +1712,7 @@ test("同じ名前のカードが並びきらなくても、ワザの名前を�
 });
 
 test("ACE SPEC は 2 枚目を足せない", async ({ page }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const cards = (await (await page.request.get("/api/cards")).json()) as Record<
     string,
     { name: string; aceSpec?: true }
@@ -1763,7 +1743,7 @@ test("カードの一覧を 1 度取れなくても、取り直して組める�
     return route.fulfill({ status: 503, body: "" });
   });
 
-  await page.goto("./");
+  await page.goto("./decks/new");
   await expect.poll(() => failed).toBe(true);
   await page.fill("#card-search", name);
   // 取り直すまで間を空けるので、既定の待ち時間より長く待つ。
@@ -1772,7 +1752,7 @@ test("カードの一覧を 1 度取れなくても、取り直して組める�
 
 test("カードの一覧が空で届いても、検索で固まらない", async ({ page }) => {
   await page.route("**/api/cards", (route) => route.fulfill({ json: {} }));
-  await page.goto("./");
+  await page.goto("/decks/new");
   await page.fill("#card-search", "あ");
   await expect(page.locator("#card-results .note")).toBeVisible();
   // 描き直しが止まらないと、ページはこれに答えない。
@@ -1780,7 +1760,7 @@ test("カードの一覧が空で届いても、検索で固まらない", async
 });
 
 test("キーボードで「追加」を続けて押せて、押せなくなったら検索欄へ戻る", async ({ page }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const [entry] = await sampleDeckEntries(page);
   const { defId, name } = entry as { defId: string; name: string };
   await page.fill(
@@ -1981,7 +1961,7 @@ test("画像を出す設定なら、デッキを組む画面の候補にも画�
   await withCardImages(page, (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
   );
-  await page.goto("./");
+  await page.goto("/decks/new");
   await page.fill("#card-search", "エネルギー");
   await expect(page.locator("#card-results .card-row").first()).toBeVisible();
   await expect(page.locator("#card-results .card-row .card.thumb img").first()).toBeVisible();
@@ -2028,7 +2008,7 @@ function cardIds(): Map<string, string[]> {
 test("公式のデッキコードで読み込むと、無いカードだけを名前で出し、残りはデッキに入る", async ({
   page,
 }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
   const counts = new Map<string, number>();
   for (const defId of deck.cards) counts.set(defId, (counts.get(defId) ?? 0) + 1);
@@ -2075,7 +2055,7 @@ test("公式のデッキコードで読み込むと、無いカードだけを�
 });
 
 test("公式のデッキコードが見つからなければ、組んでいるデッキを残す", async ({ page }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const [entry] = await sampleDeckEntries(page);
   const { defId, name } = entry as { defId: string; name: string };
   await page.fill(
@@ -2103,7 +2083,7 @@ test("公式のデッキコードが見つからなければ、組んでいる�
 test("公式のカード ID で定義が決まらないカードは、枚数に届くまで候補を 1 枚ずつ選べる", async ({
   page,
 }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const [cardId, defIds] = [...cardIds()].find(([, ids]) => ids.length > 1) as [string, string[]];
   await page.route(OFFICIAL_PAGE, (route) =>
     route.fulfill({
@@ -2129,7 +2109,10 @@ test("公式のカード ID で定義が決まらないカードは、枚数に�
     ).toHaveText("1");
   }
   await expect(choices).toHaveCount(0);
+  // 選び終えたら保存でき、2 枚では規則を通らないことを出す。
+  await page.click("#save-deck-button");
   await expect(page.locator("#deck-status")).toHaveClass(/ng/);
+  await expect(page).not.toHaveURL(/\/decks\/new$/);
 });
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -2240,7 +2223,7 @@ test("載せていたカードが動いたら、閉じずにマウスの下に�
   await withCardImages(page, (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
   );
-  await page.goto("./");
+  await page.goto("/decks/new");
   await page.fill("#card-search", "エネルギー");
   const add = page.locator("#card-results .card-row button.add");
   for (let i = 0; i < 3; i++) await add.nth(i).click();
@@ -2279,7 +2262,7 @@ test("一覧を送ると、プレビューもカードに付いていく", async
   await withCardImages(page, (route) =>
     route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
   );
-  await page.goto("./");
+  await page.goto("/decks/new");
   await page.fill("#card-search", "エネルギー");
   const thumb = page.locator("#card-results .card-row .card").nth(3);
   await expect(thumb).toBeVisible();
@@ -2323,10 +2306,16 @@ test.describe("タッチ端末", () => {
     await withCardImages(page, (route) =>
       route.fulfill({ status: 200, contentType: "image/png", body: PIXEL }),
     );
-    await page.goto("./");
+    await page.goto("/decks/new");
     await page.fill("#card-search", "エネルギー");
     const thumb = page.locator("#card-results .card-row .card").first();
     await expect(thumb).toBeVisible();
+    // 狭い画面では、候補の上にも下にもプレビューが収まらない位置に候補が来る。ページの下に余白を足して、
+    // 候補を画面の上端まで送る。
+    await thumb.evaluate((node) => {
+      document.body.style.paddingBottom = "100vh";
+      node.scrollIntoView({ block: "start" });
+    });
     const defId = await thumb.getAttribute("data-def-id");
     const preview = page.locator("#card-preview");
     const box = (await thumb.boundingBox()) as Box;
@@ -2381,7 +2370,7 @@ test.describe("タッチ端末", () => {
 });
 
 test("公式サイトの返事を待つあいだにデッキを組み替えたら、置き換えない", async ({ page }) => {
-  await page.goto("./");
+  await page.goto("./decks/new");
   const deck = (await (await page.request.get("/api/sample-deck")).json()) as { cards: string[] };
   const byDefId = new Map<string, string>();
   for (const [cardId, defIds] of cardIds()) {
@@ -2622,7 +2611,7 @@ test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる",
       }),
     ),
   );
-  await page.goto("./?watch=観戦");
+  await page.goto("./watch/観戦");
   await expect(page.locator("#watch-side-0 .zone.bench .card").first()).toBeVisible();
 
   const board = await visibleBoard(page, "#watch");

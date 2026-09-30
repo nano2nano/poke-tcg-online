@@ -504,8 +504,11 @@ export class Lobby {
     }
   }
 
-  /** 待つのをやめる。 */
-  leave(ticketId: string): void {
+  /**
+   * 待つのをやめる。もう席が決まっていれば降ろさず、引き換えと同じ答えを返す。待つのをやめた
+   * 画面は取りに来ないので、決まった席を黙って残すと、その人は座らないまま時間切れで負ける。
+   */
+  leave(ticketId: string): ClaimOutcome {
     let found = false;
     for (const [room, waiting] of this.waitingByRoom) {
       if (waiting.ticket === ticketId) {
@@ -520,7 +523,9 @@ export class Lobby {
     }
     // 知らないチケットを「降ろした」と覚えない。覚えると、知らないものに「降りている」と答え、
     // 呼ばれた回数だけ本物の記録を押し出すことになる。
-    if (found) this.rememberDropped(ticketId);
+    if (!found) return this.claim(ticketId);
+    this.rememberDropped(ticketId);
+    return { kind: "dropped" };
   }
 
   waitingCount(): number {

@@ -355,6 +355,22 @@ describe("席の引き換え", () => {
     expect(lobby.claim(newer).kind).toBe("finished");
   });
 
+  it("待つのをやめると降り、もう席が決まっていたら降ろさずにその席を返す", async () => {
+    const arena = newArena();
+    const { lobby } = arena;
+    const alone = await join(arena, await player(arena, "やめる", "やめるへや"));
+    if (!alone.ok) throw new Error("入れていない");
+    expect(lobby.leave(alone.ticket).kind).toBe("dropped");
+    expect(lobby.claim(alone.ticket).kind).toBe("dropped");
+
+    const first = await join(arena, await player(arena, "まつ", "きまるへや"));
+    const second = await join(arena, await player(arena, "くる", "きまるへや"));
+    if (!first.ok || !second.ok) throw new Error("入れていない");
+    // 取りに行く前に席が決まった。やめたつもりの画面にも、座る席を返す。
+    expect(lobby.leave(first.ticket)).toEqual(lobby.claim(first.ticket));
+    expect(lobby.leave(first.ticket).kind).toBe("seated");
+  });
+
   /**
    * `leave` は知らないチケットでも呼べる。それを「降ろした」と覚えると、知らないものに
    * 「降りている」と答えるようになり、**呼ばれた回数だけ本物の記録が押し出される。**
