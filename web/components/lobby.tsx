@@ -17,6 +17,7 @@ import {
   botListQuery,
   claim,
   deckRequest,
+  isListed,
   leaveQueue,
   liveSeatOf,
   newSeedShare,
@@ -142,7 +143,7 @@ export function Lobby({
   useBlocker({
     shouldBlockFn: async ({ next }) => {
       const pending = waitingTicket.current;
-      // 卓へ移るのは、席に着いたときである。
+      // 卓へ移るのは席に着いたときで、降ろすチケットはもう無い。
       if (pending === null || next.pathname === "/match") return false;
       if (!confirm("相手をさがすのをやめて、このページを離れますか。")) return true;
       const outcome = await abandon(pending.ticket, pending.share);
@@ -157,16 +158,23 @@ export function Lobby({
     enableBeforeUnload: false,
   });
 
-  /** 送るデッキ。一覧が届く前に押されたら、届いてから選ぶ。届く前の一覧で選ぶと、選んだつもりのないデッキで入る。 */
+  /**
+   * 送るデッキ。保存したデッキを選んでいたか何も選んでいなければ、保存したデッキの一覧が届いてから選ぶ。
+   * 届く前の一覧で選ぶと、選んだつもりのないデッキで入る。
+   */
   const deckToSend = async () => {
     const { playerId } = await ensureAccount();
-    const [list, presets] = await Promise.all([
-      queryClient.ensureQueryData(savedDecksQuery(queryClient, playerId)),
-      queryClient.ensureQueryData(botListQuery).then(
-        (answer) => answer.decks,
-        () => [],
-      ),
-    ]);
+    const presets = await queryClient.ensureQueryData(botListQuery).then(
+      (answer) => answer.decks,
+      () => [],
+    );
+    if (picked !== null && isListed(picked, [], presets)) {
+      return deckRequest(picked, []);
+    }
+    // 読めなければ、画面に出ているデッキで入る。画面も、一覧が無いものとしてデッキを選んでいる。
+    const list = await queryClient
+      .ensureQueryData(savedDecksQuery(queryClient, playerId))
+      .catch(() => []);
     return deckRequest(resolveDeckChoice(picked, list, presets), list);
   };
 

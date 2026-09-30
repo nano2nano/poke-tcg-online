@@ -49,14 +49,23 @@ export function resolveDeckChoice(
   saved: readonly SavedDeck[],
   presets: readonly DeckPreset[],
 ): DeckChoice {
-  const listed =
-    picked === "sample" ||
-    saved.some(({ deckId }) => `saved:${deckId}` === picked) ||
-    presets.some(({ label }) => `preset:${label}` === picked);
-  if (picked !== null && listed) return picked;
+  if (picked !== null && isListed(picked, saved, presets)) return picked;
   const playable = saved.find(({ errors }) => errors.length === 0);
   if (playable !== undefined) return `saved:${playable.deckId}`;
   return presets[0] === undefined ? "sample" : `preset:${presets[0].label}`;
+}
+
+/** 選んだデッキが、いまの一覧にあるか。サンプルデッキはいつもある。 */
+export function isListed(
+  choice: DeckChoice,
+  saved: readonly SavedDeck[],
+  presets: readonly DeckPreset[],
+): boolean {
+  return (
+    choice === "sample" ||
+    saved.some(({ deckId }) => `saved:${deckId}` === choice) ||
+    presets.some(({ label }) => `preset:${label}` === choice)
+  );
 }
 
 /**

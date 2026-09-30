@@ -542,6 +542,35 @@ test("保存したデッキの一覧が届く前に押しても、前に選ん�
   );
 });
 
+test("表のデッキを選んでいれば、保存したデッキの一覧を待たずに入る", async ({ page }) => {
+  await page.goto("/");
+  const choice = page.locator("#deck-choice");
+  await expect(choice).toHaveValue(/^preset:/);
+  const preset = await choice.inputValue();
+  await choice.selectOption("sample");
+  await choice.selectOption(preset);
+  await page.route("**/api/decks", () => {});
+  await page.reload();
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
+  await enterRoom(page, `またない-${Date.now()}`);
+  await page.click("#join-button");
+  expect((await sent).postDataJSON()).toMatchObject({ deckPreset: preset.slice("preset:".length) });
+  await expect(page.locator("#join-status")).toContainText("相手を待っています");
+});
+
+test("保存したデッキの一覧を読めなければ、画面に出ている表のデッキで入る", async ({ page }) => {
+  await page.route("**/api/decks", (route) => route.fulfill({ status: 500, body: "{}" }));
+  await page.goto("/");
+  const choice = page.locator("#deck-choice");
+  await expect(choice).toHaveValue(/^preset:/);
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/join"));
+  await enterRoom(page, `よめない-${Date.now()}`);
+  await page.click("#join-button");
+  const preset = (await choice.inputValue()).slice("preset:".length);
+  expect((await sent).postDataJSON()).toMatchObject({ deckPreset: preset });
+  await expect(page.locator("#join-status")).toContainText("相手を待っています");
+});
+
 test("相手さがしの答えを待つあいだにページを移っても、届いたチケットを降ろす", async ({ page }) => {
   const [held, release] = gate();
   await page.route("**/api/join", async (route) => {
