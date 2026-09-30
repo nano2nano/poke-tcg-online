@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
@@ -276,6 +277,12 @@ export function SeatTable({
           >
             投了する
           </button>
+          {ended !== null && (
+            <p className="after-match">
+              <Link to="/">トップへ戻る</Link>
+              <Link to="/history">対戦の記録で見返す</Link>
+            </p>
+          )}
           <SettingsButton id="settings-button" />
           <EventLog id="event-log" listId="events" events={events} />
           <p className="note">

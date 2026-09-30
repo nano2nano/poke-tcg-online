@@ -53,9 +53,9 @@ export function storedSeat(): StoredSeat | null {
   return seated as StoredSeat;
 }
 
-/** 観戦のリンク。渡された人は、この画面と同じ場所で観戦の卓を開く。 */
+/** 観戦のリンク。渡された人は、このサーバで観戦の卓を開く。 */
 export function watchUrl(spectatorToken: string): string {
-  return `${location.origin}/?watch=${encodeURIComponent(spectatorToken)}`;
+  return `${location.origin}/watch/${encodeURIComponent(spectatorToken)}`;
 }
 
 /** シェアのコミットを作る側と確かめる側で、同じ手順を使う。 */

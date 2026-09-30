@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { HeadContent, Link, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { CardPreview } from "../components/card-preview.js";
 import { CardZoom } from "../components/card-zoom.js";
 import { MotionSettingProvider } from "../components/motion-setting.js";
@@ -23,7 +23,19 @@ export const Route = createRootRoute({
   // SSR はしないが、文書の骨組みとスクリプトの読み込みはビルドが `index.html` へ書き出す。
   shellComponent: Document,
   component: Root,
+  notFoundComponent: NotFound,
 });
+
+function NotFound() {
+  return (
+    <main id="not-found" className="page">
+      <h1>ページが見つかりません</h1>
+      <p>
+        <Link to="/">トップへ戻る</Link>
+      </p>
+    </main>
+  );
+}
 
 function Root() {
   return (

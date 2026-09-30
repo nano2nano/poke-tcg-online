@@ -22,6 +22,18 @@ export const deckListSchema = z.object({
 }) satisfies z.ZodType<DeckList>;
 
 /**
+ * 自分のデッキの渡し方。組んだもの（`deck`）か、AI と同じ表のデッキ（`deckPreset`、7.3 節）の
+ * どちらか一方で渡す。表のデッキはここでは引かず、`deck` へ直すのは答える側である。
+ */
+const deckSource = { deck: deckListSchema.optional(), deckPreset: z.string().optional() };
+
+function oneDeckSource(body: { deck?: unknown; deckPreset?: unknown }): boolean {
+  return (body.deck === undefined) !== (body.deckPreset === undefined);
+}
+
+/**
+ * 相手をさがす要求。
+ *
  * **欄が無いことと、`undefined` が入っていることを分ける。** `exactOptionalPropertyTypes`
  * が効いているので、`JoinRequest` の省ける欄に `undefined` は入れられない。Zod の
  * `.optional()` が出す型はその区別を持たないので、無い欄はここで落としてから渡す。
@@ -29,34 +41,35 @@ export const deckListSchema = z.object({
 export const joinRequestSchema = z
   .object({
     secret: z.string(),
-    deck: deckListSchema,
+    ...deckSource,
     displayName: z.string().optional(),
     roomCode: z.string().optional(),
     seedShareCommit: z.string().regex(SEED_SHARE_PATTERN).optional(),
   })
-  .transform((body): JoinRequest => ({
+  .refine(oneDeckSource)
+  .transform((body): Omit<JoinRequest, "deck"> & { deck?: DeckList; deckPreset?: string } => ({
     secret: body.secret,
-    deck: body.deck,
+    ...(body.deck === undefined ? {} : { deck: body.deck }),
+    ...(body.deckPreset === undefined ? {} : { deckPreset: body.deckPreset }),
     ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
     ...(body.roomCode === undefined ? {} : { roomCode: body.roomCode }),
     ...(body.seedShareCommit === undefined ? {} : { seedShareCommit: body.seedShareCommit }),
   }));
 
-/**
- * AI と対戦する要求（7.3 節）。自分のデッキは組んだもの（`deck`）か、AI と同じ表のデッキ
- * （`deckPreset`）のどちらか一方で渡す。
- */
+/** AI と対戦する要求（7.3 節）。 */
 export const joinBotRequestSchema = z
   .object({
     secret: z.string(),
     bot: z.string(),
     botDeck: z.string(),
-    deck: deckListSchema.optional(),
-    deckPreset: z.string().optional(),
+    ...deckSource,
     displayName: z.string().optional(),
     seedShareCommit: z.string().regex(SEED_SHARE_PATTERN).optional(),
   })
-  .refine((body) => (body.deck === undefined) !== (body.deckPreset === undefined));
+  .refine(oneDeckSource);
+
+/** 相手を待つのをやめる要求（7.1 節）。 */
+export const leaveRequestSchema = z.object({ ticket: z.string() });
 
 /** AI どうしの対戦を立てる要求（7.4 節）。AI とデッキは座席 0、座席 1 の順に並べる。 */
 export const watchBotsRequestSchema = z.object({

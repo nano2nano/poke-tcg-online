@@ -95,9 +95,7 @@ export function WatchTable({ token }: { token: string }) {
           </p>
           {open && (
             <p>
-              <Link to="/" search={{}}>
-                ロビーへ戻る
-              </Link>
+              <Link to="/watch">観戦のページへ戻る</Link>
             </p>
           )}
         </div>

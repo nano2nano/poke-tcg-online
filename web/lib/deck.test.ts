@@ -1,82 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { CardTable } from "./cards.js";
 import {
   canAdd,
   deckCodeOf,
+  parseBrowserDeck,
   readOfficialPage,
-  saveDeck,
   searchCards,
   searchRows,
-  storedDeck,
-  subscribeDeck,
   withCount,
 } from "./deck.js";
 
-let items: Map<string, string>;
-
-beforeEach(() => {
-  items = new Map();
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => items.get(key) ?? null,
-    setItem: (key: string, value: string) => items.set(key, value),
-    removeItem: (key: string) => items.delete(key),
-  });
-  vi.stubGlobal("addEventListener", () => {});
-  vi.stubGlobal("removeEventListener", () => {});
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-describe("storedDeck", () => {
-  it("壊れた行は捨て、読める行は残す", () => {
-    items.set(
-      "poke-deck",
-      JSON.stringify([
-        { defId: "a", count: 2 },
-        { defId: "b", count: 0 },
-        { defId: "c", count: 1.5 },
-        { count: 3 },
-        null,
-        { defId: "d", count: 999 },
-      ]),
-    );
-    expect(storedDeck()).toEqual([
+describe("parseBrowserDeck", () => {
+  it("壊れた行は捨て、同じカードは 1 行にまとめ、合わせて 60 枚で切る", () => {
+    const json = JSON.stringify([
       { defId: "a", count: 2 },
-      { defId: "d", count: 60 },
+      { defId: "b", count: 0 },
+      { defId: "c", count: 1.5 },
+      { count: 3 },
+      null,
+      { defId: "a", count: 1 },
+      { defId: "d", count: 999 },
+      { defId: "e", count: 1 },
+    ]);
+    expect(parseBrowserDeck(json)).toEqual([
+      { defId: "a", count: 3 },
+      { defId: "d", count: 57 },
     ]);
   });
 
   it("JSON として読めなければ、組んでいないものとする", () => {
-    items.set("poke-deck", "{");
-    expect(storedDeck()).toEqual([]);
-  });
-});
-
-describe("saveDeck", () => {
-  it("残せなくても、組んだデッキはこのページのあいだ使える", () => {
-    vi.stubGlobal("localStorage", {
-      getItem: () => null,
-      setItem: () => {
-        throw new Error("容量が無い");
-      },
-      removeItem: () => {},
-    });
-    const changed = vi.fn<() => void>();
-    const stop = subscribeDeck(changed);
-    saveDeck([{ defId: "a", count: 1 }]);
-    stop();
-    expect(storedDeck()).toEqual([{ defId: "a", count: 1 }]);
-    expect(changed).toHaveBeenCalledTimes(1);
-    // 残せるようになったら、localStorage のものがいまのデッキに戻る。
-    vi.stubGlobal("localStorage", {
-      getItem: (key: string) => items.get(key) ?? null,
-      setItem: (key: string, value: string) => items.set(key, value),
-      removeItem: (key: string) => items.delete(key),
-    });
-    saveDeck([]);
-    expect(storedDeck()).toEqual([]);
-    expect(items.has("poke-deck")).toBe(false);
+    expect(parseBrowserDeck("{")).toEqual([]);
   });
 });
 

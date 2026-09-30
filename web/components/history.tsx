@@ -16,45 +16,34 @@ import {
 import { Board, SideBoard, Stadium } from "./board.js";
 import { SettingsButton } from "./settings.js";
 
-/**
- * 指した対戦の一覧と、開いた対戦のリプレイ。
- *
- * 横に広い画面では、対戦のあいだこの欄を CSS が隠す。卓と同じく `body` の直下に置く。
- */
+/** 指した対戦の一覧と、開いた対戦のリプレイ。 */
 export function History() {
-  // 読むだけで取りに行かない。席に着いたまま開き直したときに、プレイヤーを作り直させない。
-  const account = useQuery({ ...accountQuery(), enabled: false });
+  const account = useQuery(accountQuery());
   const playerId = account.data?.playerId ?? null;
-  // 一覧を頼んだことは、プレイヤーが替わっても覚えておく。押したときにプレイヤーを作ると一覧の部品ごと
-  // 作り直されるので、押したぶんは作り直した側で取る。
-  const [requested, setRequested] = useState(false);
   // サーバがプレイヤーを忘れて作り直したら、一覧も開いているリプレイも前のプレイヤーのもので、
   // 新しいシークレットでは読めない。プレイヤーごとに作り直す。
   return (
     <PlayerHistory
       key={playerId}
       playerId={playerId}
-      requested={requested}
-      onRequest={() => setRequested(true)}
+      accountFailure={account.isError ? messageOf(account.error) : ""}
     />
   );
 }
 
 function PlayerHistory({
   playerId,
-  requested,
-  onRequest,
+  accountFailure,
 }: {
   playerId: string | null;
-  requested: boolean;
-  onRequest: () => void;
+  accountFailure: string;
 }) {
   const queryClient = useQueryClient();
   const matches = useQuery({
     queryKey: ["matches", playerId],
     queryFn: async () => {
-      // まだ読んでいないプレイヤーや、忘れられていたと分かったプレイヤーは、ここで用意し直す。
-      // 用意している途中なら、それを待つ。重ねて用意すると 2 人できる。
+      // 忘れられていたと分かったプレイヤーは、ここで用意し直す。用意している途中なら、それを待つ。
+      // 重ねて用意すると 2 人できる。
       const account = await queryClient.fetchQuery(accountQuery());
       // 替わったなら、この部品は作り直され、作り直した側が取り直す。ここで返すものは誰も読まない。
       if (account.playerId !== playerId) return [];
@@ -65,9 +54,8 @@ function PlayerHistory({
       );
       return list;
     },
-    // 頼まれて、プレイヤーを用意できてから取りに行く。決着した対戦は、押し直せば一覧に加わる。
-    enabled: requested && playerId !== null,
-    staleTime: Infinity,
+    // プレイヤーを用意できてから取りに行く。開くたびに取り直すので、決着した対戦が一覧に加わる。
+    enabled: playerId !== null,
     retry: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -79,29 +67,30 @@ function PlayerHistory({
   return (
     <>
       <section id="history">
-        <h2>指した対戦を読み返す</h2>
+        <div className="page-head">
+          <h1>対戦の記録</h1>
+          <button
+            id="history-button"
+            className="secondary"
+            onClick={() => {
+              setFailure("");
+              // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
+              // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
+              // プレイヤーを用意できなかったときも押せる。一覧を頼む前に用意し直す。
+              void matches.refetch();
+            }}
+          >
+            読み直す
+          </button>
+        </div>
         <p className="note">
-          済んだ対戦を 1 手ずつ辿れます。終わった対戦なので、両方の手札まで見えます。
-          読めるのは自分が指した対戦だけです。
+          指した対戦を 1 手ずつ辿れます。終わった対戦なので、両方の手札まで見えます。
         </p>
-        <button
-          id="history-button"
-          className="secondary"
-          onClick={() => {
-            setFailure("");
-            onRequest();
-            // 一覧を持っていて取り直している途中なら、それを止めて取り直す。遅れて届いた古い一覧で
-            // 新しい一覧を消さない。まだ持っていなければ、取りに行っている途中の答えを待つ。
-            void matches.refetch();
-          }}
-        >
-          一覧を出す
-        </button>
         <p id="history-status" className="note">
           {failure ||
             (matches.isError && !matches.isFetching
               ? `一覧を出せませんでした: ${messageOf(matches.error)}`
-              : "")}
+              : accountFailure && `プレイヤーを用意できませんでした: ${accountFailure}`)}
         </p>
         <div id="history-list" className="history-list">
           {matches.data?.length === 0 && "まだ読み返せる対戦がありません。"}

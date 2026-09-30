@@ -22,11 +22,11 @@ import { frameAt, isMatchId, replayability } from "./history.js";
 import { clientMessageSchema } from "./protocol.js";
 import {
   createAccountSchema,
-  deckListSchema,
   deleteDeckSchema,
   joinBotRequestSchema,
   watchBotsRequestSchema,
   joinRequestSchema,
+  leaveRequestSchema,
   officialDeckSchema,
   replayRequestSchema,
   saveDeckSchema,
@@ -67,6 +67,9 @@ export const DEFAULT_ACCOUNT_LIMIT: RateLimitOptions = {
 
 /** 作る間隔が短すぎることの合図。 */
 const TOO_MANY_ACCOUNTS = "too-many-accounts";
+
+/** 表のデッキに無い名前で頼まれたことの合図。画面はこれをデッキの違反と分けて出す。 */
+const UNKNOWN_PRESET = "unknown-preset";
 
 const MALFORMED = "送られた中身の形が違う";
 
@@ -390,11 +393,6 @@ async function route(request: Request, origin: string, context: RouteContext): P
       failures,
     });
   }
-  if (request.method === "POST" && url.pathname === "/api/deck/validate") {
-    const deck = parseBody(deckListSchema, await readBody(request));
-    const errors = validateDeck(deck).map(describeViolation);
-    return json(200, { ok: errors.length === 0, errors });
-  }
   // 保存したデッキ（5.5 節）。どれも自分のデッキしか読み書きしない。
   if (request.method === "POST" && url.pathname === "/api/decks") {
     const { secret } = parseBody(secretRequestSchema, await readBody(request));
@@ -423,10 +421,16 @@ async function route(request: Request, origin: string, context: RouteContext): P
     return (await deckStore.remove(account.playerId, deckId)) ? json(200, {}) : deckNotFound();
   }
   if (request.method === "POST" && url.pathname === "/api/join") {
-    const body = parseBody(joinRequestSchema, await readBody(request));
+    const {
+      deck: built,
+      deckPreset,
+      ...body
+    } = parseBody(joinRequestSchema, await readBody(request));
+    const deck = chosenDeck(built, deckPreset);
+    if (deck === null) return unknownPreset();
     // 前の対戦のレーティングが動き終わってから席に着ける。記録に残るのは始めた時点の値である。
     await archive.settled();
-    const outcome = lobby.join(body, await accounts.find(body.secret));
+    const outcome = lobby.join({ ...body, deck }, await accounts.find(body.secret));
     return json(outcome.ok ? 200 : 400, outcome);
   }
   // AI の一覧と、AI が握れるデッキ（7.3 節）。
@@ -436,10 +440,10 @@ async function route(request: Request, origin: string, context: RouteContext): P
   if (request.method === "POST" && url.pathname === "/api/join-bot") {
     const body = parseBody(joinBotRequestSchema, await readBody(request));
     await archive.settled();
-    const deck = body.deck ?? presetDeck(body.deckPreset ?? "");
+    const deck = chosenDeck(body.deck, body.deckPreset);
     const botDeck = presetDeck(body.botDeck);
     if (deck === null || botDeck === null) {
-      return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
+      return unknownPreset();
     }
     const joining = {
       secret: body.secret,
@@ -471,7 +475,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const first = presetDeck(body.decks[0]);
     const second = presetDeck(body.decks[1]);
     if (first === null || second === null) {
-      return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
+      return unknownPreset();
     }
     const decks: [DeckList, DeckList] = [first, second];
     const known = await accounts.find(body.secret);
@@ -497,7 +501,16 @@ async function route(request: Request, origin: string, context: RouteContext): P
   if (request.method === "GET" && url.pathname === "/api/claim") {
     return json(200, lobby.claim(url.searchParams.get("ticket") ?? ""));
   }
+  if (request.method === "POST" && url.pathname === "/api/leave") {
+    const { ticket } = parseBody(leaveRequestSchema, await readBody(request));
+    return json(200, lobby.leave(ticket));
+  }
   return json(404, { error: "not found" });
+}
+
+/** 組んだデッキか、表のデッキの名前から引いたデッキ。表に無い名前なら null。 */
+function chosenDeck(built: DeckList | undefined, preset: string | undefined): DeckList | null {
+  return built ?? presetDeck(preset ?? "");
 }
 
 /**
@@ -553,6 +566,10 @@ function jsonText(status: number, text: string): Response {
 
 function accountNotFound(): Response {
   return json(404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
+}
+
+function unknownPreset(): Response {
+  return json(400, { ok: false, code: UNKNOWN_PRESET, errors: ["デッキの名前が表に無い"] });
 }
 
 function deckNotFound(): Response {

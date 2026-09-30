@@ -47,7 +47,7 @@ export function BotWatchForm() {
     });
     const watch = outcome.spectatorToken;
     if (watch !== undefined) {
-      await navigate({ to: "/", search: { watch } });
+      await navigate({ to: "/watch/$token", params: { token: watch } });
       return;
     }
     if (!outcome.ok && outcome.code === "account-not-found") {
@@ -58,11 +58,11 @@ export function BotWatchForm() {
 
   const ready = botNames.length > 0 && decks.length > 0;
   return (
-    <>
-      <h2>AI どうしの対戦を見る</h2>
+    <section id="bot-watch" className="panel">
+      <h1>観戦</h1>
       <p className="note">
-        AI を 2 人選んで指させ、観戦の画面で 1 手ずつ見ます。両者の手札も見えます。止めて 1
-        手ずつ進めたり、戻したりできます。
+        人の対戦は、指している人から観戦のリンクを受け取って開きます。ここでは AI を 2
+        人選んで指させ、1 手ずつ見ます。両者の手札も見え、止めて 1 手ずつ進めたり戻したりできます。
       </p>
       <div className="bot-form">
         {([0, 1] as const).map((seat) => (
@@ -114,7 +114,7 @@ export function BotWatchForm() {
       <p>
         <output id="watch-bots-status">{status}</output>
       </p>
-    </>
+    </section>
   );
 }
 
