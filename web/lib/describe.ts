@@ -568,6 +568,7 @@ function describeRun(
     case "attack-resolved":
     case "attack-damage-stage4":
     case "knockout-batch-started":
+    case "knockout-batch-trashed":
     case "knockout-batch-completed":
     case "turn-ended":
     case "phase-changed":
