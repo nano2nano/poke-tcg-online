@@ -68,6 +68,9 @@ export const DEFAULT_ACCOUNT_LIMIT: RateLimitOptions = {
 /** 作る間隔が短すぎることの合図。 */
 const TOO_MANY_ACCOUNTS = "too-many-accounts";
 
+/** 表のデッキに無い名前で頼まれたことの合図。画面はこれをデッキの違反と分けて出す。 */
+const UNKNOWN_PRESET = "unknown-preset";
+
 const MALFORMED = "送られた中身の形が違う";
 
 export interface AppOptions {
@@ -424,7 +427,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
       ...body
     } = parseBody(joinRequestSchema, await readBody(request));
     const deck = chosenDeck(built, deckPreset);
-    if (deck === null) return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
+    if (deck === null) return unknownPreset();
     // 前の対戦のレーティングが動き終わってから席に着ける。記録に残るのは始めた時点の値である。
     await archive.settled();
     const outcome = lobby.join({ ...body, deck }, await accounts.find(body.secret));
@@ -440,7 +443,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const deck = chosenDeck(body.deck, body.deckPreset);
     const botDeck = presetDeck(body.botDeck);
     if (deck === null || botDeck === null) {
-      return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
+      return unknownPreset();
     }
     const joining = {
       secret: body.secret,
@@ -472,7 +475,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const first = presetDeck(body.decks[0]);
     const second = presetDeck(body.decks[1]);
     if (first === null || second === null) {
-      return json(400, { ok: false, errors: ["デッキの名前が表に無い"] });
+      return unknownPreset();
     }
     const decks: [DeckList, DeckList] = [first, second];
     const known = await accounts.find(body.secret);
@@ -563,6 +566,10 @@ function jsonText(status: number, text: string): Response {
 
 function accountNotFound(): Response {
   return json(404, { code: ACCOUNT_NOT_FOUND, error: "アカウントが見つからない" });
+}
+
+function unknownPreset(): Response {
+  return json(400, { ok: false, code: UNKNOWN_PRESET, errors: ["デッキの名前が表に無い"] });
 }
 
 function deckNotFound(): Response {

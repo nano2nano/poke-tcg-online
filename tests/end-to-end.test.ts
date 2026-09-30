@@ -242,7 +242,10 @@ describe("入れなかった理由", () => {
 
     const unknown = await join({ deckPreset: "表に無いデッキ" });
     expect(unknown.status).toBe(400);
-    expect(((await unknown.json()) as JsonBody).errors).toEqual(["デッキの名前が表に無い"]);
+    expect(await unknown.json()).toMatchObject({
+      code: "unknown-preset",
+      errors: ["デッキの名前が表に無い"],
+    });
     expect((await join({ deck: legalDecks()[0], deckPreset: preset!.label })).status).toBe(400);
     expect((await join({})).status).toBe(400);
 
