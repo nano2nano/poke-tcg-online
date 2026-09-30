@@ -856,7 +856,7 @@ test("OS で動きを減らす設定にしていたら、カードを動かさ�
   await page.emulateMedia({ reducedMotion: "reduce" });
   const [before, after] = placingActive();
   const { card, inZone } = await openPlacing(page, before, after);
-  await expect(page.locator("#replay-motion-toggle")).not.toBeChecked();
+  await expect(page.locator("#motion-toggle")).not.toBeChecked();
   await page.click("#replay-next");
   await expect(card).toBeVisible();
   await page.clock.runFor(20);
@@ -867,7 +867,7 @@ test("OS で動きを減らす設定にしていても、画面で演出を出�
   await page.emulateMedia({ reducedMotion: "reduce" });
   const [before, after] = placingActive();
   const { card, inZone } = await openPlacing(page, before, after);
-  await page.check("#replay-motion-toggle");
+  await setMotion(page, true);
   await page.click("#replay-next");
   await expect(card).toBeVisible();
   await page.clock.runFor(20);
@@ -878,7 +878,7 @@ test("OS で動きを減らす設定にしていても、画面で演出を出�
 test("開いているあいだに OS で動きを減らす設定にしたら、演出を止める", async ({ page }) => {
   const [before, after] = placingActive();
   await openPlacing(page, before, after);
-  const toggle = page.locator("#replay-motion-toggle");
+  const toggle = page.locator("#motion-toggle");
   await expect(toggle).toBeChecked();
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(toggle).not.toBeChecked();
@@ -888,7 +888,7 @@ test("画面で演出を切っていたら、カードを動かさずに場に�
   await page.addInitScript(() => localStorage.setItem("poke-motion", "off"));
   const [before, after] = placingActive();
   const { card, inZone } = await openPlacing(page, before, after);
-  await expect(page.locator("#replay-motion-toggle")).not.toBeChecked();
+  await expect(page.locator("#motion-toggle")).not.toBeChecked();
   await page.click("#replay-next");
   await expect(card).toBeVisible();
   await page.clock.runFor(20);
@@ -1137,7 +1137,7 @@ test("画面で演出を切ると、結果を待たせずに出し、切った�
   await expect(results).toHaveCount(1);
 
   // 待たせている結果と数字も、切ったらすぐ出す。
-  await page.uncheck("#motion-toggle");
+  await setMotion(page, false);
   await expect(results).toHaveCount(3);
   await expect(page.locator(".hit")).toBeVisible();
   expect(await results.first().evaluate((node) => getComputedStyle(node).animationName)).toBe(
@@ -1333,14 +1333,14 @@ test("前の局面でスタジアムに見えていたカードが手札に入�
 test("画面で演出を切っていたら、引いたカードを動かさずに手札に置く", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
-  await page.uncheck("#motion-toggle");
+  await setMotion(page, false);
   const next = drawnFrom(view, "deckCount");
   send([], next);
   const card = await newestHandCard(page, next);
   expect(await card.getAttribute("data-moving")).toBeNull();
   expect(await animationsOf(card)).toBe(0);
   // あとで演出を戻しても、前に入ったカードを動かし直さない。
-  await page.check("#motion-toggle");
+  await setMotion(page, true);
   expect(await animationsOf(card)).toBe(0);
   // OS の設定と同じほうへ戻したので、選んだことは忘れて OS の設定に従う。
   expect(await page.evaluate(() => localStorage.getItem("poke-motion"))).toBeNull();
@@ -2347,3 +2347,10 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
   await page.click("#watch-play");
   await expect(position).toHaveAttribute("data-shown", "5");
 });
+
+/** 設定のダイアログを開いて、演出を出すかを切り替える。 */
+async function setMotion(page: Page, on: boolean): Promise<void> {
+  await page.locator('[id$="settings-button"]:visible').first().click();
+  await page.locator("#motion-toggle").setChecked(on);
+  await page.click("#settings-close");
+}

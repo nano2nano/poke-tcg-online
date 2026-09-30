@@ -221,10 +221,22 @@ button.secondary {
   gap: 0.25rem;
   margin: 0.5rem 0;
 }
-.motion-toggle {
+.motion-toggle,
+.setting {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+}
+.settings {
+  max-width: min(92vw, 480px);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.settings::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+.settings h2 {
+  margin-top: 0;
 }
 .watch-link {
   display: block;

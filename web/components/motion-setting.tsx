@@ -90,13 +90,12 @@ export function MotionSettingProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/** 演出を出すかの切り替え。卓ごとに置くので、`id` は呼ぶ側が決める。 */
-export function MotionToggle({ id }: { id: string }) {
+export function MotionToggle() {
   const { animate, setAnimate } = use(MotionSetting);
   return (
     <label className="motion-toggle">
       <input
-        id={id}
+        id="motion-toggle"
         type="checkbox"
         checked={animate}
         onChange={(event) => setAnimate(event.currentTarget.checked)}

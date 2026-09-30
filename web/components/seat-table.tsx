@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
@@ -29,7 +37,7 @@ import {
 } from "./board.js";
 import type { CardDrops } from "./card-drag.js";
 import { EventLog } from "./event-log.js";
-import { MotionToggle } from "./motion-setting.js";
+import { SettingsButton, useAutoAnswer } from "./settings.js";
 import { NoticeLayer, useNotices } from "./notices.js";
 
 /**
@@ -125,6 +133,34 @@ export function SeatTable({
       },
     };
   }, [listed, disabled]);
+  // 答えが 1 つしか無い選択は、設定で選んでいれば押さずに進める。番を終える手と、山札や相手の手札を
+  // 見ている選択は、何があったかを確かめてから自分で進める。
+  const autoAnswer = useAutoAnswer();
+  const [alone] = listed.buttons;
+  const answerAlone =
+    autoAnswer &&
+    listed.buttons.length === 1 &&
+    alone?.move.type === "AnswerChoice" &&
+    state.ended === null &&
+    view?.phase !== "setup" &&
+    view?.choices.at(-1)?.prompt?.kind !== "selectFromHiddenZone"
+      ? alone
+      : null;
+  // 同じ局面へは 1 度だけ送る。サーバが断った手や、返事の無かった手を送り直し続けない。
+  const answerFor = answerAlone === null ? null : `${state.stateVersion} ${answerAlone.key}`;
+  const answered = useRef<string | null>(null);
+  const answer = useEffectEvent(() => {
+    if (answerAlone === null) return;
+    playMove(seating, listed.offered, answerAlone.move);
+    feed.show({ text: `「${answerAlone.label}」を自動で選びました。` });
+  });
+  useEffect(() => {
+    if (answerFor === null || answered.current === answerFor || disabled || seating.awaiting) {
+      return;
+    }
+    answered.current = answerFor;
+    answer();
+  }, [answerFor, disabled, seating.awaiting]);
   const cardChoice =
     state.ended === null &&
     view?.phase !== "setup" &&
@@ -261,7 +297,7 @@ export function SeatTable({
           >
             投了する
           </button>
-          <MotionToggle id="motion-toggle" />
+          <SettingsButton id="settings-button" />
           <EventLog id="event-log" listId="events" events={events} />
           <p className="note">
             観戦のリンク（渡された人は、両者の手札の中身を除いた盤面を見られます）
@@ -734,7 +770,7 @@ function ChoiceSheet({
         {!folded &&
           buttons.every(
             ({ move }) => move.type === "AnswerChoice" && move.answer.kind === "decline",
-          ) && <p>選べるカードはありません。</p>}
+          ) && <p className="choice-empty">選べるカードはありません。</p>}
         {!folded && (
           <div
             id={revealedDeck === null ? undefined : "revealed-deck"}

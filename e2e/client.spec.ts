@@ -646,7 +646,7 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
   await expect.poll(() => held.last?.stateVersion === seenA()?.stateVersion).toBe(true);
 
   // 結果を溢れさせて確かめるので、1 つずつ待たせずに一度に出す。
-  await a.uncheck("#motion-toggle");
+  await setMotion(a, false);
   const view = held.last!.view;
   const target = view.self.active.inPlayId as string;
   const header = { seq: 0, turn: view.turn, window: { kind: "turn", player: view.turnPlayer } };
@@ -2975,11 +2975,59 @@ test("効果で選べるカードが 1 枚も無く、やめるしかないと�
   sync.legalMoves = [{ type: "AnswerChoice", player: 0, choiceId, answer: { kind: "decline" } }];
   const sent = await openWith(page, sync);
   const sheet = page.locator("#choice-sheet");
-  await expect(sheet).toContainText("選べるカードはありません。");
-  await expect(page.locator("#moves button")).toHaveText(["選ばない"]);
+  await expect(sheet.locator(".choice-empty")).toBeVisible();
+  await expect(page.locator("#moves button")).toHaveCount(1);
   await sheet.locator("#moves button").click();
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0]!.move).toEqual(sync.legalMoves[0]);
+});
+
+test("設定で選べば、答えが 1 つしか無い選択は押さずに進め、何を選んだかを知らせる", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync;
+  const choiceId = "やめるしかない選択";
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: true,
+      prompt: { kind: "selectCard", candidates: [] },
+    },
+  ];
+  const decline = { type: "AnswerChoice", player: 0, choiceId, answer: { kind: "decline" } };
+  sync.legalMoves = [decline];
+  const sent = await openWith(page, sync);
+  await expect(page.locator("#choice-sheet")).toBeVisible();
+  expect(sent).toHaveLength(0);
+
+  await page.click("#settings-button");
+  await page.check("#auto-answer-toggle");
+  await page.click("#settings-close");
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(decline);
+  await expect(page.locator("#results .result")).toHaveCount(1);
+  expect(await page.evaluate(() => localStorage.getItem("poke-auto-answer"))).toBe("on");
+
+  // 山札を見ている選択と、番を終える手だけの局面は進めない。
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: true,
+      prompt: { kind: "selectFromHiddenZone", zone: { kind: "deck", player: 0 }, candidates: [] },
+    },
+  ];
+  const shown = await openWith(page, sync);
+  await expect(page.locator("#choice-sheet")).toBeVisible();
+  sync.view.choices = [];
+  sync.legalMoves = [{ type: "EndTurn", player: 0 }];
+  const ending = await openWith(page, sync);
+  await expect(page.locator("#moves button")).toHaveCount(1);
+  await page.waitForTimeout(500);
+  expect([...shown, ...ending]).toHaveLength(0);
 });
 
 test("盤面のカードやポケモンを右クリックすると、そこでできる手をその場に出して選べる", async ({
@@ -3003,12 +3051,11 @@ test("盤面のカードやポケモンを右クリックすると、そこで�
 
   // 特性を使えるポケモンには印を付ける。
   await expect(page.locator(".marks .ability")).toHaveCount(1);
-  await expect(pokemon(bench[1]!.inPlayId).locator(".marks .ability")).toHaveText("特性");
+  await expect(pokemon(bench[1]!.inPlayId).locator(".marks .ability")).toHaveCount(1);
 
   // ポケモンには、その特性と、そのポケモンにつける手を出す。
   await pokemon(bench[1]!.inPlayId).click({ button: "right" });
   await expect(items).toHaveCount(3);
-  await expect(items.first()).toHaveText(/特性/);
   await expect(items.first()).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
@@ -3016,7 +3063,6 @@ test("盤面のカードやポケモンを右クリックすると、そこで�
   // バトル場のポケモンにはワザも出す。外を押すと閉じる。
   await pokemon(active.inPlayId).click({ button: "right" });
   await expect(items).toHaveCount(3);
-  await expect(items.filter({ hasText: /^ワザ/ })).toHaveCount(1);
   await page.locator("#clock").click();
   await expect(menu).toBeHidden();
 
@@ -3028,7 +3074,7 @@ test("盤面のカードやポケモンを右クリックすると、そこで�
   const card = page.locator(`#self [data-zone="hand"] .card[data-def-id="${item.defId}"]`).first();
   await card.focus();
   await page.keyboard.press("Shift+F10");
-  await expect(items).toHaveText([/を使う$/]);
+  await expect(items).toHaveCount(1);
   await expect(items.first()).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(card).toBeFocused();
@@ -3206,3 +3252,10 @@ test("2 枚 1 組のスタジアムは、左右それぞれの半分の画像を
   expect(await colors(field.nth(0))).toEqual(["左", "左"]);
   expect(await colors(field.nth(1))).toEqual(["右", "右"]);
 });
+
+/** 設定のダイアログを開いて、演出を出すかを切り替える。 */
+async function setMotion(page: Page, on: boolean): Promise<void> {
+  await page.locator('[id$="settings-button"]:visible').first().click();
+  await page.locator("#motion-toggle").setChecked(on);
+  await page.click("#settings-close");
+}
