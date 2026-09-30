@@ -21,6 +21,7 @@ import { validateDeck } from "../src/deck.js";
 import { commitSeed, commitShare } from "../src/fingerprint.js";
 import {
   applyMove,
+  cannotRevisit,
   createGame,
   derivedView,
   encodeEntityWeights,
@@ -215,7 +216,10 @@ describe("重みから作る AI", () => {
 });
 
 describe("AI に見せる候補", () => {
-  /** 座席 1 に AI が就いた対戦を、main で座席 1 の候補が 2 つ以上ある局面まで、先頭の合法手で進める。 */
+  /**
+   * 座席 1 に AI が就いた対戦を、main で座席 1 の候補が 2 つ以上あり、そのどれかの行き先が既出になりうる
+   * （`cannotRevisit` でない）局面まで、先頭の合法手で進める。
+   */
   function botMatchInMain(): Match {
     ensureCards();
     const match = createMatch({
@@ -236,7 +240,14 @@ describe("AI に見せる候補", () => {
       const mover = toMove(match);
       if (mover === null) throw new Error("座席 1 が main で選ぶ局面が来なかった");
       const legal = legalMoves(match.state);
-      if (mover === 1 && match.state.phase === "main" && legal.length >= 2) return match;
+      if (
+        mover === 1 &&
+        match.state.phase === "main" &&
+        legal.length >= 2 &&
+        legal.some((move) => !cannotRevisit(move))
+      ) {
+        return match;
+      }
       submitMove(match, mover, match.version, legal[0] as Move, 0);
     }
   }
@@ -246,11 +257,11 @@ describe("AI に見せる候補", () => {
     const legal = legalMovesFor(match, 1)!;
     expect(botCandidates(match, legal)).toEqual(legal);
 
-    // 番を終えない手を 1 つ選び、その行き先に既に来たことにする。同じ行き先へ進む手はどれも外れる。
-    // 番を終える手の行き先は次の番の局面で、記録はそこで番ごと入れ替わる。
+    // 行き先が同じ番の既出の局面になりうる手を 1 つ選び、その行き先に既に来たことにする。同じ行き先へ進む手は
+    // どれも外れる。なりえない手（`cannotRevisit`）の行き先を既出にすると、エンジンが不変条件の違反として止める。
     const key = (move: Move) => positionKey(applyMove(match.state, move).state);
-    const picked = legal.find((move) => move.type !== "EndTurn" && move.type !== "Attack");
-    if (picked === undefined) throw new Error("番を終えない手が候補に無い");
+    const picked = legal.find((move) => !cannotRevisit(move));
+    if (picked === undefined) throw new Error("行き先が既出になりうる手が候補に無い");
     const visited = key(picked);
     match.botRevisit!.arrive(applyMove(match.state, picked).state);
     const kept = legal.filter((move) => key(move) !== visited);

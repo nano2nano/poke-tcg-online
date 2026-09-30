@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  deckPoolOf,
   encodeEntityWeights,
   encodePpoWeights,
   newEntityWeightsFile,
@@ -42,7 +43,16 @@ const pointers = {
     generation,
     weights: `ppo-clip-g${generation}.weights`,
   })),
+  pool: null,
 };
+
+/** 母集団の走りについて `readRunPointers` が返す `pool`。中身の SHA-256 は、いまの表から学習と同じ読み方で求める。 */
+function poolOf(spec: string, coverage: string | null = null) {
+  ensureCards();
+  const covering = coverage === null ? null : { spec: coverage, share: 0.25 };
+  const hash = deckPoolOf(spec, 0.5, covering).hash;
+  return { spec, hash, familyPower: 0.5, coverage: covering };
+}
 
 describe("走りの状態", () => {
   it("いまの方策と凍結した世代を読む", () => {
@@ -54,6 +64,20 @@ describe("走りの状態", () => {
       anchors: pointers.anchors,
     });
     expect(readRunPointers(dir)).toEqual(pointers);
+  });
+
+  it("母集団の走りは、母集団の書き方と始めに読んだ中身の SHA-256 を読む", () => {
+    const pool = { spec: "jp-2026h1:L-seen", hash: "h", pairings: 276, familyPower: 0.5 };
+    const config = { gate: "measure", decks: "pool:jp-2026h1:L-seen", pool };
+    const state = { config, current: { weights: pointers.current }, anchors: [] };
+    const read = (changed: object) =>
+      readRunPointers(runDir({ ...state, config: { ...config, pool: { ...pool, ...changed } } }))
+        .pool;
+    expect(read({})).toEqual({ spec: pool.spec, hash: "h", familyPower: 0.5, coverage: null });
+    const coverage = { spec: "file:/c.json", share: 0.25 };
+    expect(read({ coverage })?.coverage).toEqual(coverage);
+    expect(() => read({ coverage: { share: 0.25 } })).toThrow(/config\.pool/);
+    expect(() => read({ familyPower: undefined })).toThrow(/config\.pool/);
   });
 
   it("いまの方策が無い状態は読まない", () => {
@@ -71,10 +95,28 @@ describe("走りの状態", () => {
   });
 
   it("AI の座席が握る本と違う本で学んだ走りは上げない", () => {
-    expect(() => checkRunDecks("jp-2026h1:L-seen")).not.toThrow();
+    expect(() => checkRunDecks({ decks: "jp-2026h1:L-seen", pool: null })).not.toThrow();
     for (const decks of ["meta", "jp-2026h1", "jp-2026h1:F-seen", "jp-2026h1:L-heldout"]) {
-      expect(() => checkRunDecks(decks), decks).toThrow(/上げない/);
+      expect(() => checkRunDecks({ decks, pool: null }), decks).toThrow(/上げない/);
     }
+  });
+
+  it("母集団の走りは、AI の座席のデッキがどれも母集団に入っていれば上げる", () => {
+    const run = (pool: ReturnType<typeof poolOf>) => ({ decks: `pool:${pool.spec}`, pool });
+    expect(() => checkRunDecks(run(poolOf("jp-2026h1")))).not.toThrow();
+    expect(() => checkRunDecks(run(poolOf("jp-2026h1:L-heldout")))).toThrow(/入っていない/);
+  });
+
+  it("カードを入れたデッキにしか無い AI の座席のデッキは、学んだ本に数えない", () => {
+    const run = (pool: ReturnType<typeof poolOf>) => ({ decks: `pool:${pool.spec}`, pool });
+    expect(() => checkRunDecks(run(poolOf("jp-2026h1:L-heldout", "jp-2026h1:L-seen")))).toThrow(
+      /入っていない/,
+    );
+  });
+
+  it("母集団の中身が走りの始めと違えば上げない", () => {
+    const pool = { ...poolOf("jp-2026h1"), hash: "0".repeat(64) };
+    expect(() => checkRunDecks({ decks: `pool:${pool.spec}`, pool })).toThrow(/始めに読んだ/);
   });
 
   it("ゲートの扱いが分からない状態は読まない", () => {
