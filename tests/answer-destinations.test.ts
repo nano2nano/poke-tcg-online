@@ -516,9 +516,20 @@ describe("山札から選ぶあいだに見せる山札", () => {
     expect([...(revealedDeckFor(match, seat) ?? [])].sort()).toEqual(defIdsOf(rest));
   });
 
-  it("山札の上から何枚かを見せた効果では出さない", () => {
-    const { match, seat } = topCardsToHand();
-    expect(revealedDeckFor(match, seat)).toBeNull();
+  it("山札の上から何枚かを見せた効果では、見たカードのうち今も山札にあるものを渡す", () => {
+    const played = topCardsToHand();
+    let searched = 0;
+    walk(played, ({ match, seat }) => {
+      if (!searchingDeck(match, seat)) return;
+      const deck = match.state.players[seat].deck;
+      const shown = revealedDeckFor(match, seat) ?? [];
+      expect(shown.length).toBeGreaterThan(0);
+      expect(shown.length).toBeLessThan(deck.length);
+      // 選ばなかったカードは、見た順のまま山札の上に残っている。
+      expect(shown).toEqual(deck.slice(0, shown.length).map((card) => card.defId));
+      searched += 1;
+    });
+    expect(searched).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -807,7 +807,7 @@ function ChoiceSheet({
             })),
           ...picks.filter(({ defId }) => !counts.has(defId)),
         ];
-  // サーバは見せたあとに山札へ入ったカードを送らないので、並べた枚数が山札の枚数より少ないことがある。
+  // 山札の上から何枚かだけを見る効果があり、見せたあとに山札へ入ったカードも送られないので、並べた枚数が山札の枚数より少ないことがある。
   const deckCount = state.view?.self.deckCount;
   const heading =
     revealedDeck === null

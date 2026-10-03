@@ -930,7 +930,7 @@ export function attacksFor(match: Match, seat: Player): AttackView[] | null {
 
 /**
  * 山札から選んでいるあいだ、この効果で見せた山札のうち、まだ山札にあるカード（3.2 節の `revealedDeck`）。
- * 並びは見せた順。山札全体を見せていない効果と、ほかの局面では null。
+ * 並びは見せた順。山札を見せていない効果と、ほかの局面では null。
  *
  * 選択の候補は条件に合うカードだけなので、画面はこれが無いと、山札を見て選ぶ効果で
  * 選べないカードや残りの中身を座席へ見せられない。
@@ -938,10 +938,11 @@ export function attacksFor(match: Match, seat: Player): AttackView[] | null {
 export function revealedDeckFor(match: Match, seat: Player): CardDefId[] | null {
   const choice = match.state.choices.at(-1);
   const reveals = match.effectReveals;
+  const shown = reveals?.wholeDeck ?? reveals?.pinned ?? [];
   if (
     toMove(match) !== seat ||
     choice === undefined ||
-    reveals?.wholeDeck == null ||
+    shown.length === 0 ||
     choice.prompt.kind !== "selectFromHiddenZone" ||
     choice.prompt.zone.kind !== "deck" ||
     choice.prompt.zone.player !== seat
@@ -950,7 +951,7 @@ export function revealedDeckFor(match: Match, seat: Player): CardDefId[] | null 
   }
   // 見せたあとに山札へ入ったカードは足さない。どこから入ったかで、座席が正体を知っているかが変わる。
   const inDeck = new Set(match.state.players[seat].deck.map((card) => card.instanceId));
-  return reveals.wholeDeck.filter((card) => inDeck.has(card.instanceId)).map((card) => card.defId);
+  return shown.filter((card) => inDeck.has(card.instanceId)).map((card) => card.defId);
 }
 
 /** 1 つの効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード。 */
