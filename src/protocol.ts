@@ -121,7 +121,7 @@ export interface SyncMessage {
   deckPlacement: DeckPlacementView | null;
   /** 効果の選択なら、`legalMoves` と同じ並びで、その答えで選んだカードの行き先。選ぶ座席にだけ入る（3.2 節）。 */
   answerDestinations: (AnswerDestination | null)[] | null;
-  /** 山札全体を見せる効果で山札から選んでいるなら、見せた山札のうちまだ山札にあるカード。選ぶ座席にだけ入る（3.2 節）。 */
+  /** 山札を見せる効果で山札から選んでいるなら、見せた山札のうちまだ山札にあるカード。選ぶ座席にだけ入る（3.2 節）。 */
   revealedDeck: CardDefId[] | null;
   /** バトルポケモンが宣言できるワザ。`Attack` の `attackIndex` はこの表の位置である。手番側の座席にだけ入る（3.2 節）。 */
   attacks: AttackView[] | null;
