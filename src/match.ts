@@ -930,7 +930,7 @@ export function attacksFor(match: Match, seat: Player): AttackView[] | null {
 
 /**
  * 山札から選んでいるあいだ、この効果で見せた山札のうち、まだ山札にあるカード（3.2 節の `revealedDeck`）。
- * 並びは見せた順。山札を見せていない効果と、ほかの局面では null。
+ * 並びは見せた順。山札を見せていない効果、渡すカードが無いとき、ほかの局面では null。
  *
  * 選択の候補は条件に合うカードだけなので、画面はこれが無いと、山札を見て選ぶ効果で
  * 選べないカードや残りの中身を座席へ見せられない。
@@ -951,7 +951,11 @@ export function revealedDeckFor(match: Match, seat: Player): CardDefId[] | null 
   }
   // 見せたあとに山札へ入ったカードは足さない。どこから入ったかで、座席が正体を知っているかが変わる。
   const inDeck = new Set(match.state.players[seat].deck.map((card) => card.instanceId));
-  return shown.filter((card) => inDeck.has(card.instanceId)).map((card) => card.defId);
+  // 山札の端へ置き終えたカードは山札に残るが、もう選ばない。
+  for (const card of match.deckStack?.placed ?? []) inDeck.delete(card.instanceId);
+  // 同じカードを見せ直す効果があるので、1 枚は 1 度だけ数える。
+  const left = shown.filter((card) => inDeck.delete(card.instanceId)).map((card) => card.defId);
+  return left.length === 0 ? null : left;
 }
 
 /** 1 つの効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード。 */

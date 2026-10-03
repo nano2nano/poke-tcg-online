@@ -23,6 +23,7 @@ import {
   createMatch,
   deckPlacementFor,
   deckPlacementOf,
+  revealedDeckFor,
   submitMove,
   toMove,
   type DeckPlacementView,
@@ -200,6 +201,23 @@ describe("山札の端へ順に置く選択", () => {
       expect(shown).toBeGreaterThanOrEqual(2);
     });
   }
+
+  it("山札を見て置く選択では、置き終えたカードを見ている山札から除く", () => {
+    const trainer = findTrainer(
+      ({ match, seat }) =>
+        deckPlacementFor(match, seat) !== null && revealedDeckFor(match, seat) !== null,
+    );
+    const { match, seat } = afterPlaying(trainer) as Played;
+    const before = revealedDeckFor(match, seat) ?? [];
+    const first = cardAnswers(match)[0] as Move;
+    const placed = answeredDefId(match, first);
+    submitMove(match, seat, match.version, first, 0);
+    expect(deckPlacementFor(match, seat)?.nth).toBe(2);
+    const after = revealedDeckFor(match, seat) ?? [];
+    const count = (defIds: readonly CardDefId[]) => defIds.filter((id) => id === placed).length;
+    expect(after.length).toBe(before.length - 1);
+    expect(count(after)).toBe(count(before) - 1);
+  });
 
   it("山札から選んでも、山札へ戻さない選択では出さない", () => {
     const trainer = findTrainer(({ match, seat }) => {
