@@ -161,8 +161,8 @@ export function Lobby({
   });
 
   /**
-   * 送るデッキ。自分のデッキも AI のデッキも同じに選ぶ。保存したデッキを選んでいたか何も選んでいなければ、
-   * 保存したデッキの一覧が届いてから選ぶ。届く前の一覧で選ぶと、選んだつもりのないデッキで入る。
+   * 送るデッキ。保存したデッキを選んでいたか何も選んでいなければ、保存したデッキの一覧が届いてから選ぶ。
+   * 届く前の一覧で選ぶと、選んだつもりのないデッキで入る。
    */
   const deckToSend = async (chosen: DeckChoice | null, resolve: typeof resolveDeckChoice) => {
     const { playerId } = await ensureAccount();

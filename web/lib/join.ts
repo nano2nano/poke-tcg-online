@@ -56,8 +56,8 @@ export function resolveDeckChoice(
 }
 
 /**
- * AI のデッキ。選んだものが一覧に無いか、まだ選んでいなければ、表のデッキの先頭にする。
- * 表のデッキは AI が学習で握ったデッキで、ほかのデッキの回し方を AI は学んでいない。
+ * AI のデッキ。自分のデッキと違い、既定は保存したデッキではなく表のデッキの先頭にする。
+ * AI が学習で握ったのは表のデッキだけで、ほかのデッキの回し方は学んでいない。
  */
 export function resolveBotDeckChoice(
   picked: DeckChoice | null,

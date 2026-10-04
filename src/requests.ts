@@ -56,7 +56,7 @@ export const joinRequestSchema = z
     ...(body.seedShareCommit === undefined ? {} : { seedShareCommit: body.seedShareCommit }),
   }));
 
-/** AI と対戦する要求（7.3 節）。AI のデッキは表のデッキの名前か、組んだデッキで渡す。 */
+/** AI と対戦する要求（7.3 節）。 */
 export const joinBotRequestSchema = z
   .object({
     secret: z.string(),
