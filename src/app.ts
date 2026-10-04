@@ -433,7 +433,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const outcome = lobby.join({ ...body, deck }, await accounts.find(body.secret));
     return json(outcome.ok ? 200 : 400, outcome);
   }
-  // AI の一覧と、AI が握れるデッキ（7.3 節）。
+  // AI の一覧と、AI が学習で握ったデッキ（7.3 節）。
   if (request.method === "GET" && url.pathname === "/api/bots") {
     return json(200, { bots: bots === null ? [] : await bots.list(), decks: deckPresets() });
   }
@@ -441,7 +441,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const body = parseBody(joinBotRequestSchema, await readBody(request));
     await archive.settled();
     const deck = chosenDeck(body.deck, body.deckPreset);
-    const botDeck = presetDeck(body.botDeck);
+    const botDeck = typeof body.botDeck === "string" ? presetDeck(body.botDeck) : body.botDeck;
     if (deck === null || botDeck === null) {
       return unknownPreset();
     }

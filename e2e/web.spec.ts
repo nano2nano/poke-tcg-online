@@ -144,6 +144,33 @@ test("離れるあいだに別のタブが座席を置いていても、戻る�
   await expect(page.locator("#resume-button")).toBeVisible();
 });
 
+test("AI のデッキには、学習したデッキの名前か、選んだデッキのカードを送る", async ({ page }) => {
+  // 重みを置かなくても欄を出せるよう、AI の一覧だけ差し替える。
+  await page.route("**/api/bots", async (route) => {
+    const answer = (await (await route.fetch()).json()) as { decks: unknown[] };
+    await route.fulfill({
+      json: { ...answer, bots: [{ name: "g0", size: 0, uploadedAt: "" }] },
+    });
+  });
+  const sent: { botDeck: unknown }[] = [];
+  await page.route("**/api/join-bot", async (route) => {
+    sent.push(route.request().postDataJSON() as { botDeck: unknown });
+    await route.fulfill({ status: 400, json: { ok: false, errors: ["断った"] } });
+  });
+
+  await page.goto("/");
+  await expect(page.locator("#bot-button")).toBeEnabled();
+  await page.click("#bot-button");
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]?.botDeck).toEqual(expect.any(String));
+
+  await page.selectOption("#bot-deck", "sample");
+  await expect(page.locator("#bot-button")).toBeEnabled();
+  await page.click("#bot-button");
+  await expect.poll(() => sent.length).toBe(2);
+  expect(sent[1]?.botDeck).toMatchObject({ cards: expect.any(Array) });
+});
+
 test("相手を待つあいだに押し直して断られても、前のチケットを待ち続ける", async ({ page }) => {
   const claimed = () => page.waitForResponse((response) => response.url().includes("/api/claim?"));
   const status = page.locator("#join-status");

@@ -61,7 +61,7 @@ export const joinBotRequestSchema = z
   .object({
     secret: z.string(),
     bot: z.string(),
-    botDeck: z.string(),
+    botDeck: z.union([z.string(), deckListSchema]),
     ...deckSource,
     displayName: z.string().optional(),
     seedShareCommit: z.string().regex(SEED_SHARE_PATTERN).optional(),

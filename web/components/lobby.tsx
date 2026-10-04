@@ -23,6 +23,7 @@ import {
   newSeedShare,
   presetName,
   rememberDeckChoice,
+  resolveBotDeckChoice,
   resolveDeckChoice,
   shareFor,
   storedDeckChoice,
@@ -81,15 +82,16 @@ export function Lobby({
   const decks = bots.data?.decks ?? [];
   const deckName = (deck: DeckPreset) => presetName(deck, table);
   const [bot, setBot] = useState<string | null>(null);
-  const [botDeck, setBotDeck] = useState<string | null>(null);
   const chosenBot = bot ?? botNames[0]?.name ?? "";
-  const chosenBotDeck = botDeck ?? decks[0]?.label ?? "";
 
   const saved = useSavedDecks();
   const savedDecks = saved.decks.data ?? [];
   const [picked, setPicked] = useState<DeckChoice | null>(storedDeckChoice);
   const choice = resolveDeckChoice(picked, savedDecks, decks);
+  const [botPicked, setBotPicked] = useState<DeckChoice | null>(null);
+  const botChoice = resolveBotDeckChoice(botPicked, savedDecks, decks);
   const chosenSaved = savedDecks.find(({ deckId }) => `saved:${deckId}` === choice) ?? null;
+  const botSaved = savedDecks.find(({ deckId }) => `saved:${deckId}` === botChoice) ?? null;
   const choose = (next: DeckChoice) => {
     setPicked(next);
     rememberDeckChoice(next);
@@ -162,20 +164,20 @@ export function Lobby({
    * 送るデッキ。保存したデッキを選んでいたか何も選んでいなければ、保存したデッキの一覧が届いてから選ぶ。
    * 届く前の一覧で選ぶと、選んだつもりのないデッキで入る。
    */
-  const deckToSend = async () => {
+  const deckToSend = async (chosen: DeckChoice | null, resolve: typeof resolveDeckChoice) => {
     const { playerId } = await ensureAccount();
     const presets = await queryClient.ensureQueryData(botListQuery).then(
       (answer) => answer.decks,
       () => [],
     );
-    if (picked !== null && isListed(picked, [], presets)) {
-      return deckRequest(picked, []);
+    if (chosen !== null && isListed(chosen, [], presets)) {
+      return deckRequest(chosen, []);
     }
     // 読めなければ、画面に出ているデッキで入る。画面も、一覧が無いものとしてデッキを選んでいる。
     const list = await queryClient
       .ensureQueryData(savedDecksQuery(queryClient, playerId))
       .catch(() => []);
-    return deckRequest(resolveDeckChoice(picked, list, presets), list);
+    return deckRequest(resolve(chosen, list, presets), list);
   };
 
   const run = (task: (mine: object) => Promise<void>) => {
@@ -251,7 +253,7 @@ export function Lobby({
 
   const join = async (mine: object) => {
     setStatus("デッキを送っています");
-    const deck = await deckToSend();
+    const deck = await deckToSend(picked, resolveDeckChoice);
     const share = await newSeedShare();
     const request = await common(share);
     const roomCode = roomNow.current.trim();
@@ -343,12 +345,20 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    const deck = await deckToSend();
+    const [deck, botDeck] = await Promise.all([
+      deckToSend(picked, resolveDeckChoice),
+      deckToSend(botPicked, resolveBotDeckChoice),
+    ]);
     const share = await newSeedShare();
     const request = await common(share);
     const outcome = await send(
       "/api/join-bot",
-      { ...request, bot: chosenBot, botDeck: chosenBotDeck, ...deck },
+      {
+        ...request,
+        bot: chosenBot,
+        botDeck: "deck" in botDeck ? botDeck.deck : botDeck.deckPreset,
+        ...deck,
+      },
       share,
     );
     if (outcome === null) return;
@@ -361,9 +371,7 @@ export function Lobby({
     ? `AI の一覧を読めませんでした: ${messageOf(bots.error)}`
     : bots.isSuccess && botNames.length === 0
       ? "サーバに AI が置かれていません（README の「AI と対戦する」）。"
-      : bots.isSuccess && decks.length === 0
-        ? "AI が握れるデッキがサーバにありません。"
-        : "";
+      : "";
 
   const unplayable = chosenSaved !== null && chosenSaved.errors.length > 0;
   return (
@@ -439,12 +447,7 @@ export function Lobby({
         </div>
         <p id="deck-note" className="note">
           {unplayable ? (
-            <>
-              このデッキは規則を通りません（{chosenSaved.errors.join("、")}）。{" "}
-              <Link to="/decks/$deckId" params={{ deckId: chosenSaved.deckId }}>
-                デッキを直す
-              </Link>
-            </>
+            <UnplayableNote deck={chosenSaved} />
           ) : saved.failure !== null ? (
             `保存したデッキを読めませんでした: ${messageOf(saved.failure)}`
           ) : (
@@ -511,22 +514,44 @@ export function Lobby({
               AI のデッキ
               <select
                 id="bot-deck"
-                value={chosenBotDeck}
-                onChange={(event) => setBotDeck(event.target.value)}
+                value={botChoice}
+                onChange={(event) => setBotPicked(event.target.value as DeckChoice)}
               >
-                {decks.map((deck) => (
-                  <option key={deck.label} value={deck.label}>
-                    {deckName(deck)}
-                  </option>
-                ))}
+                {decks.length > 0 && (
+                  <optgroup label="AI が学習したデッキ">
+                    {decks.map((deck) => (
+                      <option key={deck.label} value={`preset:${deck.label}`}>
+                        {deckName(deck)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="AI が学習していないデッキ">
+                  {savedDecks.map((deck) => (
+                    <option key={deck.deckId} value={`saved:${deck.deckId}`}>
+                      {savedDeckLabel(deck)}
+                    </option>
+                  ))}
+                  <option value="sample">サンプルデッキ</option>
+                </optgroup>
               </select>
             </label>
           </div>
+          {/* 表が届くまでは、選んでいなくてもサンプルデッキを指している。 */}
+          {bots.isSuccess && !botChoice.startsWith("preset:") && (
+            <p id="bot-deck-note" className="note">
+              {botSaved !== null && botSaved.errors.length > 0 ? (
+                <UnplayableNote deck={botSaved} />
+              ) : (
+                "AI はこのデッキの回し方を学習していません。"
+              )}
+            </p>
+          )}
           <div className="actions">
             <button
               id="bot-button"
               className="primary"
-              disabled={requesting || waiting || botNames.length === 0 || decks.length === 0}
+              disabled={requesting || waiting || botNames.length === 0}
               onClick={() => run(joinBot)}
             >
               AI と対戦する
@@ -538,6 +563,17 @@ export function Lobby({
         </section>
       </div>
     </section>
+  );
+}
+
+function UnplayableNote({ deck }: { deck: SavedDeck }) {
+  return (
+    <>
+      このデッキは規則を通りません（{deck.errors.join("、")}）。{" "}
+      <Link to="/decks/$deckId" params={{ deckId: deck.deckId }}>
+        デッキを直す
+      </Link>
+    </>
   );
 }
 
