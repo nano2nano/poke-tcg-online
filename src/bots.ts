@@ -285,7 +285,7 @@ export class BotStore {
 }
 
 /**
- * AI が握れるデッキ。表はエンジンが持つ。画面に出す名前は、看板のカード（`aces`）の名前をカードの表から引く。
+ * AI が学習で握ったデッキ。表はエンジンが持つ。画面に出す名前は、看板のカード（`aces`）の名前をカードの表から引く。
  * カード名はエンジンのデータなので、ここには持たない。
  */
 export interface DeckPreset {
@@ -295,7 +295,7 @@ export interface DeckPreset {
 
 /**
  * AI に握らせるデッキを決める、学習の `--decks` の値。重みをアップロードする前に、その走りの学習の本にこの値の本が
- * どれも入っていることを `tools/publish-bots.ts` が確かめる。確かめるのはこの値の本だけなので、取り置いた本も表の外のデッキも握らせない。
+ * どれも入っていることを `tools/publish-bots.ts` が確かめる。確かめるのはこの値の本だけなので、取り置いた本は表に出さない。
  */
 export const BOT_TRAINING_DECKS = "jp-2026h1:L-seen";
 

@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SavedDeck } from "./deck.js";
-import { claim, liveSeatOf, resolveDeckChoice, shareFor, type Seated } from "./join.js";
+import {
+  claim,
+  liveSeatOf,
+  resolveBotDeckChoice,
+  resolveDeckChoice,
+  shareFor,
+  type Seated,
+} from "./join.js";
 import { rememberSeat } from "./seat.js";
 
 let items: Map<string, string>;
@@ -109,5 +116,20 @@ describe("resolveDeckChoice", () => {
     expect(resolveDeckChoice("saved:消した", saved, presets)).toBe("saved:通る");
     expect(resolveDeckChoice("preset:外れた", [], presets)).toBe("preset:表のデッキ");
     expect(resolveDeckChoice(null, [], [])).toBe("sample");
+  });
+});
+
+describe("resolveBotDeckChoice", () => {
+  const saved: SavedDeck[] = [
+    { deckId: "組んだ", name: "組んだ", cards: [], updatedAt: "", errors: [] },
+  ];
+  const presets = [{ label: "表のデッキ", aces: [] }];
+
+  it("選んだものが一覧にあればそれを使い、無ければ保存したデッキがあっても表のデッキを選ぶ", () => {
+    expect(resolveBotDeckChoice("saved:組んだ", saved, presets)).toBe("saved:組んだ");
+    expect(resolveBotDeckChoice("sample", saved, presets)).toBe("sample");
+    expect(resolveBotDeckChoice(null, saved, presets)).toBe("preset:表のデッキ");
+    expect(resolveBotDeckChoice("saved:消した", saved, presets)).toBe("preset:表のデッキ");
+    expect(resolveBotDeckChoice(null, saved, [])).toBe("sample");
   });
 });

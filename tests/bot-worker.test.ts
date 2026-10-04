@@ -38,6 +38,39 @@ async function postJson(path: string, body: unknown): Promise<{ status: number; 
   return { status: response.status, body: (await response.json()) as JsonBody };
 }
 
+/** 人の座席で合法手の先頭を返し続け、決着の 1 通を返す。 */
+async function playToEnd(seatToken: string): Promise<ServerMessage> {
+  const socket = new WebSocket(`ws://${worker.host}/ws?seatToken=${seatToken}`);
+  const ended = await new Promise<ServerMessage>((resolve) => {
+    socket.on("message", (raw) => {
+      const message = JSON.parse((raw as Buffer).toString()) as ServerMessage;
+      if (message.t === "ended") resolve(message);
+      if (message.t !== "sync" && message.t !== "delta") return;
+      const shown: ClientMessage = { t: "shown", stateVersion: message.stateVersion };
+      socket.send(JSON.stringify(shown));
+      const legal = message.legalMoves;
+      if (legal === null || legal.length === 0) return;
+      const move: ClientMessage = {
+        t: "move",
+        stateVersion: message.stateVersion,
+        move: legal[0]!,
+      };
+      socket.send(JSON.stringify(move));
+    });
+  });
+  socket.close();
+  return ended;
+}
+
+async function recordOf(playerId: string): Promise<MatchRecord | undefined> {
+  const { objects } = await worker.archive.list({ prefix: "matches/" });
+  const records: MatchRecord[] = [];
+  for (const { key } of objects) {
+    records.push(JSON.parse(await (await worker.archive.get(key))!.text()) as MatchRecord);
+  }
+  return records.find((each) => each.seats[0].playerId === playerId);
+}
+
 describe("AI と対戦する", () => {
   it("置いた重みが一覧に出る", async () => {
     const response = await fetch(`http://${worker.host}/api/bots`);
@@ -81,37 +114,12 @@ describe("AI と対戦する", () => {
       deckPreset: "dragapult-28731",
     });
     expect(joined.body.ok).toBe(true);
-
-    const socket = new WebSocket(`ws://${worker.host}/ws?seatToken=${joined.body.seat.seatToken}`);
-    const ended = await new Promise<ServerMessage>((resolve) => {
-      socket.on("message", (raw) => {
-        const message = JSON.parse((raw as Buffer).toString()) as ServerMessage;
-        if (message.t === "ended") resolve(message);
-        if (message.t !== "sync" && message.t !== "delta") return;
-        const shown: ClientMessage = { t: "shown", stateVersion: message.stateVersion };
-        socket.send(JSON.stringify(shown));
-        const legal = message.legalMoves;
-        if (legal === null || legal.length === 0) return;
-        const move: ClientMessage = {
-          t: "move",
-          stateVersion: message.stateVersion,
-          move: legal[0]!,
-        };
-        socket.send(JSON.stringify(move));
-      });
-    });
-    socket.close();
-    expect(ended.t).toBe("ended");
+    expect((await playToEnd(joined.body.seat.seatToken)).t).toBe("ended");
 
     // 決着を残し終えてから読む。`/api/account/me` はレーティングが動き終わるのを待って答える。
     const me = (await postJson("/api/account/me", { secret })).body;
     expect(me).toMatchObject({ rating: INITIAL_RATING, games: 0 });
-    const { objects } = await worker.archive.list({ prefix: "matches/" });
-    const records: MatchRecord[] = [];
-    for (const { key } of objects) {
-      records.push(JSON.parse(await (await worker.archive.get(key))!.text()) as MatchRecord);
-    }
-    const record = records.find((each) => each.seats[0].playerId === account.playerId);
+    const record = await recordOf(account.playerId);
     expect(record?.seats[1].bot).toMatchObject({ name: "g0", label: "test-bot", generation: 0 });
     expect(record?.moves.some((move) => move.source === "bot")).toBe(true);
     const listed = (await postJson("/api/matches", { secret })).body.matches as JsonBody[];
@@ -134,6 +142,24 @@ describe("AI と対戦する", () => {
     });
     expect(refused.status).toBe(400);
     expect(refused.body).toMatchObject({ ok: false, code: "bot-match-live", seat: next.body.seat });
+  });
+
+  it("AI のデッキに組んだデッキを渡すと、そのデッキで決着まで指す。規則を通らなければ断る", async () => {
+    const { secret, account } = (await postJson("/api/account", { displayName: "ひと" })).body;
+    const built = (await (await fetch(`http://${worker.host}/api/sample-deck`)).json()) as JsonBody;
+    const join = (botDeck: unknown) =>
+      postJson("/api/join-bot", { secret, bot: "g0", botDeck, deckPreset: "dragapult-28731" });
+
+    const refused = await join({ cards: [] });
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBeUndefined();
+    expect(refused.body.errors[0]).toMatch(/^AI のデッキ: /);
+
+    const joined = await join(built);
+    expect(joined.body.ok).toBe(true);
+    expect((await playToEnd(joined.body.seat.seatToken)).t).toBe("ended");
+    await postJson("/api/account/me", { secret });
+    expect((await recordOf(account.playerId))?.decks[1]).toEqual(built);
   });
 
   /**

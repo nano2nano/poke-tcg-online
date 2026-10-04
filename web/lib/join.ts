@@ -52,6 +52,23 @@ export function resolveDeckChoice(
   if (picked !== null && isListed(picked, saved, presets)) return picked;
   const playable = saved.find(({ errors }) => errors.length === 0);
   if (playable !== undefined) return `saved:${playable.deckId}`;
+  return firstPreset(presets);
+}
+
+/**
+ * AI のデッキ。選んだものが一覧に無いか、まだ選んでいなければ、表のデッキの先頭にする。
+ * 表のデッキは AI が学習で握ったデッキで、ほかのデッキの回し方を AI は学んでいない。
+ */
+export function resolveBotDeckChoice(
+  picked: DeckChoice | null,
+  saved: readonly SavedDeck[],
+  presets: readonly DeckPreset[],
+): DeckChoice {
+  if (picked !== null && isListed(picked, saved, presets)) return picked;
+  return firstPreset(presets);
+}
+
+function firstPreset(presets: readonly DeckPreset[]): DeckChoice {
   return presets[0] === undefined ? "sample" : `preset:${presets[0].label}`;
 }
 
