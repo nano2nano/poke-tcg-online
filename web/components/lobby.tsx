@@ -91,6 +91,7 @@ export function Lobby({
   const [botPicked, setBotPicked] = useState<DeckChoice | null>(null);
   const botChoice = resolveBotDeckChoice(botPicked, savedDecks, decks);
   const chosenSaved = savedDecks.find(({ deckId }) => `saved:${deckId}` === choice) ?? null;
+  const botSaved = savedDecks.find(({ deckId }) => `saved:${deckId}` === botChoice) ?? null;
   const choose = (next: DeckChoice) => {
     setPicked(next);
     rememberDeckChoice(next);
@@ -344,8 +345,10 @@ export function Lobby({
 
   const joinBot = async () => {
     setStatus("AI との対戦を用意しています");
-    const deck = await deckToSend(picked, resolveDeckChoice);
-    const botDeck = await deckToSend(botPicked, resolveBotDeckChoice);
+    const [deck, botDeck] = await Promise.all([
+      deckToSend(picked, resolveDeckChoice),
+      deckToSend(botPicked, resolveBotDeckChoice),
+    ]);
     const share = await newSeedShare();
     const request = await common(share);
     const outcome = await send(
@@ -444,12 +447,7 @@ export function Lobby({
         </div>
         <p id="deck-note" className="note">
           {unplayable ? (
-            <>
-              このデッキは規則を通りません（{chosenSaved.errors.join("、")}）。{" "}
-              <Link to="/decks/$deckId" params={{ deckId: chosenSaved.deckId }}>
-                デッキを直す
-              </Link>
-            </>
+            <UnplayableNote deck={chosenSaved} />
           ) : saved.failure !== null ? (
             `保存したデッキを読めませんでした: ${messageOf(saved.failure)}`
           ) : (
@@ -539,8 +537,15 @@ export function Lobby({
               </select>
             </label>
           </div>
-          {!botChoice.startsWith("preset:") && (
-            <p className="note">AI はこのデッキの回し方を学習していません。</p>
+          {/* 表が届くまでは、選んでいなくてもサンプルデッキを指している。 */}
+          {bots.isSuccess && !botChoice.startsWith("preset:") && (
+            <p id="bot-deck-note" className="note">
+              {botSaved !== null && botSaved.errors.length > 0 ? (
+                <UnplayableNote deck={botSaved} />
+              ) : (
+                "AI はこのデッキの回し方を学習していません。"
+              )}
+            </p>
           )}
           <div className="actions">
             <button
@@ -558,6 +563,17 @@ export function Lobby({
         </section>
       </div>
     </section>
+  );
+}
+
+function UnplayableNote({ deck }: { deck: SavedDeck }) {
+  return (
+    <>
+      このデッキは規則を通りません（{deck.errors.join("、")}）。{" "}
+      <Link to="/decks/$deckId" params={{ deckId: deck.deckId }}>
+        デッキを直す
+      </Link>
+    </>
   );
 }
 
