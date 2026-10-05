@@ -64,6 +64,7 @@ function syncOf(match: Match, seat: Player): SyncMessage {
     attacks: attacksFor(match, seat),
     mulligans: match.mulligans,
     firstPlayer: match.firstPlayer,
+    toss: match.tossWinner,
     clock: clockView(match, 0),
     seedCommit: match.seedCommitment.commit,
     spectatorToken: match.spectatorToken,
@@ -190,7 +191,7 @@ describe("座席の状態", () => {
   it("状態を変えないメッセージには、同じ状態を返す", () => {
     for (const message of [
       { t: "pong" },
-      { t: "pending" },
+      { t: "pending", toss: null },
       { t: "reject", reason: "stale-version", stateVersion: 0 },
       { t: "error", message: "断った" },
     ] as const) {
@@ -206,6 +207,7 @@ describe("観戦の状態", () => {
     stateVersion: match.version,
     view: spectatorViewFor(match),
     firstPlayer: match.firstPlayer,
+    toss: match.tossWinner,
     clock: clockView(match, 0),
     seats: [
       { displayName: "あ", rating: 1500 },

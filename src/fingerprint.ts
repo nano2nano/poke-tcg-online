@@ -13,8 +13,10 @@ import { createHash, randomBytes } from "node:crypto";
  *
  * 2: 1 手ごとに `candidates` / `chosen` / `offered` を持つ（6.2 節）。
  * 3: `seed` が数値から 16 進 32 桁の文字列になった（6.4 節、9 節）。
+ * 4: `firstPlayer` が `seed` から読んだ値でなく、コイントスに勝った座席が選んだ再生の入力になった（2.5 節）。
+ *    3 までの記録は先攻がコイントスの結果と必ず同じなので、同じ読み方で再生できる。
  */
-export const REPLAY_SCHEMA_VERSION = 3;
+export const REPLAY_SCHEMA_VERSION = 4;
 
 /**
  * 再生できる最も古い版（6.4 節）。

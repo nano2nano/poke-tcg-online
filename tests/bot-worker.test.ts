@@ -9,10 +9,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { INITIAL_RATING } from "../src/accounts.js";
 import { BOT_PREFIX } from "../src/bots.js";
-import { encodePpoWeights, newPpoWeightsFile } from "../src/engine.js";
+import { encodePpoWeights, isBasicPokemon, newPpoWeightsFile } from "../src/engine.js";
 import type { MatchRecord } from "../src/log.js";
 import type { ClientMessage, ServerMessage } from "../src/protocol.js";
-import { ensureCards } from "./helpers.js";
+import { basicEnergyDefId, ensureCards, legalDecks } from "./helpers.js";
 import { startWorker, type TestWorker } from "./worker.js";
 
 let worker: TestWorker;
@@ -45,6 +45,10 @@ async function playToEnd(seatToken: string): Promise<ServerMessage> {
     socket.on("message", (raw) => {
       const message = JSON.parse((raw as Buffer).toString()) as ServerMessage;
       if (message.t === "ended") resolve(message);
+      // AI との対戦で始まる前に届くコイントスは、人が勝ったときだけである。
+      if (message.t === "pending" && message.toss !== null) {
+        socket.send(JSON.stringify({ t: "turn-order", first: true } satisfies ClientMessage));
+      }
       if (message.t !== "sync" && message.t !== "delta") return;
       const shown: ClientMessage = { t: "shown", stateVersion: message.stateVersion };
       socket.send(JSON.stringify(shown));
@@ -163,10 +167,14 @@ describe("AI と対戦する", () => {
   });
 
   /**
-   * シェアを出さずに入ると、対戦は席を渡した時点で始まっている。準備で AI が先に選ぶ対戦では、
-   * 人が繋ぐ前に AI が指していなければならない。AI が先になる対戦を引くまで開き直す。
+   * シェアを出さずに入り、AI がコイントスに勝てば、対戦は席を渡した時点で始まっている。準備で AI が先に選ぶ
+   * 対戦では、人が繋ぐ前に AI が指していなければならない。AI が先になる対戦を引くまで開き直す。
+   * AI は後攻を選ぶので、AI が先に選ぶのは人がたねを引けずに引き直すときである。人のデッキのたねは 1 枚にする。
    */
   it("AI が先に選ぶ対戦では、人が繋ぐ前に AI が指している", async () => {
+    ensureCards();
+    const basic = legalDecks()[0].cards.find((defId) => isBasicPokemon(defId))!;
+    const deck = { cards: [basic, ...Array<string>(59).fill(basicEnergyDefId())] };
     let versionOnAttach: number | null = null;
     for (let attempt = 0; attempt < 16 && versionOnAttach === null; attempt++) {
       const { secret } = (await postJson("/api/account", { displayName: "ひと" })).body;
@@ -174,7 +182,7 @@ describe("AI と対戦する", () => {
         secret,
         bot: "g0",
         botDeck: "alakazam-dudunsparce-72073",
-        deckPreset: "dragapult-28731",
+        deck,
       });
       expect(joined.body.ok).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -187,6 +195,8 @@ describe("AI と対戦する", () => {
         );
       });
       socket.close();
+      // 人がコイントスに勝った対戦は、人が選ぶまで始まっていない。
+      if (sync.t === "pending") continue;
       if (sync.t !== "sync") throw new Error(`最初に sync が来なかった: ${sync.t}`);
       // 人の番から始まった対戦は、人が指すまで動いていない。
       if (sync.legalMoves !== null && sync.stateVersion === 0) continue;

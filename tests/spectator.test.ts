@@ -88,7 +88,10 @@ async function connect(query: string): Promise<Opened> {
 const seatQuery = (token: string): string => `seatToken=${encodeURIComponent(token)}`;
 const watchQuery = (token: string): string => `spectatorToken=${encodeURIComponent(token)}`;
 
-/** 座席 2 つに就き、`sync` を読んだところで返す。観戦トークンは座席の `sync` から取る。 */
+/**
+ * 座席 2 つに就き、コイントスに勝った座席が先攻を選んで、`sync` を読んだところで返す。
+ * 観戦トークンは座席の `sync` から取る。
+ */
 async function seatedPair(room: string): Promise<{
   seats: [Opened, Opened];
   syncs: [Json, Json];
@@ -99,6 +102,9 @@ async function seatedPair(room: string): Promise<{
     await connect(seatQuery(tokens[0])),
     await connect(seatQuery(tokens[1])),
   ];
+  const tossed = await seats[0].next();
+  await seats[1].next();
+  seats[tossed.toss as 0 | 1].socket.send(JSON.stringify({ t: "turn-order", first: true }));
   const syncs: [Json, Json] = [await seats[0].next(), await seats[1].next()];
   expect(syncs[0].t).toBe("sync");
   expect(syncs[0].spectatorToken).toBe(syncs[1].spectatorToken);

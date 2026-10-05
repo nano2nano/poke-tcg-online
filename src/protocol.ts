@@ -95,6 +95,8 @@ export const clientMessageSchema = z.discriminatedUnion("t", [
     active: z.string().max(64),
     bench: z.array(z.string().max(64)).max(8),
   }),
+  /** コイントスに勝った座席が、先攻を取るか（2.5 節）。対戦が始まる前にだけ送れる。 */
+  z.object({ t: z.literal("turn-order"), first: z.boolean() }),
   z.object({ t: z.literal("concede") }),
   z.object({ t: z.literal("ping") }),
   /** その局面の演出を画面が見せ終えた（7.3 節）。AI との対戦で、AI はこれを待ってから次の手を指す。 */
@@ -129,6 +131,8 @@ export interface SyncMessage {
   mulligans: MulliganReveal[];
   /** 先攻。決めた `game-started` は対戦を作るときのイベントで、`delta` には載らない。 */
   firstPlayer: Player;
+  /** コイントスに勝った座席（2.5 節）。トスを見る前に対戦が始まっていた座席にも、だれが選んだかを見せる。 */
+  toss: Player;
   clock: ClockView;
   /** シャッフルの公正さのコミット（6.4 節）。対戦中に seed そのものは渡さない。 */
   seedCommit: string;
@@ -177,6 +181,8 @@ export interface SpectatorSyncMessage {
   stateVersion: number;
   view: SpectatorView;
   firstPlayer: Player;
+  /** コイントスに勝った座席（2.5 節）。 */
+  toss: Player;
   clock: ClockView;
   /**
    * 公開 id は渡さない。観戦トークンは座席の外へ配られる値なので、それを持つだけで
@@ -211,6 +217,19 @@ export interface SpectatorEndedMessage {
   seatViews?: [PlayerView, PlayerView];
 }
 
+/**
+ * 席は取れているが、対戦がまだ始まっていない。これが無いと、始まる前に切れた接続を、
+ * サーバへ繋がらなかったのと見分けられない。
+ */
+export interface PendingMessage {
+  t: "pending";
+  /**
+   * コイントスに勝った座席（2.5 節）。シェアがそろうまで（6.4 節）は null である。
+   * 勝った座席が先攻か後攻かを選ぶと、対戦が始まる。
+   */
+  toss: Player | null;
+}
+
 export type ServerMessage =
   | SyncMessage
   | DeltaMessage
@@ -220,9 +239,5 @@ export type ServerMessage =
   | SpectatorEndedMessage
   | { t: "reject"; reason: RejectReason; stateVersion: number }
   | { t: "error"; message: string; code?: typeof SEAT_NOT_FOUND | typeof SEAT_REPLACED }
-  /**
-   * 席は取れているが、シェアがそろわず対戦がまだ始まっていない（6.4 節）。これが無いと、
-   * 始まる前に切れた接続を、サーバへ繋がらなかったのと見分けられない。
-   */
-  | { t: "pending" }
+  | PendingMessage
   | { t: "pong" };

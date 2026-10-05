@@ -68,7 +68,7 @@ describe("1 通の大きさ", () => {
     const sync = new Promise<string>((resolve) =>
       next.on("message", (raw) => resolve((raw as Buffer).toString())),
     );
-    expect(await sync).toContain('"t":"sync"');
+    expect(await sync).toContain('"t":"pending"');
     next.close();
   });
 

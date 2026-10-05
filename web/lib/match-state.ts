@@ -39,6 +39,8 @@ export interface SeatState {
   revealedDeck: CardDefId[] | null;
   attacks: AttackView[] | null;
   mulligans: MulliganReveal[];
+  /** 対戦が始まる前に届く、コイントスに勝った座席。 */
+  toss: Player | null;
   firstPlayer: Player | null;
   clock: ClockView | null;
   /** 終わった対戦では通らないので、決着したら null にする。 */
@@ -54,7 +56,7 @@ export type SetupAction =
 
 export type SeatAction = ServerMessage | SetupAction;
 
-/** 座席に着いたときの状態。局面は、両者がシェアを開いたあとの `sync` で届く。 */
+/** 座席に着いたときの状態。局面は、コイントスに勝った座席が先攻か後攻かを選んだあとの `sync` で届く。 */
 export function initialSeatState(seat: Player): SeatState {
   return {
     seat,
@@ -68,6 +70,7 @@ export function initialSeatState(seat: Player): SeatState {
     revealedDeck: null,
     attacks: null,
     mulligans: [],
+    toss: null,
     firstPlayer: null,
     clock: null,
     spectatorToken: null,
@@ -108,6 +111,8 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
       };
       return withDraft(next, state.setupDraft);
     }
+    case "pending":
+      return action.toss === state.toss ? state : { ...state, toss: action.toss };
     case "ended": {
       const { t: _t, view, ...ended } = action;
       return withDraft(

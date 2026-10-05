@@ -7,8 +7,8 @@
  * 実際の対戦という標本が 1 つ加わる。
  */
 
-import { applyMove, createGame, legalMoves, movesEqual } from "./engine.js";
-import type { DomainEvent, GameOutcome, GameState, Player } from "./engine.js";
+import { applyMove, legalMoves, movesEqual } from "./engine.js";
+import type { GameOutcome, GameState } from "./engine.js";
 import {
   commitSeed,
   commitShare,
@@ -16,12 +16,12 @@ import {
   OLDEST_REPLAYABLE_SCHEMA_VERSION,
 } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
+import { startGame } from "./match.js";
 
 type ReplayFailure =
   | { kind: "schema-too-old"; recorded: number; oldest: number }
   | { kind: "card-data-mismatch"; expected: string; actual: string }
   | { kind: "seed-commitment" }
-  | { kind: "first-player-mismatch"; expected: Player; actual: Player }
   | { kind: "choice-set-mismatch"; index: number; expected: number; actual: number }
   | { kind: "illegal-move"; index: number; message: string }
   | { kind: "no-move-available"; index: number }
@@ -56,7 +56,7 @@ export interface ReplayOptions {
  * 1. すべての手が、その時点の `legalMoves` に含まれる。
  * 2. 終端の `outcome` がログの `outcome` と一致する。
  * 3. 呼び出し側が渡した検査が全局面で成り立つ。
- * 4. 先攻と、各手の合法手の数・選ばれた位置が、記録と一致する。
+ * 4. 各手の合法手の数・選ばれた位置が、記録と一致する。
  *
  * 1 だけでは、合法手の集合そのものが変わった再生を止められない。4 がそれを見る。
  *
@@ -103,15 +103,7 @@ export function replay(record: MatchRecord, options: ReplayOptions = {}): Replay
 
   if (!seedCommitmentHolds(record)) failures.push({ kind: "seed-commitment" });
 
-  let result = createGame({ seed: record.seed, decks: record.decks });
-  const firstPlayer = firstPlayerOf(result.events);
-  if (firstPlayer !== record.firstPlayer) {
-    failures.push({
-      kind: "first-player-mismatch",
-      expected: record.firstPlayer,
-      actual: firstPlayer,
-    });
-  }
+  let result = startGame(record.seed, record.decks, record.firstPlayer);
   options.inspect?.(result.state, 0);
 
   let applied = 0;
@@ -194,14 +186,6 @@ export function seedCommitmentHolds(record: MatchRecord): boolean {
   }
   const recomputed = commitSeed(record.seedNonce, shares);
   return recomputed.seed === record.seed && recomputed.commit === record.seedCommit;
-}
-
-/** `game-started` が運ぶ先攻。`src/match.ts` と同じ読み方をする。 */
-function firstPlayerOf(events: DomainEvent[]): Player {
-  for (const event of events) {
-    if (event.kind === "game-started") return event.firstPlayer;
-  }
-  throw new Error("createGame が game-started を出さなかった");
 }
 
 function outcomesEqual(a: GameOutcome | null, b: GameOutcome | null): boolean {

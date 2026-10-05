@@ -1,7 +1,7 @@
 /**
  * 対局ログ（`docs/spec/battle-server.md` 6 節）。
  *
- * 唯一の情報源は seed と move 列である。局面もイベントも保存しない。エンジンの C-4
+ * 唯一の情報源は seed と先攻と move 列である。局面もイベントも保存しない。エンジンの C-4
  * （同一 seed ＋同一 move 列 → 同一の状態列とイベント列）がこれを保証する。
  * どちらも再生で作り直せる値で、残すと桁が変わる。大きさの実測は 6.1 節にある。
  */
@@ -31,7 +31,7 @@ export interface MatchRecord {
    */
   seedShares?: SeedShares;
   seedShareCommits?: SeedShares;
-  /** 先攻。seed から決まる導出値で、再生の入力ではない。先攻の偏りを測るために残す。 */
+  /** 先攻。コイントスに勝った座席が選んだ結果で、再生の入力である（6.2 節）。 */
   firstPlayer: Player;
   decks: [DeckList, DeckList];
   seats: [SeatInfo, SeatInfo];

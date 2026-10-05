@@ -9,7 +9,7 @@
  * `eventsFor` / `legalMovesFor` を通さない経路をここに作らない（1 節の S-2）。
  */
 
-import type { DomainEvent, Move, Player, PlayerView } from "./engine.js";
+import { opponent, type DomainEvent, type Move, type Player, type PlayerView } from "./engine.js";
 import {
   answerDestinationsFor,
   attacksFor,
@@ -38,6 +38,7 @@ import {
   SEAT_REPLACED,
   type ClientMessage,
   type DeltaMessage,
+  type PendingMessage,
   type ServerMessage,
   type SpectatorDeltaMessage,
   type SpectatorSyncMessage,
@@ -132,7 +133,7 @@ export class MatchHub {
     const pending = this.options.registry.pendingBySeatToken(seatToken);
     if (pending !== undefined) {
       this.seatSocket(pending.pending.matchId, pending.seat, socket);
-      send(socket, { t: "pending" });
+      send(socket, pendingMessage(pending.pending));
       this.acceptShare(socket, pending, seedShare);
       return true;
     }
@@ -171,19 +172,24 @@ export class MatchHub {
     if (reveal(ref.pending, ref.seat, seedShare) === "mismatch") {
       send(socket, { t: "error", message: "シェアが、参加のときに送ったコミットと合わない" });
     }
-    if (allRevealed(ref.pending)) this.startPending(ref.pending);
+    const { pending } = ref;
+    if (allRevealed(pending) && pending.toss === null) {
+      this.advancePending(pending, () => this.options.registry.toss(pending, this.now()));
+    }
   }
 
   /**
+   * 始まる前の対戦を 1 段進め、両座席へ知らせる。`step` は、始まった対戦か、まだ始まらなければ null を返す。
+   *
    * **始められなかった対戦は捨てる。** ここは接続を受けた処理と定期処理から呼ばれるので、
    * 投げると呼んだ側の処理ごと止まる。残すと、次のスイープでも同じ形で失敗し続け、両座席は
    * 始まらない対戦を待ち続ける。
    */
-  private startPending(pending: PendingMatch): void {
+  private advancePending(pending: PendingMatch, step: () => Match | null): void {
     const perMatch = this.sockets.get(pending.matchId);
-    let match: Match;
+    let match: Match | null;
     try {
-      match = this.options.registry.start(pending, this.now());
+      match = step();
     } catch (error) {
       console.error(`対戦を始められなかった（${pending.matchId}）:`, error);
       this.options.registry.dropPending(pending);
@@ -196,9 +202,10 @@ export class MatchHub {
     }
     for (const seat of [0, 1] as Player[]) {
       const socket = perMatch?.get(seat);
-      if (socket !== undefined) send(socket, this.syncFor(match, seat));
+      if (socket === undefined) continue;
+      send(socket, match === null ? pendingMessage(pending) : this.syncFor(match, seat));
     }
-    this.driveBot(match);
+    if (match !== null) this.driveBot(match);
   }
 
   /** 溢れたら断る。座席と違い、観戦は断っても誰も負けない。 */
@@ -264,23 +271,43 @@ export class MatchHub {
         return;
       case "move":
       case "setup":
+      case "turn-order":
       case "concede":
         send(socket, { t: "error", message: "観戦している接続からは指せない" });
         return;
     }
   }
 
-  /** 始まる前の対戦には局面が無い。答えられるのは生存確認と、まだ始まっていないことだけである。 */
-  private handlePending(socket: SeatSocket, message: ClientMessage): void {
+  /**
+   * 始まる前の対戦には局面が無い。答えられるのは生存確認と、まだ始まっていないことと、
+   * コイントスに勝った座席が選ぶ先攻だけである。
+   */
+  private handlePending(
+    socket: SeatSocket,
+    { pending, seat }: PendingSeatRef,
+    message: ClientMessage,
+  ): void {
     switch (message.t) {
       case "ping":
         send(socket, { t: "pong" });
         return;
       case "hello":
-        send(socket, { t: "pending" });
+        send(socket, pendingMessage(pending));
         return;
       case "shown":
         return;
+      case "turn-order": {
+        if (pending.toss?.winner !== seat) {
+          send(socket, {
+            t: "error",
+            message: "先攻か後攻かを選べるのは、コイントスに勝った座席だけである",
+          });
+          return;
+        }
+        const first = message.first ? seat : opponent(seat);
+        this.advancePending(pending, () => this.options.registry.start(pending, this.now(), first));
+        return;
+      }
       case "move":
       case "setup":
       case "concede":
@@ -291,8 +318,9 @@ export class MatchHub {
 
   /** 1 通を処理する。`seatToken` は `attach` 済みのものを呼び出し側が持つ。 */
   handle(socket: SeatSocket, seatToken: string, message: ClientMessage): void {
-    if (this.options.registry.pendingBySeatToken(seatToken) !== undefined) {
-      this.handlePending(socket, message);
+    const pending = this.options.registry.pendingBySeatToken(seatToken);
+    if (pending !== undefined) {
+      this.handlePending(socket, pending, message);
       return;
     }
     const ref = this.options.registry.bySeatToken(seatToken);
@@ -350,6 +378,9 @@ export class MatchHub {
         if (match.result !== null) this.endMatch(match);
         return;
       }
+      case "turn-order":
+        send(socket, { t: "error", message: "先攻と後攻はもう決まっている" });
+        return;
       case "concede":
         if (concede(match, seat, this.now())) this.endMatch(match);
         return;
@@ -530,14 +561,22 @@ export class MatchHub {
   }
 
   /**
-   * シェアを開く期限を過ぎた対戦を始め、持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
+   * 期限を過ぎた始まる前の対戦を進め、持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
+   * シェアを開く期限を過ぎたらコイントスをし、選ぶ期限を過ぎたら勝った座席を先攻にする（2.5 節）。
    *
    * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じスイープで終わらせるはずだった
    * ほかの対戦が、時計を過ぎたまま残り続ける。
    */
   sweepTimeouts(): void {
     // 始めた対戦では、来ない座席の時計が流れる（3.4 節）。
-    for (const pending of this.options.registry.overdue(this.now())) this.startPending(pending);
+    for (const pending of this.options.registry.overdue(this.now())) {
+      const { toss } = pending;
+      this.advancePending(pending, () =>
+        toss === null
+          ? this.options.registry.toss(pending, this.now())
+          : this.options.registry.start(pending, this.now(), toss.winner),
+      );
+    }
     for (const match of this.options.registry.sweepTimeouts(this.now())) {
       try {
         this.endMatch(match);
@@ -581,6 +620,7 @@ export class MatchHub {
       attacks: attacksFor(match, seat),
       mulligans: match.mulligans,
       firstPlayer: match.firstPlayer,
+      toss: match.tossWinner,
       clock: clockView(match, this.now()),
       seedCommit: match.seedCommitment.commit,
       spectatorToken: match.spectatorToken,
@@ -612,6 +652,7 @@ export class MatchHub {
       stateVersion: match.version,
       view: spectatorViewFor(match),
       firstPlayer: match.firstPlayer,
+      toss: match.tossWinner,
       clock: clockView(match, this.now()),
       seats: [
         { displayName: first.displayName, rating: first.rating },
@@ -644,6 +685,10 @@ export class MatchHub {
   private openViews(match: Match): { seatViews?: [PlayerView, PlayerView] } {
     return botsOnly(match) ? { seatViews: [viewFor(match, 0), viewFor(match, 1)] } : {};
   }
+}
+
+function pendingMessage(pending: PendingMatch): PendingMessage {
+  return { t: "pending", toss: pending.toss?.winner ?? null };
 }
 
 function send(socket: SeatSocket, message: ServerMessage): void {

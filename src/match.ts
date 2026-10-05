@@ -31,6 +31,7 @@ import {
   spectatorView,
 } from "./engine.js";
 import type {
+  ApplyResult,
   CardDefId,
   CardInstance,
   CardInstanceId,
@@ -124,8 +125,10 @@ export interface Match {
    */
   readonly spectatorToken: string;
   readonly startedAt: string;
-  /** 先攻。seed から決まる導出値で、再生の入力ではない。先攻の偏りを測るために残す。 */
+  /** 先攻。コイントスに勝った座席が選んだ結果で、再生の入力である（2.5 節）。 */
   readonly firstPlayer: Player;
+  /** コイントスに勝った座席（2.5 節）。始まってから繋いだ座席にも、だれが選んだかを見せるのに使う。 */
+  readonly tossWinner: Player;
   /** 座席ごとの AI。人どうしの対戦では両方 null で、AI どうしの対戦では両方に座る。 */
   readonly bots: BotSeats;
   /**
@@ -193,13 +196,15 @@ export interface CreateMatchOptions {
   /** テストのために固定したいときだけ渡す。既定は 256 ビットの乱数。 */
   seedCommitment?: SeedCommitment;
   seedShareCommits?: SeedShares;
+  /** コイントスに勝った座席が選んだ先攻（2.5 節）。省くと、勝った座席が先攻になる。 */
+  firstPlayer?: Player;
   bankMs?: number;
   bots?: BotSeats;
 }
 
 export function createMatch(options: CreateMatchOptions): Match {
   const seedCommitment = options.seedCommitment ?? commitSeed();
-  const created = createGame({ seed: seedCommitment.seed, decks: options.decks });
+  const created = startGame(seedCommitment.seed, options.decks, options.firstPlayer);
   const bots = options.bots ?? NO_BOTS;
   const tracked = (seat: Player) => bots[seat]?.tracksKnowledge === true;
   const botKnowledge = new GameKnowledge(options.decks, [tracked(0), tracked(1)]);
@@ -216,6 +221,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     spectatorToken: options.spectatorToken,
     startedAt: options.startedAt,
     firstPlayer: firstPlayerOf(created.events),
+    tossWinner: tossWinner(seedCommitment.seed, options.decks),
     bots,
     botKnowledge,
     botRevisit,
@@ -1257,6 +1263,25 @@ function revealedHands(events: DomainEvent[]): MulliganReveal[] {
       ? [{ player: event.zone.player, cards: event.cards.map((card) => card.defId) }]
       : [],
   );
+}
+
+/** コイントスに勝った座席（2.5 節）。エンジンが先攻を決めるのに引くコインをそのまま使う。 */
+export function tossWinner(seed: string, decks: [DeckList, DeckList]): Player {
+  return firstPlayerOf(createGame({ seed, decks }).events);
+}
+
+/**
+ * 選ばれた先攻で局を作る（2.5 節、6.2 節）。先攻を明示で渡すとエンジンはコインを引かず、山札の並びが
+ * 変わるので、勝った座席が先攻ならコインを引いた局を使う。対戦も再生もリプレイも、局はここで作る。
+ */
+export function startGame(
+  seed: string,
+  decks: [DeckList, DeckList],
+  firstPlayer?: Player,
+): ApplyResult {
+  const tossed = createGame({ seed, decks });
+  if (firstPlayer === undefined || firstPlayerOf(tossed.events) === firstPlayer) return tossed;
+  return createGame({ seed, decks, firstPlayer });
 }
 
 /** `game-started` が運ぶ先攻を読む。イベントの語彙が唯一の出どころである。 */

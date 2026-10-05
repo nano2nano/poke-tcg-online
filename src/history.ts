@@ -4,20 +4,13 @@
  * **読めるのは自分が指した対戦だけである。** 終わった対戦は当人どうしには全部見えてよいが、
  * 他人のデッキと引きが誰にでも見えると、それは対戦環境として成り立たない。
  *
- * 局面を保存しないので、盤面は `createGame` から指し直して作る。1 手ずつ辿るたびに初手から
+ * 局面を保存しないので、盤面は対戦の開始から指し直して作る。1 手ずつ辿るたびに初手から
  * やり直さないよう、局面のキャッシュをメモリにだけ置く（`ReplayCache`）。
  * 記録を引くのは `src/archive.ts` で、ここは引いた記録から盤面を作る。
  */
 
 import { createHash } from "node:crypto";
-import {
-  applyMove,
-  createGame,
-  legalMoves,
-  movesEqual,
-  playerView,
-  projectEvents,
-} from "./engine.js";
+import { applyMove, legalMoves, movesEqual, playerView, projectEvents } from "./engine.js";
 import type { DomainEvent, GameState, Move, PlayerEvent, PlayerView } from "./engine.js";
 import {
   engineFingerprint,
@@ -25,6 +18,7 @@ import {
   type EngineFingerprint,
 } from "./fingerprint.js";
 import type { MatchRecord } from "./log.js";
+import { startGame } from "./match.js";
 import { seedCommitmentHolds } from "./replay.js";
 
 export interface ReplayFrame {
@@ -161,7 +155,7 @@ export class ReplayCache {
       this.entries.set(key, found);
       return found;
     }
-    const created = createGame({ seed: record.seed, decks: record.decks });
+    const created = startGame(record.seed, record.decks, record.firstPlayer);
     const start: Checkpoint = {
       applied: 0,
       state: created.state,
@@ -186,7 +180,7 @@ export class ReplayCache {
 function contentKey(record: MatchRecord): string {
   const moves = record.moves.map((logged) => logged.move);
   return createHash("sha256")
-    .update(JSON.stringify([record.seed, record.decks, moves]))
+    .update(JSON.stringify([record.seed, record.decks, record.firstPlayer, moves]))
     .digest("hex");
 }
 

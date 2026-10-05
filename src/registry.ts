@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import type { Player } from "./engine.js";
 import { applyTimeout, type Match, type SeatInfo } from "./match.js";
 import { toRecord, type MatchRecord } from "./log.js";
-import { startPending, type PendingMatch } from "./pending.js";
+import { botTurnOrder, startPending, tossCoin, type PendingMatch } from "./pending.js";
 import type { SeedShares } from "./fingerprint.js";
 
 export interface SeatRef {
@@ -79,9 +79,19 @@ export class MatchRegistry {
     return this.seats.has(token) || this.pendingSeats.has(token);
   }
 
+  /**
+   * シェアのそろった対戦でコイントスをする（2.5 節）。勝った座席が AI なら、その場で始めて返す。
+   * 人が勝てば、選ぶまで始まる前の対戦として持ったまま null を返す。
+   */
+  toss(pending: PendingMatch, nowMs: number): Match | null {
+    tossCoin(pending, nowMs);
+    const first = botTurnOrder(pending);
+    return first === null ? null : this.start(pending, nowMs, first);
+  }
+
   /** 座席トークンは、始まる前と同じものがそのまま使える。 */
-  start(pending: PendingMatch, nowMs: number): Match {
-    const match = startPending(pending, nowMs);
+  start(pending: PendingMatch, nowMs: number, firstPlayer: Player): Match {
+    const match = startPending(pending, nowMs, firstPlayer);
     this.dropPending(pending);
     this.add(match);
     return match;

@@ -7,7 +7,7 @@ import { Lobby, MATCH_LIVE, type JoinOutcome, type JoinRequest } from "../src/lo
 import { AccountStore } from "../src/accounts.js";
 import { MatchRegistry } from "../src/registry.js";
 import { SEAT_NOT_FOUND, SEAT_REPLACED, type ServerMessage } from "../src/protocol.js";
-import { ensureCards, legalDecks } from "./helpers.js";
+import { ensureCards, legalDecks, startTossed } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
 let storage: Awaited<ReturnType<typeof startStorage>>;
@@ -170,6 +170,7 @@ describe("相手を見つける", () => {
     expect(moved).not.toBe(waiting.account.rating);
 
     const second = await join(arena, { secret: other.secret, deck, roomCode: "へや" });
+    startTossed(arena.registry);
     const seated = second.ok && "seat" in second ? second.seat : null;
     const match = arena.registry.live().find((live) => live.matchId === seated?.matchId);
     expect(match?.seats[0]?.rating).toBe(moved);
@@ -246,6 +247,7 @@ describe("席の引き換え", () => {
     const { lobby, registry } = arena;
     const first = await join(arena, await player(arena, "a", "へや"));
     await join(arena, await player(arena, "b", "へや"));
+    startTossed(registry);
     if (!first.ok) throw new Error("入れていない");
     const seat = seatOf(lobby, first.ticket);
 
@@ -324,6 +326,7 @@ describe("席の引き換え", () => {
       const b = (await arena.accounts.create(`${name}-b`, 0)).secret;
       const first = await join(arena, { secret: a, deck, roomCode: name });
       await join(arena, { secret: b, deck, roomCode: name });
+      startTossed(registry);
       if (!first.ok) throw new Error("入れていない");
       return first.ticket;
     };
@@ -409,6 +412,7 @@ describe("続いている対戦", () => {
     const { secret } = await arena.accounts.create("まつひと", 0);
     const first = await join(arena, { secret, deck });
     await join(arena, await player(arena, "あいて"));
+    startTossed(registry);
     if (!first.ok) throw new Error("入れていない");
 
     const again = await join(arena, { secret, deck });
@@ -456,6 +460,17 @@ describe("続いている対戦", () => {
     });
   });
 
+  it("コイントスで落ちた対戦は、席を塞いだまま残さない", async () => {
+    ensureCards();
+    const arena = newArena();
+    arena.registry.toss = () => {
+      throw new Error("トスで落ちる");
+    };
+    await join(arena, await player(arena, "a", "おちる"));
+    await expect(join(arena, await player(arena, "b", "おちる"))).rejects.toThrow("トスで落ちる");
+    expect(arena.registry.overdue(Infinity)).toEqual([]);
+  });
+
   it("デッキが通らなくても、表示名を書き換えずに席を返す", async () => {
     ensureCards();
     const arena = newArena();
@@ -478,7 +493,7 @@ describe("続いている対戦", () => {
     const { secret } = await arena.accounts.create("まつひと", 0);
     await join(arena, { secret, deck, roomCode: "へや" });
     await join(arena, await player(arena, "あいて", "へや"));
-    const [match] = arena.registry.live();
+    const [match] = startTossed(arena.registry);
     if (match === undefined) throw new Error("対戦が始まっていない");
 
     match.result = { kind: "concede", winner: 1, conceded: 0 };
@@ -508,6 +523,7 @@ describe("決着の後始末で落ちない", () => {
     const arena = { lobby, registry, hub, accounts };
     const first = await join(arena, await player(arena, "a", "へや"));
     await join(arena, await player(arena, "b", "へや"));
+    startTossed(registry);
     const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
 
     const socket = recorder();
@@ -537,6 +553,7 @@ describe("決着の後始末で落ちない", () => {
       await join(arena, await player(arena, `${room}-a`, room));
       await join(arena, await player(arena, `${room}-b`, room));
     }
+    startTossed(registry);
     expect(registry.live()).toHaveLength(2);
 
     expect(() => hub.sweepTimeouts()).not.toThrow();
@@ -553,6 +570,7 @@ describe("座席の接続", () => {
     const { lobby, hub } = arena;
     const first = await join(arena, await player(arena, "a", "へや"));
     const second = await join(arena, await player(arena, "b", "へや"));
+    startTossed(arena.registry);
     const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 
@@ -603,6 +621,7 @@ describe("座席の接続", () => {
     const { lobby, hub, registry } = arena;
     const first = await join(arena, await player(arena, "a", "へや"));
     const second = await join(arena, await player(arena, "b", "へや"));
+    startTossed(registry);
     const seatA = first.ok ? seatOf(lobby, first.ticket) : null;
     const seatB = second.ok && "seat" in second ? second.seat : null;
 
