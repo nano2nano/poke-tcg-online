@@ -12,12 +12,14 @@ import { INITIAL_RATING } from "../src/accounts.js";
 import { objectKey } from "../src/archive.js";
 import { deckPresets } from "../src/bots.js";
 import { engineFingerprint } from "../src/fingerprint.js";
+import type { Seated } from "../src/lobby.js";
 import type { MatchRecord } from "../src/log.js";
 import type { ClientMessage, ServerMessage } from "../src/protocol.js";
 import { initialCardIds, inspectState } from "../src/engine-invariants.js";
 import { replay } from "../src/replay.js";
 import { ensureCards, legalDecks } from "./helpers.js";
-import { loadGeneratedCards } from "../src/engine.js";
+import { loadGeneratedCards, opponent } from "../src/engine.js";
+import { tossWinner } from "../src/match.js";
 import { sampleDeck } from "../src/sample-deck.js";
 import { startWorker, type TestWorker } from "./worker.js";
 
@@ -111,14 +113,22 @@ async function getJson(path: string): Promise<JsonBody> {
  * 座席 1 つぶんのクライアント。届いた合法手から 1 つ選んで送り返すだけで、
  * 盤面の判断を一切持たない。**サーバが手番でない座席へ合法手を送らないので、
  * 2 つの座席が同時に指そうとすることは起きない。**
+ * コイントスに勝ったら後攻を選ぶ。先攻を明示で渡して局を作る道も、再生まで通す。
  */
-function seatClient(seatToken: string, ended: (message: ServerMessage) => void): WebSocket {
+function seatClient(
+  { seat, seatToken }: Seated,
+  ended: (message: ServerMessage) => void,
+): WebSocket {
   const socket = new WebSocket(`ws://${base}/ws?seatToken=${seatToken}`);
   opened.add(socket);
   socket.on("message", (raw) => {
     const message = JSON.parse((raw as Buffer).toString()) as ServerMessage;
     if (message.t === "ended") {
       ended(message);
+      return;
+    }
+    if (message.t === "pending" && message.toss === seat) {
+      socket.send(JSON.stringify({ t: "turn-order", first: false } satisfies ClientMessage));
       return;
     }
     if (message.t !== "sync" && message.t !== "delta") return;
@@ -408,8 +418,8 @@ describe("マッチングから決着まで", () => {
         endings.push(message);
         if (endings.length === 2) resolve();
       };
-      seatClient(claimed.seat.seatToken, finish);
-      seatClient(second.seat.seatToken, finish);
+      seatClient(claimed.seat, finish);
+      seatClient(second.seat, finish);
     });
 
     await done;
@@ -433,6 +443,8 @@ describe("マッチングから決着まで", () => {
     });
     expect(result.failures).toEqual([]);
     expect(result.applied).toBe(record.moves.length);
+    // コイントスに勝った座席は後攻を選んでいる。
+    expect(record.firstPlayer).toBe(opponent(tossWinner(record.seed, record.decks)));
     // 何手で決着するかはシャッフルしだいで、始まってすぐに決まる対局もある。手数ではなく、両者が指したことと、
     // 記録が決着を持ち、それが両者へ伝えた勝者と合うことを見る（再生がその決着に届くことは `replay` が見る）。
     expect(new Set(record.moves.map((logged) => logged.move.player))).toEqual(new Set([0, 1]));
@@ -625,8 +637,8 @@ describe("サーバが入れ替わったあと", () => {
         ended += 1;
         if (ended === 2) resolve();
       };
-      seatClient(claimed.seat.seatToken, finish);
-      seatClient(second.seat.seatToken, finish);
+      seatClient(claimed.seat, finish);
+      seatClient(second.seat, finish);
     });
     const before = await postJson("/api/account/me", { secret: alpha.secret });
     expect(before.games).toBe(1);

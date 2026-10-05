@@ -88,7 +88,7 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
             if (!firstPlayerShown && message.view.phase === "setup") {
               firstPlayerShown = true;
               notices.push({
-                text: `コイントスの結果、${who(message.firstPlayer)}が先攻です`,
+                text: `${who(message.firstPlayer)}が先攻です`,
                 coins: { results: [true], faces: ["先攻", "後攻"] },
               });
             }

@@ -7,13 +7,13 @@
 
 import { describe, expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
-import { engineFingerprint } from "../src/fingerprint.js";
+import { commitSeed, engineFingerprint } from "../src/fingerprint.js";
 import { toRecord } from "../src/log.js";
 import { concede } from "../src/match.js";
-import type { Player } from "../src/engine.js";
+import { createGame, opponent } from "../src/engine.js";
 import { initialCardIds, inspectState } from "../src/engine-invariants.js";
 import { replay, seedCommitmentHolds } from "../src/replay.js";
-import { ensureCards, newMatch, playToEnd } from "./helpers.js";
+import { ensureCards, legalDecks, newMatch, playToEnd } from "./helpers.js";
 
 describe("対局ログの再生", () => {
   it("seed と move 列だけから同じ対戦が出る", () => {
@@ -147,15 +147,35 @@ describe("対局ログの再生", () => {
     expect(result.applied).toBe(record.moves.length);
   });
 
-  it("先攻の食い違いに再生が気づく", () => {
+  it("コイントスに勝った座席が後攻を選んだ対戦も、記録から同じ対戦が出る", () => {
+    ensureCards();
+    const second = opponent(newMatch("replay-13").firstPlayer);
+    const played = playToEnd(newMatch("replay-13", 0, second), 4242);
+    expect(played.match.firstPlayer).toBe(second);
+
+    const result = replay(toRecord(played.match), { fingerprint: engineFingerprint() });
+    expect(result.failures).toEqual([]);
+    expect(result.applied).toBe(played.match.moves.length);
+  });
+
+  // 選ぶ段が無かった頃の記録は、エンジンのコイントスで作った局を再生する。
+  it("勝った座席が先攻を選んだ局は、エンジンがコイントスで先攻を決めた局と同じになる", () => {
+    ensureCards();
+    const tossed = createGame({ seed: commitSeed("replay-14").seed, decks: legalDecks() });
+    const started = tossed.events.find((event) => event.kind === "game-started");
+    if (started?.kind !== "game-started") throw new Error("game-started が無い");
+    expect(newMatch("replay-14", 0, started.firstPlayer).state).toEqual(tossed.state);
+  });
+
+  // 先攻は再生の入力なので、入れ替えると別の局になる。
+  it("先攻を入れ替えた記録は、別の対戦として止まる", () => {
     ensureCards();
     const played = playToEnd(newMatch("replay-11"), 31415);
     const record = toRecord(played.match);
-    const flipped: Player = record.firstPlayer === 0 ? 1 : 0;
-    const tampered = { ...record, firstPlayer: flipped };
+    const tampered = { ...record, firstPlayer: opponent(record.firstPlayer) };
 
     const result = replay(tampered, { fingerprint: engineFingerprint() });
-    expect(result.failures.some((failure) => failure.kind === "first-player-mismatch")).toBe(true);
+    expect(result.failures).not.toEqual([]);
   });
 
   // 版 2 までの seed は 32 ビットの数値で、いまの乱数は同じ値から別の列を出す。

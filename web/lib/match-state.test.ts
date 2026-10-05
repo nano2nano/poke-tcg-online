@@ -190,7 +190,7 @@ describe("座席の状態", () => {
   it("状態を変えないメッセージには、同じ状態を返す", () => {
     for (const message of [
       { t: "pong" },
-      { t: "pending" },
+      { t: "pending", toss: null },
       { t: "reject", reason: "stale-version", stateVersion: 0 },
       { t: "error", message: "断った" },
     ] as const) {

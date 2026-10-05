@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { DurableObjectState } from "@cloudflare/workers-types/index.ts";
 import { concede } from "../src/match.js";
 import { Server, type Env } from "../src/worker.js";
-import { ensureCards, legalDecks } from "./helpers.js";
+import { ensureCards, legalDecks, startTossed } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
 let storage: Awaited<ReturnType<typeof startStorage>>;
@@ -61,6 +61,7 @@ describe("対戦を保つアラーム", () => {
         const { secret } = await post("/api/account", { displayName: name });
         await post("/api/join", { secret, deck: legalDecks()[0], roomCode: room });
       }
+      startTossed(registry);
     };
     const { registry } = (instance as unknown as { app: { registry: any } }).app;
     const finishAll = () => {

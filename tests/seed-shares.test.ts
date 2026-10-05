@@ -124,8 +124,16 @@ function matchOf(arena: Arena, seated: Seated) {
   return ref.match;
 }
 
+/** コイントスに勝った座席が先攻を選んで始める（2.5 節）。 */
+function chooseFirst(arena: Arena, seats: [Seated, Seated]) {
+  const winner = arena.registry.pendingBySeatToken(seats[0].seatToken)?.pending.toss?.winner;
+  if (winner === undefined) throw new Error("コイントスが済んでいない");
+  arena.hub.handle(recorder(), seats[winner].seatToken, { t: "turn-order", first: true });
+  return matchOf(arena, seats[0]);
+}
+
 describe("シェアの開示", () => {
-  it("両座席が開くまで対戦を始めず、そろったら両方へ局面を送る", async () => {
+  it("両座席が開くまでコイントスをせず、そろったら両方へ勝った座席を知らせる", async () => {
     const arena = newArena();
     const [a, b] = await seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     // 席を知らせる時点で、両方のコミットが両座席に届いている。
@@ -141,11 +149,16 @@ describe("シェアの開示", () => {
 
     const socketB = recorder();
     arena.hub.attach(socketB, b.seatToken, SHARE_B);
-    expect(socketA.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
-    expect(socketB.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
-    expect(arena.registry.liveCount()).toBe(1);
+    const tossed = { t: "pending", toss: expect.any(Number) };
+    expect(socketA.sent).toEqual([{ t: "pending", toss: null }, tossed]);
+    expect(socketB.sent).toEqual([{ t: "pending", toss: null }, tossed]);
+    expect(socketA.sent[1]).toEqual(socketB.sent[1]);
+    expect(arena.registry.live()).toHaveLength(0);
 
-    const match = matchOf(arena, a);
+    const match = chooseFirst(arena, [a, b]);
+    expect(socketA.sent.at(-1)?.t).toBe("sync");
+    expect(socketB.sent.at(-1)?.t).toBe("sync");
+    expect(arena.registry.liveCount()).toBe(1);
     expect(match.seedCommitment.commit).toBe(a.seedCommit);
     expect(match.seedCommitment.seed).toBe(
       commitSeed(match.seedCommitment.nonce, [SHARE_A, SHARE_B]).seed,
@@ -161,12 +174,12 @@ describe("シェアの開示", () => {
     expect(arena.registry.live()).toHaveLength(0);
 
     arena.hub.attach(recorder(), a.seatToken, SHARE_A);
-    expect(matchOf(arena, b).seedCommitment.shares).toEqual([SHARE_A, null]);
+    expect(chooseFirst(arena, [a, b]).seedCommitment.shares).toEqual([SHARE_A, null]);
   });
 
-  it("期限までに開かなかった座席のシェアは null のまま始め、時計はそこから流れる", async () => {
+  it("期限までに開かなかった座席のシェアは null のままコイントスをする", async () => {
     const arena = newArena();
-    const [a] = await seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
+    const [a, b] = await seatBoth(arena, [commitShare(SHARE_A), commitShare(SHARE_B)]);
     const socketA = recorder();
     arena.hub.attach(socketA, a.seatToken, SHARE_A);
 
@@ -176,10 +189,11 @@ describe("シェアの開示", () => {
 
     arena.clock.now = SHARE_REVEAL_DEADLINE_MS;
     arena.hub.sweepTimeouts();
-    expect(socketA.sent.map((message) => message.t)).toEqual(["pending", "sync"]);
-    const match = matchOf(arena, a);
+    expect(socketA.sent.map((message) => message.t)).toEqual(["pending", "pending"]);
+    // 期限のあとに開いたシェアは混ぜない。コイントスの結果が変わってしまう。
+    arena.hub.attach(recorder(), b.seatToken, SHARE_B);
+    const match = chooseFirst(arena, [a, b]);
     expect(match.seedCommitment.shares).toEqual([SHARE_A, null]);
-    expect(match.turnStartedAtMs).toBe(SHARE_REVEAL_DEADLINE_MS);
     // 記録のレーティングは席が決まった時点で読んだので、`startedAt` もその時点にそろえる。
     expect(match.startedAt).toBe(new Date(0).toISOString());
   });
@@ -229,6 +243,7 @@ describe("シェアの開示", () => {
       shareCommits: [commitShare(SHARE_A), null],
       shares: [null, null],
       deadlineMs: SHARE_REVEAL_DEADLINE_MS,
+      toss: null,
       bots: [null, null],
     };
     arena.registry.addPending(pending);
@@ -247,6 +262,7 @@ describe("シェアの開示", () => {
     const socketA = recorder();
     arena.hub.attach(socketA, a.seatToken, SHARE_A);
     arena.hub.attach(recorder(), b.seatToken, SHARE_B);
+    chooseFirst(arena, [a, b]);
     arena.hub.handle(socketA, a.seatToken, { t: "concede" });
 
     const ended = socketA.sent.at(-1);

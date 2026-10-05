@@ -90,7 +90,8 @@ export function useSeat(
     let known = false;
     let ended = false;
     let replaced = false;
-    /** 先攻のコイントスを見せたか。`sync` は繋ぎ直すたびに届くので、2 度は出さない。 */
+    /** コイントスと先攻を見せたか。`pending` と `sync` は繋ぎ直すたびに届くので、2 度は出さない。 */
+    let tossShown = false;
     let firstPlayerShown = false;
     let shownTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -152,13 +153,24 @@ export function useSeat(
             show({
               text:
                 message.firstPlayer === seated.seat
-                  ? "コイントスの結果、あなたが先攻です"
-                  : "コイントスの結果、相手が先攻です（あなたは後攻）",
-              coins: { results: [message.firstPlayer === seated.seat], faces: ["先攻", "後攻"] },
+                  ? "あなたが先攻です"
+                  : "相手が先攻です（あなたは後攻）",
             });
           }
           for (const notice of noticesToShow(notices, seated.seat)) show(notice);
           acknowledge(message.stateVersion);
+          return;
+        }
+        case "pending": {
+          if (message.toss === null || tossShown) return;
+          tossShown = true;
+          const won = message.toss === seated.seat;
+          show({
+            text: won
+              ? "コイントスに勝ちました。先攻か後攻かを選んでください"
+              : "コイントスに負けました。相手が先攻か後攻かを選びます",
+            coins: { results: [won], faces: ["勝ち", "負け"] },
+          });
           return;
         }
         case "ended": {
@@ -284,7 +296,9 @@ export function useSeat(
       const { socket, log } = live.current;
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(message));
-        if (message.t === "move" || message.t === "setup") setAwaiting(true);
+        if (message.t === "move" || message.t === "setup" || message.t === "turn-order") {
+          setAwaiting(true);
+        }
         return;
       }
       // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。

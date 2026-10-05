@@ -594,10 +594,11 @@ export class Lobby {
       shareCommits,
       shares: noShares(),
       deadlineMs: nowMs + SHARE_REVEAL_DEADLINE_MS,
+      toss: null,
       bots,
     };
-    if (allRevealed(pending)) this.registry.start(pending, nowMs);
-    else this.registry.addPending(pending);
+    this.registry.addPending(pending);
+    if (allRevealed(pending)) this.registry.toss(pending, nowMs);
     const seated = (seat: Player): Seated => ({
       matchId: pending.matchId,
       seat,

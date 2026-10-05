@@ -22,10 +22,10 @@ import { commitSeed, commitShare } from "../src/fingerprint.js";
 import {
   applyMove,
   cannotRevisit,
-  createGame,
   derivedView,
   encodeEntityWeights,
   encodePpoWeights,
+  isBasicPokemon,
   legalMoves,
   newEntityWeightsFile,
   newPpoWeightsFile,
@@ -49,6 +49,7 @@ import {
   botExtrasFor,
   createMatch,
   legalMovesFor,
+  startGame,
   submitMove,
   toMove,
   viewFor,
@@ -56,7 +57,7 @@ import {
 } from "../src/match.js";
 import type { ClientMessage, ServerMessage } from "../src/protocol.js";
 import { MatchRegistry } from "../src/registry.js";
-import { ensureCards, legalDecks, newMatch } from "./helpers.js";
+import { basicEnergyDefId, ensureCards, legalDecks, newMatch, startTossed } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
 // 重みを作るのも方策にするのも重く、重みを何本か扱うテストは既定の 5 秒に近い。遅い機械では越えるので、
@@ -333,6 +334,12 @@ function humanSeat(arena: Arena, seatToken: string, ended: () => void): SeatSock
         ended();
         return;
       }
+      // AI との対戦で始まる前に届くコイントスは、人が勝ったときだけである。
+      if (message.t === "pending" && message.toss !== null) {
+        const order: ClientMessage = { t: "turn-order", first: true };
+        setTimeout(() => arena.hub.handle(socket, seatToken, order), 0);
+        return;
+      }
       if (message.t !== "sync" && message.t !== "delta") return;
       const shown: ClientMessage = { t: "shown", stateVersion: message.stateVersion };
       setTimeout(() => arena.hub.handle(socket, seatToken, shown), 0);
@@ -376,7 +383,7 @@ async function playAgainst(arena: Arena, bot: Bot): Promise<MatchRecord> {
  */
 function replayed(match: Match, seat: Player): { tracker: SeatKnowledge; states: GameState[] } {
   const tracker = new SeatKnowledge(match.decks[seat], seat);
-  const created = createGame({ seed: match.seedCommitment.seed, decks: match.decks });
+  const created = startGame(match.seedCommitment.seed, match.decks, match.firstPlayer);
   tracker.observe(projectEvents(created.events, seat));
   const states = [created.state];
   for (const { move } of match.moves) {
@@ -528,6 +535,7 @@ describe("AI の座席", () => {
       presetDeck("alakazam-dudunsparce-72073")!,
     );
     if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
+    startTossed(arena.registry);
     const { seatToken } = outcome.seat;
     const socket: SeatSocket = { send() {}, close() {} };
     arena.hub.attach(socket, seatToken);
@@ -568,6 +576,7 @@ describe("AI の座席", () => {
       presetDeck("alakazam-dudunsparce-72073")!,
     );
     if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
+    startTossed(arena.registry);
     const { seatToken } = outcome.seat;
     const socket: SeatSocket = { send() {}, close() {} };
     arena.hub.attach(socket, seatToken);
@@ -604,6 +613,7 @@ describe("AI の座席", () => {
       presetDeck("alakazam-dudunsparce-72073")!,
     );
     if (!outcome.ok || !("seat" in outcome)) throw new Error("AI と対戦できなかった");
+    startTossed(arena.registry);
     const socket: SeatSocket = { send() {}, close() {} };
     arena.hub.attach(socket, outcome.seat.seatToken);
     // AI の番が来るまで人が指す。AI の手は間を置いて指すので、ここではまだ待ちに入っただけである。
@@ -634,13 +644,16 @@ describe("AI の座席を開く", () => {
     ensureCards();
     const arena = newArena();
     const bot = botFromBytes("g0", generationZero());
-    // 準備で先に選ぶのは先攻の側なので、AI が先になる対戦を引くまで開き直す。
+    // AI はコイントスに勝つと後攻を選ぶので、AI が準備で先に選ぶのは、人がたねを引けずに引き直すときである。
+    // 人のデッキのたねを 1 枚にして、AI が先になる対戦を引くまで開き直す。
+    const basic = legalDecks()[0].cards.find((defId) => isBasicPokemon(defId))!;
+    const deck = { cards: [basic, ...Array<string>(59).fill(basicEnergyDefId())] };
     let started: Match | undefined;
     let seatToken = "";
     for (let attempt = 0; attempt < 40 && started === undefined; attempt++) {
       const { account, secret } = await arena.accounts.create("ひと", 0);
       const outcome = arena.lobby.joinBot(
-        { secret, deck: presetDeck("dragapult-28731")! },
+        { secret, deck },
         account,
         bot,
         presetDeck("alakazam-dudunsparce-72073")!,
@@ -738,7 +751,7 @@ describe("AI の座席を開く", () => {
     arena.lobby.join({ secret, deck, roomCode: "へや" }, account);
     const other = await arena.accounts.create("あいて", 0);
     arena.lobby.join({ secret: other.secret, deck, roomCode: "へや" }, other.account);
-    const [match] = arena.registry.live();
+    const [match] = startTossed(arena.registry);
     if (match === undefined) throw new Error("対戦が始まっていない");
 
     expect(

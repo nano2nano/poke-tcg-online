@@ -252,6 +252,7 @@ test("待っているあいだに席が決まってから押し直すと、そ�
   const opened = a.waitForEvent("websocket");
   await a.click("#join-button");
   const seatToken = new URL((await opened).url()).searchParams.get("seatToken");
+  await chooseFirst(a, b);
   await seated(a);
   await seated(b);
   // 相手と同じ対戦の、もう一方の座席である。
@@ -276,6 +277,7 @@ test("同じルームコードの 2 人が繋がり、手番側にだけ手が�
   // 先に入ったほうはチケットを持って待つ。2 人目が入った時点で席が決まる。
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
 
   await seated(a);
   await seated(b);
@@ -596,28 +598,39 @@ test("引き直しで見せた手札は、準備のあいだ開いた欄に並�
   await close();
 });
 
-test("先攻を決めたコイントスが盤面の上に出て、できごとの記録は畳んである", async ({
+test("コイントスが盤面の上に出て、勝った側だけが先攻か後攻かを選べる", async ({
   browser,
   pageErrors,
 }) => {
   const room = `せんこう-${Date.now()}`;
   const [a, b, close] = await openPair(browser, pageErrors);
   const synced = [firstSync(a), firstSync(b)];
-  await seatPair(a, b, room);
+  await Promise.all([a.goto("./"), b.goto("./")]);
+  await join(a, room);
+  await expect(a.locator("#join-status")).not.toBeEmpty();
+  await join(b, room);
 
-  // コインの向きは座席ごとに先攻か後攻かを表す。両座席で食い違えば、どちらかが違う先攻を見ている。
-  const faces = [];
-  for (const [index, page] of [a, b].entries()) {
+  // コインの向きは座席ごとに勝ちか負けかを表す。両座席で同じ向きなら、どちらかが違う勝者を見ている。
+  const faces: string[] = [];
+  for (const page of [a, b]) {
     const coin = page.locator("#results .coin");
     await expect(coin).toHaveCount(1);
-    const sync = synced[index]!();
-    expect(sync).not.toBeNull();
-    const face = sync!.seat === sync!.firstPlayer ? "heads" : "tails";
-    await expect(coin).toHaveAttribute("data-face", face);
-    faces.push(face);
+    faces.push((await coin.getAttribute("data-face")) ?? "");
     await expect(page.locator("#event-log")).not.toHaveAttribute("open");
   }
-  expect(faces.sort()).toEqual(["heads", "tails"]);
+  expect([...faces].sort()).toEqual(["heads", "tails"]);
+  const won = faces[0] === "heads" ? 0 : 1;
+  const [winner, loser] = won === 0 ? [a, b] : [b, a];
+  await expect(winner.locator("#turn-order-first, #turn-order-second")).toHaveCount(2);
+  await expect(loser.locator("#turn-order-first, #turn-order-second")).toHaveCount(0);
+
+  await winner.locator("#turn-order-second").click();
+  await seated(a);
+  await seated(b);
+  // 勝った側が後攻を選んだので、両座席とも負けた側を先攻と受け取る。
+  const syncs = synced.map((sync) => sync());
+  expect(syncs[won]!.firstPlayer).not.toBe(syncs[won]!.seat);
+  expect(syncs[1 - won]!.firstPlayer).toBe(syncs[1 - won]!.seat);
 
   await close();
 });
@@ -781,6 +794,7 @@ async function replayOfFinishedMatch(
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
   await seated(b);
 
@@ -928,6 +942,7 @@ test("読み込み直しても、指していた座席へ戻る", async ({ brows
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
   await seated(b);
 
@@ -1034,6 +1049,7 @@ test("対戦が終わったら、座席を覚えておかない", async ({ brows
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
 
   // 決着を受け取った印はレーティングの引き直しである。画面の文言では判定しない。
@@ -1069,6 +1085,7 @@ async function seatPair(a: Page, b: Page, room: string): Promise<void> {
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
   await seated(b);
 }
@@ -1079,6 +1096,22 @@ async function seatPair(a: Page, b: Page, room: string): Promise<void> {
  */
 async function seated(page: Page): Promise<void> {
   await expect(page.locator("#self .mat").first()).toBeVisible();
+}
+
+/** 両者が席に着くとコイントスがあり、勝った側が先攻か後攻かを選ぶまで対戦は始まらない。勝った側で先攻を選ぶ。 */
+async function chooseFirst(a: Page, b: Page): Promise<void> {
+  await expect
+    .poll(async () => {
+      for (const page of [a, b]) {
+        const button = page.locator("#turn-order-first");
+        if (await button.isVisible()) {
+          await button.click();
+          return true;
+        }
+      }
+      return false;
+    })
+    .toBe(true);
 }
 
 /**
@@ -1136,6 +1169,7 @@ test("対戦中に切れたら、読み込み直さずに同じ座席へ繋ぎ�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
 
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
   await expect(a.locator("#concede-button")).toBeDisabled();
@@ -1176,6 +1210,7 @@ test("繋ぎ直すあいだに対戦が終わっていたら、マッチング�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await expect(a.locator("#connection")).toHaveAttribute("data-state", "reconnecting");
   await seated(b);
 
@@ -1264,7 +1299,7 @@ test("繋がらないあいだは、間隔を空けて繋ぎ直す", async ({ pa
   // この形では 1 秒おきに繋ぎに行き続ける。
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     opened += 1;
-    ws.send(JSON.stringify({ t: "pending" }));
+    ws.send(JSON.stringify({ t: "pending", toss: null }));
     void ws.close();
   });
   await page.reload();
@@ -1294,6 +1329,7 @@ test("観戦のリンクを開くと、プレイヤーを作らずに両者の�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
   await seated(b);
   await expect(a.locator("#watch-link")).not.toHaveValue("");
@@ -1345,7 +1381,7 @@ test("`ping` に答えなくなった接続は、閉じるのを待たずに繋�
   // 1 本目は座席を知っている印を返したあと、閉じずに黙る。
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     opened += 1;
-    if (opened === 1) ws.send(JSON.stringify({ t: "pending" }));
+    if (opened === 1) ws.send(JSON.stringify({ t: "pending", toss: null }));
   });
   await page.reload();
   await expect.poll(() => opened).toBe(1);
@@ -1375,7 +1411,7 @@ test("タイマーが大きく遅れても、`ping` に答えている接続は�
   let pings = 0;
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     opened += 1;
-    ws.send(JSON.stringify({ t: "pending" }));
+    ws.send(JSON.stringify({ t: "pending", toss: null }));
     ws.onMessage((raw) => {
       if (JSON.parse(String(raw)).t !== "ping") return;
       pings += 1;
@@ -1445,6 +1481,7 @@ test("決着のあと、両座席がシャッフルを検算して合う", async
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
 
   a.once("dialog", (dialog) => void dialog.accept());
@@ -1476,6 +1513,7 @@ test("決着で開かれたシェアが差し替えられていたら、合わ�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
 
   a.once("dialog", (dialog) => void dialog.accept());
@@ -1562,6 +1600,7 @@ test("自分のシェアのコミットがすり替えられていたら、合�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
 
   a.once("dialog", (dialog) => void dialog.accept());
@@ -1600,6 +1639,7 @@ test("相手のシェアが使われていなければ、そう出す", async ({
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
 
   a.once("dialog", (dialog) => void dialog.accept());
@@ -1672,6 +1712,7 @@ test("検索して組んだデッキを保存し、開き直しても残り、�
   const sent = (await joined).postDataJSON() as { deck: { cards: string[] } };
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await seated(a);
   await seated(b);
 
@@ -1818,6 +1859,7 @@ test("画像を出す設定なら、盤面の見えるカードに画像が載�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
 
   const hand = a.locator('#self [data-zone="hand"] .card');
   await expect(hand.first()).toBeVisible();
@@ -1860,6 +1902,7 @@ test("画像を読めなかったカードは、名前の面で残る", async ({
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await expect.poll(() => seenA()?.phase).toBe("setup");
   await expect.poll(() => seenB()?.phase).toBe("setup");
 
@@ -1903,6 +1946,7 @@ test("手を打って盤面を描き直しても、出ていた画像の要素�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await expect(a.locator("#self .card img").first()).toBeVisible();
 
   for (let move = 0; move < 3; move += 1) {
@@ -1960,6 +2004,7 @@ test("画像を切ってある設定では、画像を頼まない", async ({ br
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
   await expect(a.locator('#self [data-zone="hand"] .card').first()).toBeVisible();
   await expect(a.locator('#self [data-zone="deck"]')).toHaveAttribute("data-count", /^[0-9]+$/);
   expect(asked).toEqual([]);
@@ -2139,6 +2184,7 @@ test("カードにマウスを載せると横に大きく出て、外すと消�
   await join(a, room);
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
+  await chooseFirst(a, b);
 
   const hand = a.locator('#self [data-zone="hand"] .card');
   const preview = a.locator("#card-preview");

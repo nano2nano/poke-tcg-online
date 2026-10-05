@@ -25,6 +25,7 @@ import {
 import { sampleDeck } from "../src/sample-deck.js";
 import { commitSeed } from "../src/fingerprint.js";
 import { createMatch, submitMove, toMove, type Match } from "../src/match.js";
+import type { MatchRegistry } from "../src/registry.js";
 
 let registered = false;
 
@@ -55,7 +56,8 @@ export function basicEnergyDefId(): CardDefId {
   return findDefId((def) => def.kind === "energy" && def.basic);
 }
 
-export function newMatch(seedNonce: string, nowMs = 0): Match {
+/** `firstPlayer` を省くと、コイントスに勝った座席が先攻になる。 */
+export function newMatch(seedNonce: string, nowMs = 0, firstPlayer?: Player): Match {
   return createMatch({
     matchId: `match-${seedNonce}`,
     decks: legalDecks(),
@@ -68,7 +70,20 @@ export function newMatch(seedNonce: string, nowMs = 0): Match {
     nowMs,
     startedAt: new Date(nowMs).toISOString(),
     seedCommitment: commitSeed(seedNonce),
+    ...(firstPlayer === undefined ? {} : { firstPlayer }),
   });
+}
+
+/**
+ * コイントスを済ませた始まる前の対戦を、勝った座席が先攻を選んだことにしてすべて始める。
+ * ロビーが席を決めたあとの対戦を確かめるテストが、選ぶ段を飛ばすのに使う。
+ */
+export function startTossed(registry: MatchRegistry, nowMs = 0): Match[] {
+  return registry
+    .overdue(Number.POSITIVE_INFINITY)
+    .flatMap((pending) =>
+      pending.toss === null ? [] : [registry.start(pending, nowMs, pending.toss.winner)],
+    );
 }
 
 /** 対戦の準備を、どちらも最初の合法手で済ませる。最初の番の手を持つ局面になる。 */

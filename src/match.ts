@@ -31,6 +31,7 @@ import {
   spectatorView,
 } from "./engine.js";
 import type {
+  ApplyResult,
   CardDefId,
   CardInstance,
   CardInstanceId,
@@ -124,7 +125,7 @@ export interface Match {
    */
   readonly spectatorToken: string;
   readonly startedAt: string;
-  /** 先攻。seed から決まる導出値で、再生の入力ではない。先攻の偏りを測るために残す。 */
+  /** 先攻。コイントスに勝った座席が選んだ結果で、再生の入力である（2.5 節）。 */
   readonly firstPlayer: Player;
   /** 座席ごとの AI。人どうしの対戦では両方 null で、AI どうしの対戦では両方に座る。 */
   readonly bots: BotSeats;
@@ -193,13 +194,15 @@ export interface CreateMatchOptions {
   /** テストのために固定したいときだけ渡す。既定は 256 ビットの乱数。 */
   seedCommitment?: SeedCommitment;
   seedShareCommits?: SeedShares;
+  /** コイントスに勝った座席が選んだ先攻（2.5 節）。省くと、勝った座席が先攻になる。 */
+  firstPlayer?: Player;
   bankMs?: number;
   bots?: BotSeats;
 }
 
 export function createMatch(options: CreateMatchOptions): Match {
   const seedCommitment = options.seedCommitment ?? commitSeed();
-  const created = createGame({ seed: seedCommitment.seed, decks: options.decks });
+  const created = startGame(seedCommitment.seed, options.decks, options.firstPlayer);
   const bots = options.bots ?? NO_BOTS;
   const tracked = (seat: Player) => bots[seat]?.tracksKnowledge === true;
   const botKnowledge = new GameKnowledge(options.decks, [tracked(0), tracked(1)]);
@@ -1257,6 +1260,27 @@ function revealedHands(events: DomainEvent[]): MulliganReveal[] {
       ? [{ player: event.zone.player, cards: event.cards.map((card) => card.defId) }]
       : [],
   );
+}
+
+/** コイントスに勝った座席（2.5 節）。エンジンが先攻を決めるのに引くコインをそのまま使う。 */
+export function tossWinner(seed: string, decks: [DeckList, DeckList]): Player {
+  return firstPlayerOf(createGame({ seed, decks }).events);
+}
+
+/**
+ * 選ばれた先攻で対戦を作る（2.5 節、6.2 節）。勝った座席が先攻を選んだら、エンジンがコイントスで
+ * 先攻を決める局をそのまま使う。後攻を選んだときだけ先攻を明示で渡す。明示で渡すとエンジンはコインを
+ * 引かないので、山札の並びは別になる。こうしておくと、選ぶ段が無かった頃の記録も同じ道で再生できる。
+ * 対戦も再生もリプレイも、局はここで作る。
+ */
+export function startGame(
+  seed: string,
+  decks: [DeckList, DeckList],
+  firstPlayer?: Player,
+): ApplyResult {
+  const tossed = createGame({ seed, decks });
+  if (firstPlayer === undefined || firstPlayerOf(tossed.events) === firstPlayer) return tossed;
+  return createGame({ seed, decks, firstPlayer });
 }
 
 /** `game-started` が運ぶ先攻を読む。イベントの語彙が唯一の出どころである。 */

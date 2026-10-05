@@ -173,8 +173,12 @@ export function SeatTable({
       ? "対戦は終わりました"
       : clock !== null
         ? seatClockText(clock, state.seat)
-        : // 両者がシェアを開くまで局面は届かない。
-          "相手が席に着くのを待っています";
+        : // コイントスに勝った座席が先攻か後攻かを選ぶまで、局面は届かない。
+          state.toss === null
+          ? "相手が席に着くのを待っています"
+          : state.toss === state.seat
+            ? "先攻か後攻かを選んでください"
+            : "相手が先攻か後攻かを選んでいます";
 
   return (
     <>
@@ -560,26 +564,40 @@ function Moves({
 
   const list = (
     <div id="moves" className="moves">
-      {moves === null
-        ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
-          playing && view !== null && view.phase !== "setup" && <WaitingNote state={state} />
-        : buttons.map(({ move, key, label }) => (
+      {view === null && state.toss === state.seat
+        ? [true, false].map((first) => (
             <button
-              key={key}
+              key={String(first)}
+              id={first ? "turn-order-first" : "turn-order-second"}
               disabled={disabled}
-              // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
               aria-disabled={awaiting}
               onClick={() => {
-                if (!awaiting) playMove(seating, offered, move);
+                if (!awaiting) send({ t: "turn-order", first });
               }}
-              onPointerEnter={() => onAim("hovered", key)}
-              onPointerLeave={() => onAim("hovered", null)}
-              onFocus={() => onAim("focused", key)}
-              onBlur={() => onAim("focused", null)}
             >
-              {label}
+              {first ? "先攻を選ぶ" : "後攻を選ぶ"}
             </button>
-          ))}
+          ))
+        : moves === null
+          ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
+            playing && view !== null && view.phase !== "setup" && <WaitingNote state={state} />
+          : buttons.map(({ move, key, label }) => (
+              <button
+                key={key}
+                disabled={disabled}
+                // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
+                aria-disabled={awaiting}
+                onClick={() => {
+                  if (!awaiting) playMove(seating, offered, move);
+                }}
+                onPointerEnter={() => onAim("hovered", key)}
+                onPointerLeave={() => onAim("hovered", null)}
+                onFocus={() => onAim("focused", key)}
+                onBlur={() => onAim("focused", null)}
+              >
+                {label}
+              </button>
+            ))}
     </div>
   );
 

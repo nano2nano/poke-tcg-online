@@ -56,13 +56,13 @@ interface Opened {
 }
 
 /**
- * 座席へ繋ぎ、最初の `sync` まで読んだ接続を返す。
+ * 座席へ繋いだ接続を返す。
  *
  * **受け手は接続を作った直後に置き、読んだ位置を別に数える。** 席に就いた時点でサーバが
- * `sync` を送るので、`open` を待ってから置くと取りこぼす。「いま以降の 1 通」を待つ形でも、
+ * `pending` を送るので、`open` を待ってから置くと取りこぼす。「いま以降の 1 通」を待つ形でも、
  * すでに届いていたぶんを飛ばして次を待つので、同じところで止まる。
  */
-async function open(seatToken: string): Promise<Opened> {
+async function connect(seatToken: string): Promise<Opened> {
   const socket = new WebSocket(`ws://${base}/ws?seatToken=${encodeURIComponent(seatToken)}`);
   const seen: Record<string, any>[] = [];
   socket.on("message", (raw) =>
@@ -80,8 +80,17 @@ async function open(seatToken: string): Promise<Opened> {
     },
   };
   await new Promise<void>((resolve) => socket.on("open", () => resolve()));
-  expect((await opened.next()).t).toBe("sync");
   return opened;
+}
+
+/** 両座席へ繋ぎ、コイントスに勝った座席が先攻を選んで、最初の `sync` まで読んだ接続を座席の順で返す。 */
+async function open(tokens: [string, string]): Promise<[Opened, Opened]> {
+  const seats = (await Promise.all(tokens.map((token) => connect(token)))) as [Opened, Opened];
+  const tossed = await Promise.all(seats.map((seat) => seat.next()));
+  expect(tossed.map((message) => message.t)).toEqual(["pending", "pending"]);
+  seats[tossed[0]!.toss as 0 | 1].socket.send(JSON.stringify({ t: "turn-order", first: true }));
+  for (const seat of seats) expect((await seat.next()).t).toBe("sync");
+  return seats;
 }
 
 /**
@@ -113,11 +122,13 @@ const MALFORMED: unknown[] = [
   { t: "setup", active: "p0-1", bench: "p0-2" },
   { t: "setup", active: "p0-1", bench: [2] },
   { t: "setup", active: "p0-1", bench: Array.from({ length: 9 }, (_, i) => `p0-${i + 2}`) },
+  { t: "turn-order" },
+  { t: "turn-order", first: "はい" },
 ];
 
 describe("座席から届く 1 通", () => {
   it("形の違う 1 通を断り、接続も対戦も落とさない", async () => {
-    const opened = await open((await seatTokens("かたちがちがう"))[0]);
+    const [opened] = await open(await seatTokens("かたちがちがう"));
 
     for (const payload of MALFORMED) {
       opened.socket.send(JSON.stringify(payload));
@@ -136,7 +147,7 @@ describe("座席から届く 1 通", () => {
   });
 
   it("通る 1 通は、これまでどおり答える", async () => {
-    const opened = await open((await seatTokens("とおる"))[0]);
+    const [opened] = await open(await seatTokens("とおる"));
 
     opened.socket.send(JSON.stringify({ t: "hello" }));
     expect((await opened.next()).t).toBe("sync");
@@ -153,7 +164,7 @@ describe("座席から届く 1 通", () => {
    */
   it("`hello` に相手の座席トークンを載せても、返ってくるのは自分の座席である", async () => {
     const [mine, theirs] = await seatTokens("すりかえ");
-    const opened = await open(mine);
+    const [opened] = await open([mine, theirs]);
 
     opened.socket.send(JSON.stringify({ t: "hello", seatToken: theirs }));
     const answer = await opened.next();
@@ -174,7 +185,7 @@ describe("対戦準備をまとめて出す 1 通", () => {
     // 片方だけが引き直す対戦では、引き直す側はまだまとめて出せない。両座席が出せる対戦を使う。
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const tokens = await seatTokens(`まとめて-${attempt}`);
-      seats = await Promise.all(tokens.map((token) => open(token)));
+      seats = await open(tokens);
       for (const seat of seats) seat.socket.send(JSON.stringify({ t: "hello" }));
       syncs = await Promise.all(seats.map((seat) => seat.next()));
       if (syncs.every((sync) => sync.setup?.kind === "choose")) break;
@@ -210,7 +221,7 @@ describe("対戦準備をまとめて出す 1 通", () => {
     let found = false;
     for (let attempt = 0; attempt < 30 && !found; attempt += 1) {
       const tokens = await seatTokens(`ひきなおし-${attempt}`);
-      seats = await Promise.all(tokens.map((token) => open(token)));
+      seats = await open(tokens);
       for (const seat of seats) seat.socket.send(JSON.stringify({ t: "hello" }));
       syncs = await Promise.all(seats.map((seat) => seat.next()));
       const kinds = new Set(syncs.map((sync) => sync.setup?.kind ?? null));

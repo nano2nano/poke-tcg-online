@@ -10,7 +10,7 @@ import type { MatchRecord } from "../src/log.js";
 import { concede, viewFor, type Match } from "../src/match.js";
 import type { ServerMessage } from "../src/protocol.js";
 import { MatchRegistry } from "../src/registry.js";
-import { ensureCards } from "./helpers.js";
+import { ensureCards, startTossed } from "./helpers.js";
 import { startStorage } from "./worker.js";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -185,6 +185,7 @@ describe("AI どうしの対戦を立てる", () => {
     const { account, secret } = await arena.accounts.create("ひと", 0);
     const joined = arena.lobby.joinBot({ secret, deck: decks[0] }, account, bot, decks[1]);
     if (!joined.ok || !("seat" in joined)) throw new Error("AI と対戦できなかった");
+    startTossed(arena.registry);
     const { seatToken } = joined.seat;
     const match = arena.registry.bySeatToken(seatToken)!.match;
     const watcher = spectator();
