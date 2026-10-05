@@ -87,9 +87,10 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
             // 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。
             if (!firstPlayerShown && message.view.phase === "setup") {
               firstPlayerShown = true;
+              const choice = message.toss === message.firstPlayer ? "先攻" : "後攻";
               notices.push({
-                text: `${who(message.firstPlayer)}が先攻です`,
-                coins: { results: [true], faces: ["先攻", "後攻"] },
+                text: `${who(message.toss)}がコイントスに勝ち、${choice}を選びました`,
+                coins: { results: [true], faces: ["勝ち", "負け"] },
               });
             }
             seatViews = message.seatViews ?? null;

@@ -127,6 +127,8 @@ export interface Match {
   readonly startedAt: string;
   /** 先攻。コイントスに勝った座席が選んだ結果で、再生の入力である（2.5 節）。 */
   readonly firstPlayer: Player;
+  /** コイントスに勝った座席（2.5 節）。始まってから繋いだ座席にも、だれが選んだかを見せるのに使う。 */
+  readonly tossWinner: Player;
   /** 座席ごとの AI。人どうしの対戦では両方 null で、AI どうしの対戦では両方に座る。 */
   readonly bots: BotSeats;
   /**
@@ -219,6 +221,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     spectatorToken: options.spectatorToken,
     startedAt: options.startedAt,
     firstPlayer: firstPlayerOf(created.events),
+    tossWinner: tossWinner(seedCommitment.seed, options.decks),
     bots,
     botKnowledge,
     botRevisit,
@@ -1268,10 +1271,8 @@ export function tossWinner(seed: string, decks: [DeckList, DeckList]): Player {
 }
 
 /**
- * 選ばれた先攻で対戦を作る（2.5 節、6.2 節）。勝った座席が先攻を選んだら、エンジンがコイントスで
- * 先攻を決める局をそのまま使う。後攻を選んだときだけ先攻を明示で渡す。明示で渡すとエンジンはコインを
- * 引かないので、山札の並びは別になる。こうしておくと、選ぶ段が無かった頃の記録も同じ道で再生できる。
- * 対戦も再生もリプレイも、局はここで作る。
+ * 選ばれた先攻で局を作る（2.5 節、6.2 節）。先攻を明示で渡すとエンジンはコインを引かず、山札の並びが
+ * 変わるので、勝った座席が先攻ならコインを引いた局を使う。対戦も再生もリプレイも、局はここで作る。
  */
 export function startGame(
   seed: string,

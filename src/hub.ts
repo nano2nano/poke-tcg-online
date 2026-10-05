@@ -620,6 +620,7 @@ export class MatchHub {
       attacks: attacksFor(match, seat),
       mulligans: match.mulligans,
       firstPlayer: match.firstPlayer,
+      toss: match.tossWinner,
       clock: clockView(match, this.now()),
       seedCommit: match.seedCommitment.commit,
       spectatorToken: match.spectatorToken,
@@ -651,6 +652,7 @@ export class MatchHub {
       stateVersion: match.version,
       view: spectatorViewFor(match),
       firstPlayer: match.firstPlayer,
+      toss: match.tossWinner,
       clock: clockView(match, this.now()),
       seats: [
         { displayName: first.displayName, rating: first.rating },

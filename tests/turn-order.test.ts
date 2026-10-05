@@ -88,7 +88,7 @@ describe("先攻と後攻を選ぶ", () => {
     expect(match?.clocks[winner].bankMs).toBe(BANK_MS - 5_000);
     expect(match?.clocks[loser].bankMs).toBe(BANK_MS);
     for (const socket of sockets) {
-      expect(socket.sent.at(-1)).toMatchObject({ t: "sync", firstPlayer: loser });
+      expect(socket.sent.at(-1)).toMatchObject({ t: "sync", firstPlayer: loser, toss: winner });
     }
 
     // 決まったあとに選び直すことはできない。
@@ -112,6 +112,11 @@ describe("先攻と後攻を選ぶ", () => {
     expect(match?.firstPlayer).toBe(winner);
     expect(match?.clocks[winner].bankMs).toBe(0);
     expect(sockets[0].sent.at(-1)).toMatchObject({ t: "sync", firstPlayer: winner });
+
+    // 戻らなければ、次に答える 1 手の猶予を過ぎたところで時間切れになる。
+    arena.clock.now = deadline + MOVE_ALLOWANCE_MS;
+    arena.hub.sweepTimeouts();
+    expect(match?.result).toMatchObject({ kind: "timeout", winner: opponent(winner) });
   });
 
   // 開き直すたびに対戦を作るので、既定の 5 秒では足りないことがある。

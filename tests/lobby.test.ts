@@ -460,6 +460,17 @@ describe("続いている対戦", () => {
     });
   });
 
+  it("コイントスで落ちた対戦は、席を塞いだまま残さない", async () => {
+    ensureCards();
+    const arena = newArena();
+    arena.registry.toss = () => {
+      throw new Error("トスで落ちる");
+    };
+    await join(arena, await player(arena, "a", "おちる"));
+    await expect(join(arena, await player(arena, "b", "おちる"))).rejects.toThrow("トスで落ちる");
+    expect(arena.registry.overdue(Infinity)).toEqual([]);
+  });
+
   it("デッキが通らなくても、表示名を書き換えずに席を返す", async () => {
     ensureCards();
     const arena = newArena();

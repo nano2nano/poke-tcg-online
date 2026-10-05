@@ -2548,6 +2548,7 @@ function crowdedSync(handSize: number): object {
     attacks: null,
     mulligans: [],
     firstPlayer: 0,
+    toss: 0,
     clock: { bankMs: [600_000, 600_000], moveRemainingMs: 60_000, toMove: 0 },
     seedCommit: "0".repeat(64),
     spectatorToken: "観戦",

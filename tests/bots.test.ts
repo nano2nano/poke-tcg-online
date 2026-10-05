@@ -734,6 +734,8 @@ describe("AI の座席を開く", () => {
       );
     const first = join();
     if (!first.ok || !("seat" in first)) throw new Error("AI と対戦できなかった");
+    // 人がコイントスに勝った対戦は、人が選ぶまで始まらない。
+    startTossed(arena.registry);
     // 断るときは、続いている対戦の席を返す。画面を失っていても、そこへ戻れる。
     expect(join()).toMatchObject({ ok: false, code: BOT_MATCH_LIVE, seat: first.seat });
     expect(arena.registry.live()).toHaveLength(1);

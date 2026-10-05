@@ -150,12 +150,20 @@ export function useSeat(
           // 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。
           if (message.t === "sync" && !firstPlayerShown && message.view.phase === "setup") {
             firstPlayerShown = true;
-            show({
-              text:
-                message.firstPlayer === seated.seat
-                  ? "あなたが先攻です"
-                  : "相手が先攻です（あなたは後攻）",
-            });
+            const first =
+              message.firstPlayer === seated.seat
+                ? "あなたが先攻です"
+                : "相手が先攻です（あなたは後攻）";
+            // AI が勝った対戦は繋ぐ前に始まっているので、トスを見ないままここへ来る。
+            if (tossShown) show({ text: first });
+            else {
+              tossShown = true;
+              const won = message.toss === seated.seat;
+              show({
+                text: `コイントスに${won ? "勝ちました" : "負けました"}。${first}`,
+                coins: { results: [won], faces: ["勝ち", "負け"] },
+              });
+            }
           }
           for (const notice of noticesToShow(notices, seated.seat)) show(notice);
           acknowledge(message.stateVersion);

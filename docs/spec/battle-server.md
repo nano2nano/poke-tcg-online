@@ -131,6 +131,8 @@
   バンクは残らないので、そのまま戻らなければ次に答える 1 手の猶予を過ぎたところで時間切れになる。
 - 記録には決まった先攻だけを残し、選んだのか期限で決めたのかは区別しない。
 - AI が勝ったときは、AI が後攻を選ぶ（7.3 節）。
+- `sync` と `spectator-sync` も `toss` を運ぶ。AI が勝った対戦は人が繋ぐ前に始まっているので、
+  人の座席はトスを `pending` で見ないまま対戦に入る。
 
 ---
 
@@ -205,15 +207,15 @@ Durable Object はメモリから降ろされ、生きている対戦ごと消�
 
 サーバ → クライアント
 
-| `t`       | 中身                                                                                                                                                                                                    | 意味                                                                                                                                                 |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedDeck`, `attacks`, `mulligans`, `firstPlayer`, `clock`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る                                             |
-| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedDeck`, `attacks`, `mulligans`, `clock`                                                         | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                                                                 |
-| `reject`  | `reason`, `stateVersion`                                                                                                                                                                                | 手を受理しなかった。理由は 2.2 節の 3 値                                                                                                             |
-| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                                                                                                     | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                                                                    |
-| `pending` | `toss`                                                                                                                                                                                                  | 席は取れたが、対戦がまだ始まっていない。`toss` はコイントスに勝った座席で、シェアがそろうまで（6.4 節）は `null`。勝った座席が選ぶと始まる（2.5 節） |
-| `pong`    | なし                                                                                                                                                                                                    |                                                                                                                                                      |
-| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                                                                                                             | 受け取れなかった。接続は切らない                                                                                                                     |
+| `t`       | 中身                                                                                                                                                                                                            | 意味                                                                                                                                                 |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedDeck`, `attacks`, `mulligans`, `firstPlayer`, `toss`, `clock`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る                                             |
+| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedDeck`, `attacks`, `mulligans`, `clock`                                                                 | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                                                                 |
+| `reject`  | `reason`, `stateVersion`                                                                                                                                                                                        | 手を受理しなかった。理由は 2.2 節の 3 値                                                                                                             |
+| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                                                                                                             | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                                                                    |
+| `pending` | `toss`                                                                                                                                                                                                          | 席は取れたが、対戦がまだ始まっていない。`toss` はコイントスに勝った座席で、シェアがそろうまで（6.4 節）は `null`。勝った座席が選ぶと始まる（2.5 節） |
+| `pong`    | なし                                                                                                                                                                                                            |                                                                                                                                                      |
+| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                                                                                                                     | 受け取れなかった。接続は切らない                                                                                                                     |
 
 **形の違う 1 通は、受け手へ渡す前に断る。** 【決定】
 座席に就いた相手は、対戦が終わるまで何度でも送れる。`t` を読むだけで落ちる値（`null` など）を
@@ -419,11 +421,11 @@ Cloudflare Workers にはサーバから WebSocket の ping を送る手段が�
 
 サーバ → 観戦者
 
-| `t`               | 中身                                                    | 意味                           |
-| ----------------- | ------------------------------------------------------- | ------------------------------ |
-| `spectator-sync`  | `stateVersion`, `view`, `firstPlayer`, `clock`, `seats` | 局面一式。繋いだ直後と `hello` |
-| `spectator-delta` | `stateVersion`, `events`, `view`, `clock`               | 1 手が適用された               |
-| `spectator-ended` | `matchResult`, `outcome`, `view`                        | 対戦が終わった。送ったら閉じる |
+| `t`               | 中身                                                            | 意味                           |
+| ----------------- | --------------------------------------------------------------- | ------------------------------ |
+| `spectator-sync`  | `stateVersion`, `view`, `firstPlayer`, `toss`, `clock`, `seats` | 局面一式。繋いだ直後と `hello` |
+| `spectator-delta` | `stateVersion`, `events`, `view`, `clock`                       | 1 手が適用された               |
+| `spectator-ended` | `matchResult`, `outcome`, `view`                                | 対戦が終わった。送ったら閉じる |
 
 両座席とも AI の対戦（§7.4）でだけ、3 つとも両座席の射影 `seatViews`（`[playerView(0), playerView(1)]`）を持ち、
 `spectator-delta` は指された手と指した座席 `moved` も持つ。人が 1 人でも座る対戦には載せない。
@@ -647,12 +649,12 @@ events = projectEvents(appliedEvents, "spectator")
 
 ```jsonc
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "matchId": "...",
   "engine": {
     "commit": "...", // ビルドのときに git から（§8）。無ければ "unknown"
     "cardDataSha256": "...", // data/cards.generated.json のハッシュ
-    "replaySchemaVersion": 3,
+    "replaySchemaVersion": 4,
   },
   "seed": "9b1c7f0a4e2d6835a1f094c73b2e5d68", // 16 進 32 桁（§6.4）
   "seedNonce": "...", // §6.4 の公開検証用

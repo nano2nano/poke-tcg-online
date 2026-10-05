@@ -598,7 +598,15 @@ export class Lobby {
       bots,
     };
     this.registry.addPending(pending);
-    if (allRevealed(pending)) this.registry.toss(pending, nowMs);
+    if (allRevealed(pending)) {
+      // 席を返さずに投げるので、残すと誰も繋がない対戦が期限まで席を塞ぐ。
+      try {
+        this.registry.toss(pending, nowMs);
+      } catch (error) {
+        this.registry.dropPending(pending);
+        throw error;
+      }
+    }
     const seated = (seat: Player): Seated => ({
       matchId: pending.matchId,
       seat,

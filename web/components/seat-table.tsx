@@ -177,7 +177,7 @@ export function SeatTable({
           state.toss === null
           ? "相手が席に着くのを待っています"
           : state.toss === state.seat
-            ? "先攻か後攻かを選んでください"
+            ? "先攻か後攻かを選んでください（選ぶ時間は持ち時間から引かれます）"
             : "相手が先攻か後攻かを選んでいます";
 
   return (

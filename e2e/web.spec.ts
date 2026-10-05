@@ -1071,6 +1071,8 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
           attacks: null,
           mulligans: [],
           firstPlayer: view.viewer,
+          // 相手がトスに勝って後攻を選んだ、AI との対戦の始まりと同じ形にする。
+          toss: view.viewer === 0 ? 1 : 0,
           clock,
           seedCommit: "0".repeat(64),
           spectatorToken: "差し替えた観戦",
@@ -1111,6 +1113,19 @@ async function seatWithEvents(page: Page, view: PlayerView) {
   await expect(page.locator("#results .result")).toHaveCount(0);
   return send;
 }
+
+test("トスを見ないまま始まった対戦では、始まったときにトスの結果をコインで見せる", async ({
+  page,
+}) => {
+  const [, placed] = placingActive();
+  await mockSeat(page, placed[0]!);
+  await page.goto("/");
+  // 相手が勝ったトスなので、コインは負けの向きで止まる。
+  await expect(page.locator("#results .result").first().locator(".coin")).toHaveAttribute(
+    "data-face",
+    "tails",
+  );
+});
 
 function activeOf(view: PlayerView) {
   const active = view.self.active;
@@ -2551,7 +2566,7 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
     await expect(page.locator(`#watch-side-${player} .hand .card[data-def-id]`)).not.toHaveCount(0);
   }
 
-  // 人が選ぶまでは、先攻のコインが回り終えてから 1 秒置いて送る。
+  // 人が選ぶまでは、コイントスのコインが回り終えてから 1 秒置いて送る。
   await page.clock.runFor(1_500);
   await expect(position).toHaveAttribute("data-shown", "0");
   await page.clock.runFor(1_000);

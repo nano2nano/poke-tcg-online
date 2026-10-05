@@ -131,6 +131,8 @@ export interface SyncMessage {
   mulligans: MulliganReveal[];
   /** 先攻。決めた `game-started` は対戦を作るときのイベントで、`delta` には載らない。 */
   firstPlayer: Player;
+  /** コイントスに勝った座席（2.5 節）。トスを見る前に対戦が始まっていた座席にも、だれが選んだかを見せる。 */
+  toss: Player;
   clock: ClockView;
   /** シャッフルの公正さのコミット（6.4 節）。対戦中に seed そのものは渡さない。 */
   seedCommit: string;
@@ -179,6 +181,8 @@ export interface SpectatorSyncMessage {
   stateVersion: number;
   view: SpectatorView;
   firstPlayer: Player;
+  /** コイントスに勝った座席（2.5 節）。 */
+  toss: Player;
   clock: ClockView;
   /**
    * 公開 id は渡さない。観戦トークンは座席の外へ配られる値なので、それを持つだけで

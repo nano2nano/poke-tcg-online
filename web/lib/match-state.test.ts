@@ -64,6 +64,7 @@ function syncOf(match: Match, seat: Player): SyncMessage {
     attacks: attacksFor(match, seat),
     mulligans: match.mulligans,
     firstPlayer: match.firstPlayer,
+    toss: match.tossWinner,
     clock: clockView(match, 0),
     seedCommit: match.seedCommitment.commit,
     spectatorToken: match.spectatorToken,
@@ -206,6 +207,7 @@ describe("観戦の状態", () => {
     stateVersion: match.version,
     view: spectatorViewFor(match),
     firstPlayer: match.firstPlayer,
+    toss: match.tossWinner,
     clock: clockView(match, 0),
     seats: [
       { displayName: "あ", rating: 1500 },
