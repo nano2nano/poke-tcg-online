@@ -110,6 +110,13 @@ export function handCount(side: Side): number {
   return "hand" in side ? side.hand.length : side.handCount;
 }
 
+interface Counts {
+  deck: number;
+  prizes: number;
+  /** 中身が見える手札は、カードの ID で追えるので 0 にする。 */
+  hiddenHand: number;
+}
+
 export function boardMoves(
   before: BoardSides,
   after: BoardSides,
@@ -124,57 +131,61 @@ export function boardMoves(
     counted.set(key, order + 1);
     return { place, order };
   };
-  const change = (name: BoardSide) => {
+  const changes: Partial<Record<BoardSide, Counts>> = {};
+  for (const name of SIDES) {
     const [from, to] = [before[name], after[name]];
-    if (from === null || to === null) return null;
-    return {
+    if (from === null || to === null) continue;
+    changes[name] = {
       deck: to.deckCount - from.deckCount,
       prizes: to.prizeCount - from.prizeCount,
-      // 中身が見える手札は、カードの ID で追える。
       hiddenHand: "hand" in to ? 0 : to.handCount - handCount(from),
     };
-  };
+  }
 
   const departures = new Map<string, Move>();
-  const intoDeck = new Set<BoardSide>();
   for (const id of was) {
     if (now.has(id)) continue;
     const at = seenAfter.get(id);
     const from = seenBefore.get(id)!;
-    let zone: Place["zone"] | null = null;
-    let side = at?.side ?? from.side;
-    if (at?.zone === "discard" || at?.zone === "lost") zone = at.zone;
-    else if (at === undefined && from.side !== null) {
-      const counts = change(from.side);
+    let place: Place | null = null;
+    if (at?.zone === "discard" || at?.zone === "lost") {
+      // 山の上に別のカードが載っただけなら、動いていない。
+      const stayed = at.side === from.side && at.zone === from.zone;
+      if (!stayed && at.side !== null) place = { side: at.side, zone: at.zone };
+    } else if (at === undefined && from.side !== null && changes[from.side] !== undefined) {
+      const counts = changes[from.side]!;
       const into = [
-        counts !== null && counts.prizes > 0 && ("prizes" as const),
-        counts !== null && counts.deck > 0 && ("deck" as const),
-        counts !== null && counts.hiddenHand > 0 && ("hand" as const),
+        counts.prizes > 0 && ("prizes" as const),
+        counts.deck > 0 && ("deck" as const),
+        counts.hiddenHand > 0 && ("hand" as const),
       ].filter((each) => each !== false);
-      // 見えている手札のカードが見えなくなるのは、山札かサイドへ行ったときだけである。
-      // 同じ局面で引き直すと山札の枚数は増えないので、サイドでなければ山札とみなす。
-      zone =
-        into.length === 1 ? into[0]! : from.zone === "hand" && into.length === 0 ? "deck" : null;
-      side = from.side;
+      // 山札を切った側では、手札を山札へもどして同じ枚数を引くと、山札の枚数が変わらない。
+      // 見えている手札のカードが見えなくなる先は、山札のほかにはサイドしかない。
+      const refilled = into.length === 0 && from.zone === "hand" && shuffled.includes(from.side);
+      const zone = into.length === 1 ? into[0]! : refilled ? "deck" : null;
+      if (zone !== null) place = { side: from.side, zone };
     }
-    if (zone === null || side === null) continue;
-    if (zone === "deck") intoDeck.add(side);
-    departures.set(id, move("to", { side, zone }));
+    if (place !== null) departures.set(id, move("to", place));
   }
 
-  const arrivals = new Map<string, Move>();
+  const intoDeck = new Set(
+    [...departures.values()].flatMap(({ place }) => (place.zone === "deck" ? [place.side] : [])),
+  );
   /** 見えていなかったカードが、その側のどこから出てきうるか。 */
-  const sources = (name: BoardSide): Place["zone"][] => {
-    const counts = change(name);
-    if (counts === null) return [];
-    return [
+  const sources: Partial<Record<BoardSide, Place["zone"][]>> = {};
+  for (const name of SIDES) {
+    const counts = changes[name];
+    if (counts === undefined) continue;
+    sources[name] = [
       counts.prizes < 0 && ("prizes" as const),
       (counts.deck < 0 || intoDeck.has(name)) && ("deck" as const),
       counts.hiddenHand < 0 && ("hand" as const),
     ].filter((each) => each !== false);
-  };
+  }
   // スタジアムはどちらの側にも置かれないので、伏せた手札からだけ出せた側が片方だけのときに限る。
-  const stadiumFrom = SIDES.filter((name) => sources(name).join() === "hand");
+  const stadiumFrom = SIDES.filter((name) => sources[name]?.join() === "hand");
+
+  const arrivals = new Map<string, Move>();
   for (const id of now) {
     if (was.has(id)) continue;
     const at = seenAfter.get(id)!;
@@ -185,7 +196,7 @@ export function boardMoves(
     } else if (from === undefined && at.side === null) {
       if (stadiumFrom.length === 1) place = { side: stadiumFrom[0]!, zone: "hand" };
     } else if (from === undefined && at.side !== null) {
-      const out = sources(at.side);
+      const out = sources[at.side] ?? [];
       if (out.length === 1) place = { side: at.side, zone: out[0]! };
     }
     if (place !== null) arrivals.set(id, move("from", place));
@@ -193,9 +204,8 @@ export function boardMoves(
 
   const backs: BoardMoves["backs"] = {};
   for (const name of SIDES) {
-    const [from, to] = [before[name], after[name]];
-    const counts = change(name);
-    if (from === null || to === null || counts === null || counts.hiddenHand <= 0) continue;
+    const [to, counts] = [after[name], changes[name]];
+    if (to === null || counts === undefined || counts.hiddenHand <= 0) continue;
     if (counts.prizes < 0 === counts.deck < 0) continue;
     // 手札から出したカードがあると、手札の増えた数は引いた数より少ない。減った山札かサイドの数だけ動かす。
     const drawn = -(counts.prizes < 0 ? counts.prizes : counts.deck);

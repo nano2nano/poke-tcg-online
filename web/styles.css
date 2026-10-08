@@ -1476,9 +1476,6 @@ button.choice-card:enabled > .card {
 :root[data-no-motion] :is(.result, .coin-inner, .hit, .showcase) {
   animation: none;
 }
-:root[data-no-motion] .shuffling {
-  display: none;
-}
 
 .watch-controls label {
   margin: 4px 0;

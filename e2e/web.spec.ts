@@ -1537,12 +1537,37 @@ test("手札のカードが山札へ入ると、写しを山札まで動かし�
   await expect(ghost).toHaveCount(0);
 });
 
+test("写しが動いているあいだに演出を切ると、写しを消す", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
+  const next = structuredClone(view);
+  if (!("hand" in next.self)) throw new Error("手札が見えない");
+  next.self.hand.splice(0, 1);
+  next.self.deckCount += 1;
+  send([], next);
+  const ghost = page.locator("body > .card[data-moving]");
+  await expect(ghost).toHaveCount(1);
+  await setMotion(page, false);
+  await expect(ghost).toHaveCount(0);
+});
+
 test("山札を切ると、切った側の山札を広げて重ね直す", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
   send([{ kind: "deck-shuffled", player: 1 - view.viewer }]);
   const shuffling = page.locator('#opponent [data-zone="deck"] .shuffling');
   await expect(shuffling).toBeVisible();
+  // 見せ終える前にまた切ったら、広げるところからやり直す。
+  const progress = () =>
+    shuffling.evaluate((node) => Number(node.getAnimations({ subtree: true })[0]!.currentTime));
+  await shuffling.evaluate((node) =>
+    node.getAnimations({ subtree: true }).forEach((animation) => (animation.currentTime = 200)),
+  );
+  expect(await progress()).toBeGreaterThan(100);
+  send([{ kind: "deck-shuffled", player: 1 - view.viewer }]);
+  await expect.poll(progress).toBeLessThan(1);
   await expect(page.locator('#self [data-zone="deck"] .shuffling')).toHaveCount(0);
   // 切ったことは結果の通知には出さない。
   await expect(page.locator("#results .result")).toHaveCount(0);

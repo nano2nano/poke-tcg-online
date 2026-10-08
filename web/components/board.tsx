@@ -270,6 +270,8 @@ function ghostOf(card: HTMLElement): HTMLElement {
   const rect = card.getBoundingClientRect();
   const [width, height] = [card.offsetWidth, card.offsetHeight];
   ghost.removeAttribute("data-instance-id");
+  // 動いているあいだに押されたりマウスが載ったりしても、下のカードへ通す。読み上げにも出さない。
+  ghost.inert = true;
   ghost.style.cssText = "";
   Object.assign(ghost.style, {
     position: "fixed",
@@ -289,7 +291,8 @@ function ghostOf(card: HTMLElement): HTMLElement {
  */
 function depart(ghost: HTMLElement, target: Element, order: number): Animation {
   document.body.append(ghost);
-  const landing = target.querySelector(".card");
+  // 手札とサイドでは、増えたカードは後ろに並ぶ。
+  const landing = [...target.querySelectorAll(".card")].at(-1) ?? null;
   const { x, y } = gapBetween(ghost, landing ?? target);
   const scale = landing === null ? 1 : landing.getBoundingClientRect().width / ghost.offsetWidth;
   const animation = ghost.animate(
@@ -333,7 +336,13 @@ class Departures extends Component<{
     });
   }
 
-  override componentDidUpdate(_props: unknown, _state: unknown, leaving: Leaving[] | null) {
+  override componentDidUpdate(
+    previous: Readonly<{ moves: BoardMoves }>,
+    _state: unknown,
+    leaving: Leaving[] | null,
+  ) {
+    // 演出を切ったら、動いている写しも消す。写しは盤面の外にあり、CSS では止まらない。
+    if (this.props.moves === NO_MOVES && previous.moves !== NO_MOVES) this.cancel();
     const area = this.props.board.current;
     if (leaving === null || area === null) return;
     for (const { ghost, move } of leaving) {
@@ -346,7 +355,12 @@ class Departures extends Component<{
   }
 
   override componentWillUnmount() {
+    this.cancel();
+  }
+
+  private cancel() {
     for (const animation of this.ghosts) animation.cancel();
+    this.ghosts.clear();
   }
 
   override render() {
@@ -598,6 +612,9 @@ export function Board({
   if (shown.sides.near !== near || shown.sides.far !== far || shown.sides.stadium !== stadium) {
     const sides = { near, far, stadium };
     setShown({ sides, moves: animate ? boardMoves(shown.sides, sides, shuffled) : NO_MOVES });
+  } else if (!animate && shown.moves !== NO_MOVES) {
+    // 局面の途中で演出を切ったら、決めてあった動きも捨てる。あとで演出を戻しても、前の動きをやり直さない。
+    setShown({ ...shown, moves: NO_MOVES });
   }
   const area = useRef<HTMLDivElement>(null);
   const body = (
@@ -792,13 +809,23 @@ function HiddenHandCard({ index, side }: { index: number; side: BoardSide }) {
  */
 function DeckPile({ count, side }: { count: number; side: BoardSide }) {
   const moves = use(Moves);
-  const [done, setDone] = useState<BoardMoves | null>(null);
-  const shuffling = count > 0 && moves.shuffled.includes(side) && done !== moves;
+  // 切った回数を数え、見せ終える前にまた切ったら、広げるところからやり直す。演出を切ったら見せるのをやめる。
+  const [shuffles, setShuffles] = useState({ moves, started: 0, ended: 0 });
+  if (shuffles.moves !== moves) {
+    const started = shuffles.started + (count > 0 && moves.shuffled.includes(side) ? 1 : 0);
+    setShuffles({ moves, started, ended: moves === NO_MOVES ? started : shuffles.ended });
+  }
+  const { started, ended } = shuffles;
   return (
     <Zone name="deck" label="山札" count={count}>
       {count > 0 ? <CardBack /> : <EmptySlot />}
-      {shuffling && (
-        <div className="shuffling" aria-hidden="true" onAnimationEnd={() => setDone(moves)}>
+      {started > ended && (
+        <div
+          key={started}
+          className="shuffling"
+          aria-hidden="true"
+          onAnimationEnd={() => setShuffles((current) => ({ ...current, ended: started }))}
+        >
           <div className="card back" />
           <div className="card back" />
         </div>

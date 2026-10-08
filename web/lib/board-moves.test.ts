@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PlayerEvent, PlayerView } from "../../src/engine.js";
 import { toMove, viewFor } from "../../src/match.js";
 import { ensureCards, finishSetup, newMatch } from "../../tests/helpers.js";
-import { boardMoves, shuffledDecks, type BoardSides } from "./board-moves.js";
+import { boardMoves, shuffledDecks, type BoardSide, type BoardSides } from "./board-moves.js";
 
 /** 準備を終えた盤面を、最初に指す座席から見たもの。 */
 function firstTurn(): PlayerView {
@@ -27,26 +27,40 @@ function activeOf(side: PlayerView["self"] | PlayerView["opponent"]) {
   return active;
 }
 
-const moves = (before: PlayerView, after: PlayerView) =>
-  boardMoves(sides(before), sides(after), []);
+const moves = (before: PlayerView, after: PlayerView, shuffled: readonly BoardSide[] = []) =>
+  boardMoves(sides(before), sides(after), shuffled);
+
+/** 手札を全部、別の ID のカードに引き直した局面。山札とサイドの枚数は変えない。 */
+function redrawn(before: PlayerView) {
+  const after = structuredClone(before);
+  const hand = handOf(after);
+  const returned = hand.map((card) => card.instanceId);
+  hand.splice(
+    0,
+    hand.length,
+    ...hand.map((card, index) => ({ ...card, instanceId: `引いた ${index}` })),
+  );
+  return { after, returned };
+}
 
 describe("boardMoves", () => {
-  it("手札を山札へもどして同じ枚数を引くと、山札の枚数が変わらなくても山札へ入れて山札から出す", () => {
+  it("手札を山札へもどして切り、同じ枚数を引くと、山札の枚数が変わらなくても山札へ入れて山札から出す", () => {
     const before = firstTurn();
-    const after = structuredClone(before);
-    const hand = handOf(after);
-    const returned = hand.map((card) => card.instanceId);
-    hand.splice(
-      0,
-      hand.length,
-      ...hand.map((card, index) => ({ ...card, instanceId: `引いた ${index}` })),
-    );
-    const { arrivals, departures } = moves(before, after);
+    const { after, returned } = redrawn(before);
+    const { arrivals, departures } = moves(before, after, ["near"]);
     expect(returned.map((id) => departures.get(id))).toEqual(
       returned.map((_, order) => ({ place: { side: "near", zone: "deck" }, order })),
     );
     expect(arrivals.get("引いた 0")).toEqual({ place: { side: "near", zone: "deck" }, order: 0 });
     expect(arrivals.get("引いた 1")?.order).toBe(1);
+  });
+
+  it("山札もサイドも枚数が変わらず、山札も切っていなければ、手札の行き先と来た場所は分からないので動かさない", () => {
+    const before = firstTurn();
+    const { after } = redrawn(before);
+    const { arrivals, departures } = moves(before, after, ["far"]);
+    expect(departures.size).toBe(0);
+    expect(arrivals.size).toBe(0);
   });
 
   it("手札のカードをサイドへ置くと、サイドへ入れる", () => {
@@ -69,6 +83,17 @@ describe("boardMoves", () => {
     // 上に載ったカードは、トラッシュに描くので要素ごと動く。
     expect(departures.has(top!.instanceId)).toBe(false);
     expect(departures.get(under!.instanceId)?.place).toEqual({ side: "near", zone: "discard" });
+  });
+
+  it("トラッシュの上のカードは、上に別のカードが載っても動かさない", () => {
+    const view = firstTurn();
+    const before = structuredClone(view);
+    const [old] = handOf(before).splice(0, 1);
+    before.self.discard.push(old!);
+    const after = structuredClone(before);
+    const [card] = handOf(after).splice(0, 1);
+    after.self.discard.push(card!);
+    expect(moves(before, after).departures.size).toBe(0);
   });
 
   it("トラッシュの下にあったカードを手札へ加えると、トラッシュから出す", () => {
