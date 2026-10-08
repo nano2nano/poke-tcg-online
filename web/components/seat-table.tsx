@@ -248,6 +248,7 @@ export function SeatTable({
               near={view?.self ?? null}
               far={view?.opponent ?? null}
               stadium={view?.stadium ?? null}
+              shuffled={state.shuffled.map((player) => (player === state.seat ? "near" : "far"))}
               drops={drops}
             >
               <div className="board-side">

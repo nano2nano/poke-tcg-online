@@ -13,6 +13,7 @@ import type { ServerMessage } from "../../src/protocol.js";
 import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl } from "./connection.js";
 import { describeMove, moveTargets } from "./describe-move.js";
+import { shuffledDecks } from "./board-moves.js";
 import { describeEvents, noticesToShow, seatDisplayName, type Notice } from "./describe.js";
 import { initialWatchState, watchReducer, type WatchState } from "./match-state.js";
 import {
@@ -97,6 +98,7 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
             arrive({
               stateVersion: message.stateVersion,
               ...board(message.view, seatViews),
+              shuffled: [],
               clock: message.clock,
               moved: null,
               lines: [],
@@ -122,6 +124,7 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
             arrive({
               stateVersion: message.stateVersion,
               ...board(message.view, seatViews),
+              shuffled: shuffledDecks(message.events),
               clock: message.clock,
               moved,
               lines: notices.map((notice) => notice.text),

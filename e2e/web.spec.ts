@@ -1211,7 +1211,7 @@ test("ダメージの数字は、ポケモンが動き終えてからその位�
   await expect(pokemon).toHaveAttribute("data-moving");
   await page.clock.runFor(200);
   await expect(page.locator(".hit")).toHaveCount(0);
-  await page.clock.runFor(300);
+  await page.clock.runFor(700);
   const hit = page.locator(".hit");
   await expect(hit).toBeVisible();
   const [box, spot] = [await pokemon.boundingBox(), await hit.boundingBox()];
@@ -1330,6 +1330,16 @@ async function newestHandCard(page: Page, next: PlayerView) {
   return hand.last();
 }
 
+/**
+ * 盤面のアニメーションを止めたまま進める。`page.clock` は Web Animations の時計を止めないので、
+ * 負荷が高いと、来た場所を測る前に動き終えてしまう。
+ */
+async function holdAnimations(page: Page) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Animation.enable");
+  await cdp.send("Animation.setPlaybackRate", { playbackRate: 0 });
+}
+
 /** 入ったカードの動きを始めに戻して止め、そのときのカードの中心と `from` の要素の中心の隔たり。 */
 async function arrivalGap(card: Locator, from: string) {
   await expect(card).toHaveAttribute("data-moving", "arriving");
@@ -1353,6 +1363,7 @@ const animationsOf = (card: Locator) => card.evaluate((node) => node.getAnimatio
 test("サイドを取ると、取ったカードをサイドから手札へ動かす", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
   const next = drawnFrom(view, "prizeCount");
   send([], next);
   const card = await newestHandCard(page, next);
@@ -1364,6 +1375,7 @@ test("山札から引くと、引いたカードを山札から手札へ動か�
 }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
   const next = drawnFrom(view, "deckCount");
   send([], next);
   const card = await newestHandCard(page, next);
@@ -1375,6 +1387,7 @@ test("山札から引くと、引いたカードを山札から手札へ動か�
 test("動いている途中で次の局面が届いても、手札へ入るカードを止めない", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
   const next = drawnFrom(view, "deckCount");
   send([], next);
   const card = await newestHandCard(page, next);
@@ -1402,6 +1415,7 @@ test("サイドと山札が一緒に減ると、どちらから来たか分か�
 test("相手が山札から引くと、伏せた手札に増えたカードを相手の山札から動かす", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
   // 1 枚を手札から出し、2 枚引いた局面。
   const next = structuredClone(view);
   next.opponent.handCount += 1;
@@ -1442,6 +1456,7 @@ test("相手が手札から出したカードは、相手の手札から動か�
 }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
   const { next, event, card } = opponentAttaches(view);
   send([event], next);
   const attached = page.locator(`#opponent [data-zone="active"] .attached .card`).last();
@@ -1491,6 +1506,80 @@ test("前の局面でスタジアムに見えていたカードが手札に入�
   await expect(page.locator('[data-zone="stadium"] .card[data-def-id]')).toHaveCount(1);
   send([], next);
   expect(await animationsOf(await newestHandCard(page, next))).toBe(0);
+});
+
+test("手札のカードが山札へ入ると、ゴーストを山札まで動かして消す", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
+  const next = structuredClone(view);
+  if (!("hand" in next.self)) throw new Error("手札が見えない");
+  const [card] = next.self.hand.splice(0, 1);
+  next.self.deckCount += 1;
+  send([], next);
+  const ghost = page.locator("body > .card[data-moving]");
+  await expect(ghost).toHaveAttribute("data-def-id", card!.defId);
+  // 動き終える直前で止め、山札のカードに重なっているかを見る。
+  const gap = await ghost.evaluate((node) => {
+    for (const animation of node.getAnimations()) {
+      animation.pause();
+      animation.currentTime = Number(animation.effect!.getComputedTiming().endTime) - 1;
+    }
+    const deck = document.querySelector('#self .mat [data-zone="deck"] .card')!;
+    const [to, at] = [deck.getBoundingClientRect(), node.getBoundingClientRect()];
+    return Math.hypot(
+      to.left + to.width / 2 - (at.left + at.width / 2),
+      to.top + to.height / 2 - (at.top + at.height / 2),
+    );
+  });
+  expect(gap).toBeLessThan(2);
+  await ghost.evaluate((node) => node.getAnimations().forEach((animation) => animation.finish()));
+  await expect(ghost).toHaveCount(0);
+});
+
+test("ゴーストが動いているあいだに演出を切ると、ゴーストを消す", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
+  const next = structuredClone(view);
+  if (!("hand" in next.self)) throw new Error("手札が見えない");
+  next.self.hand.splice(0, 1);
+  next.self.deckCount += 1;
+  send([], next);
+  const ghost = page.locator("body > .card[data-moving]");
+  await expect(ghost).toHaveCount(1);
+  await setMotion(page, false);
+  await expect(ghost).toHaveCount(0);
+});
+
+test("山札を切ると、切った側の山札を広げて重ね直す", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  await holdAnimations(page);
+  send([{ kind: "deck-shuffled", player: 1 - view.viewer }]);
+  const shuffling = page.locator('#opponent [data-zone="deck"] .shuffling');
+  await expect(shuffling).toBeVisible();
+  // 見せ終える前にまた切ったら、広げるところからやり直す。
+  const progress = () =>
+    shuffling.evaluate((node) => Number(node.getAnimations({ subtree: true })[0]!.currentTime));
+  await shuffling.evaluate((node) =>
+    node.getAnimations({ subtree: true }).forEach((animation) => (animation.currentTime = 200)),
+  );
+  expect(await progress()).toBeGreaterThan(100);
+  send([{ kind: "deck-shuffled", player: 1 - view.viewer }]);
+  await expect.poll(progress).toBeLessThan(1);
+  await expect(page.locator('#self [data-zone="deck"] .shuffling')).toHaveCount(0);
+  // 切ったことは結果の通知には出さない。
+  await expect(page.locator("#results .result")).toHaveCount(0);
+  await shuffling.evaluate((node) =>
+    node.getAnimations({ subtree: true }).forEach((animation) => animation.finish()),
+  );
+  await expect(shuffling).toHaveCount(0);
+  await setMotion(page, false);
+  send([{ kind: "deck-shuffled", player: view.viewer }]);
+  await expect(page.locator('#self [data-zone="deck"]')).toBeVisible();
+  await page.clock.runFor(100);
+  await expect(page.locator(".shuffling")).toHaveCount(0);
 });
 
 test("画面で演出を切っていたら、引いたカードを動かさずに手札に置く", async ({ page }) => {
@@ -2586,6 +2675,39 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
   await page.selectOption("#watch-speed", "0");
   await page.click("#watch-play");
   await expect(position).toHaveAttribute("data-shown", "5");
+});
+
+test("観戦で戻ったときは、山札を切って見せない", async ({ page }) => {
+  // 山札を切るのは、1 手目の座席 1 だけにする。AI の手でも、種によっては山札を切る。
+  const messages = (await botWatchMessages(2)).map((message, index) => {
+    const parsed = JSON.parse(message) as { events?: Record<string, unknown>[] };
+    if (parsed.events === undefined) return message;
+    const events = parsed.events.filter(({ kind }) => kind !== "deck-shuffled");
+    if (index === 1) events.push({ ...parsed.events[0], kind: "deck-shuffled", player: 1 });
+    return JSON.stringify({ ...parsed, events });
+  });
+  await page.clock.install();
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    for (const message of messages) ws.send(message);
+  });
+  await page.goto("/watch/e2e-bot-watch");
+  await holdAnimations(page);
+  const position = page.locator("#watch-position");
+  await expect(position).toHaveAttribute("data-latest", "2");
+  await page.click("#watch-play");
+  const overlay = page.locator('#watch-side-1 [data-zone="deck"] .shuffling');
+  await page.click("#watch-forward");
+  await expect(position).toHaveAttribute("data-shown", "1");
+  await expect(overlay).toBeVisible();
+  await overlay.evaluate((node) =>
+    node.getAnimations({ subtree: true }).forEach((animation) => animation.finish()),
+  );
+  await expect(overlay).toHaveCount(0);
+  await page.click("#watch-forward");
+  await page.click("#watch-back");
+  await expect(position).toHaveAttribute("data-shown", "1");
+  await page.clock.runFor(100);
+  await expect(overlay).toHaveCount(0);
 });
 
 /** 設定のダイアログを開いて、演出を出すかを切り替える。 */

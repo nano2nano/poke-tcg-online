@@ -16,6 +16,7 @@ function frame(stateVersion: number, open: boolean): WatchFrame {
     open,
     sides: [{} as Side, {} as Side],
     stadium: null,
+    shuffled: [],
     clock: null,
     moved: null,
     lines: [],

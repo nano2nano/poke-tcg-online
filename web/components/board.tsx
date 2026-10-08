@@ -6,6 +6,7 @@
  */
 
 import {
+  Component,
   createContext,
   memo,
   use,
@@ -33,7 +34,17 @@ import {
   pokemonSpot,
   type DropSpot,
 } from "../lib/card-drops.js";
-import { MOVE_SECONDS, SETTLE_MS } from "../lib/motion.js";
+import { MOVE_EASING, MOVE_MS, SETTLE_MS, staggerMs } from "../lib/motion.js";
+import {
+  boardMoves,
+  handCount,
+  NO_MOVES,
+  type BoardMoves,
+  type BoardSide,
+  type BoardSides,
+  type Move,
+  type Place,
+} from "../lib/board-moves.js";
 import { handSubject, pokemonSubject, STADIUM_SUBJECT } from "../lib/card-menu.js";
 import { useZoomable, type ZoomTarget } from "../lib/zoom.js";
 import {
@@ -106,7 +117,7 @@ export function CardFace({
   );
   const frame = use(BoardFrame);
   const moving = useMovingMark(face, frame);
-  useArrival(face, use(Arrivals).cards.get(instanceId ?? ""));
+  useArrival(face, use(Moves).arrivals.get(instanceId ?? ""));
   const zoomable = useZoomable(zoom);
   const failed = useEffectEvent(() => {
     noteFailedImage();
@@ -128,6 +139,7 @@ export function CardFace({
     className: classes.filter(Boolean).join(" "),
     ...zoomable,
     "data-def-id": defId,
+    "data-instance-id": instanceId,
     "data-kind": card?.kind ?? "",
     "data-type": card?.type,
     "data-half": card?.stadiumHalf,
@@ -190,142 +202,172 @@ function useMovingMark(element: RefObject<HTMLElement | null>, frame: object | u
   };
 }
 
-/**
- * 前の局面で盤面のどこにも見えていなかったカードが、どちらの側のどこから来たか。山札とサイドのカードと、
- * 伏せた手札のカードは射影にカードの ID が無いので、`layoutId` では動かせない。
- */
-interface Arrival {
-  side: "near" | "far";
-  zone: "prizes" | "deck" | "hand";
-}
-
-interface BoardArrivals {
-  cards: ReadonlyMap<string, Arrival>;
-  /** 伏せた手札で、この局面に引いたカードの位置（何枚目から）と来た場所。 */
-  backs: Partial<Record<Arrival["side"], { from: number; zone: Arrival["zone"] }>>;
-}
-
-const Arrivals = createContext<BoardArrivals>({ cards: new Map(), backs: {} });
-
-/**
- * 局面が変わって盤面に新しく見えたカードと、来た場所を決める。サイドと山札のどちらか一方だけが減っていれば、
- * 手札に入ったカードはそこから来たとみなす。伏せた手札が減り、山札もサイドも変わっていなければ、場に新しく
- * 見えたカードはその手札から出たとみなす。どちらとも決まらなければ動かさない。
- */
-function boardArrivals(before: BoardSides, after: BoardSides): BoardArrivals {
-  const cards = new Map<string, Arrival>();
-  const backs: BoardArrivals["backs"] = {};
-  const played: Arrival["side"][] = [];
-  const shown = new Set(shownIds(before));
-  const unseen = (list: readonly CardInstance[]) =>
-    list.filter((card) => !shown.has(card.instanceId));
-  for (const side of ["near", "far"] as const) {
-    const [was, now] = [before[side], after[side]];
-    if (was === null || now === null) continue;
-    const [prizes, deck] = [now.prizeCount < was.prizeCount, now.deckCount < was.deckCount];
-    const zone = prizes ? "prizes" : "deck";
-    if ("hand" in now) {
-      if (prizes !== deck) {
-        for (const card of unseen(now.hand)) cards.set(card.instanceId, { side, zone });
-      }
-      continue;
-    }
-    const change = now.handCount - handCount(was);
-    if (change > 0 && prizes !== deck) {
-      // 手札から出たカードがあると、手札の増えた数は引いた数より少ない。減った山札かサイドの数だけ動かす。
-      const drawn = prizes ? was.prizeCount - now.prizeCount : was.deckCount - now.deckCount;
-      backs[side] = { from: Math.max(now.handCount - drawn, 0), zone };
-    }
-    // 観戦で戻って見るときは、手札が減って山札が増えることがある。
-    if (change < 0 && now.deckCount === was.deckCount && now.prizeCount === was.prizeCount) {
-      played.push(side);
-      for (const card of unseen(fieldCards(now)))
-        cards.set(card.instanceId, { side, zone: "hand" });
-    }
-  }
-  // スタジアムはどちらの側にも置かれないので、伏せた手札から出したのが片方だけのときに限り、その手札から動かす。
-  if (played.length === 1) {
-    for (const card of unseen(stadiumCards(after.stadium))) {
-      cards.set(card.instanceId, { side: played[0]!, zone: "hand" });
-    }
-  }
-  return { cards, backs };
-}
-
-function handCount(side: Side): number {
-  return "hand" in side ? side.hand.length : side.handCount;
-}
-
-interface BoardSides {
-  near: Side | null;
-  far: Side | null;
-  stadium: SpectatorView["stadium"];
-}
-
-/** 手札のほかで、1 人ぶんの場に見えているカード。 */
-function fieldCards(side: Side): CardInstance[] {
-  const pokemon = [side.active, ...side.bench].filter(
-    (each): each is Extract<Pokemon, { inPlayId: string }> => each !== null && "inPlayId" in each,
-  );
-  return [
-    ...side.discard,
-    ...side.lostZone,
-    ...pokemon.flatMap((each) => [...each.stack, ...each.attached]),
-  ];
-}
-
-function stadiumCards(stadium: SpectatorView["stadium"]): CardInstance[] {
-  if (stadium === null) return [];
-  return "instanceId" in stadium ? [stadium] : [stadium.left, stadium.right];
-}
-
-/** 盤面に見えているカードの ID。 */
-function shownIds({ near, far, stadium }: BoardSides): string[] {
-  const sides = [near, far].filter((side) => side !== null);
-  return [
-    ...sides.flatMap((side) => [...("hand" in side ? side.hand : []), ...fieldCards(side)]),
-    ...stadiumCards(stadium),
-  ].map((card) => card.instanceId);
-}
+const Moves = createContext<BoardMoves>(NO_MOVES);
 
 /**
  * 新しく見えたカードを、来た場所から動かす。来た場所は描き始めたときに決め、そのあと局面が進んでも、
- * 動いている途中で止めない。演出を切っているときに見えたカードは、あとで演出を戻しても動かさない。
+ * 動いている途中で止めない。
  */
-function useArrival(element: RefObject<HTMLElement | null>, arrival: Arrival | undefined) {
-  const on = useMotionOn();
-  const [from] = useState(() => (on ? arrival : undefined));
+function useArrival(element: RefObject<HTMLElement | null>, arrival: Move | undefined) {
+  const [from] = useState(arrival);
   useLayoutEffect(() => {
     if (from === undefined || element.current === null) return;
     return arrive(element.current, from);
   }, [element, from]);
 }
 
+/** 向かいの側は、卓を挟んで見たとおりに返して描いている（`SideBoard` の `mirrored`）。 */
+function placeElement(board: Element, { side, zone }: Place): Element | null {
+  const mat = board.querySelector(side === "far" ? ".mat.mirrored" : ".mat:not(.mirrored)");
+  if (mat === null) return null;
+  return zone === "hand"
+    ? (mat.parentElement?.querySelector(':scope > [data-zone="hand"]') ?? null)
+    : mat.querySelector(`[data-zone="${zone}"]`);
+}
+
+function gapBetween(from: Element, to: Element): { x: number; y: number } {
+  const [start, end] = [from.getBoundingClientRect(), to.getBoundingClientRect()];
+  return {
+    x: end.left + end.width / 2 - (start.left + start.width / 2),
+    y: end.top + end.height / 2 - (start.top + start.height / 2),
+  };
+}
+
+/** 動いているあいだは少し持ち上げる。机の上を滑らせるより、どのカードが動いているかが目に入る。 */
+const LIFTED = 1.08;
+
 /**
- * Motion が動かす `transform` とぶつからないよう、`translate` を Web Animations で動かす。
- * 向かいの側は、卓を挟んで見たとおりに返して描いている（`SideBoard` の `mirrored`）。
+ * Motion が動かす `transform` とぶつからないよう、`translate` と `scale` を Web Animations で動かす。
+ * 同じ場所から何枚も来るときは、1 枚ずつずらして枚数を見せる。
  */
-function arrive(card: HTMLElement, { side, zone }: Arrival): (() => void) | undefined {
-  const mat = card
-    .closest(".board")
-    ?.querySelector(side === "far" ? ".mat.mirrored" : ".mat:not(.mirrored)");
-  const source =
-    zone === "hand"
-      ? mat?.parentElement?.querySelector(':scope > [data-zone="hand"]')
-      : mat?.querySelector(`[data-zone="${zone}"]`);
-  if (source === null || source === undefined) return;
-  const [start, end] = [source.getBoundingClientRect(), card.getBoundingClientRect()];
-  const dx = start.left + start.width / 2 - (end.left + end.width / 2);
-  const dy = start.top + start.height / 2 - (end.top + end.height / 2);
+function arrive(card: HTMLElement, { place, order }: Move): (() => void) | undefined {
+  const board = card.closest(".board");
+  const source = board === null ? null : placeElement(board, place);
+  if (source === null) return;
+  const { x, y } = gapBetween(card, source);
   card.setAttribute("data-moving", "arriving");
-  const animation = card.animate([{ translate: `${dx}px ${dy}px` }, { translate: "0 0" }], {
-    duration: MOVE_SECONDS * 1_000,
-    easing: "ease-out",
-  });
+  const animation = card.animate(
+    [
+      { translate: `${x}px ${y}px`, scale: 1 },
+      { scale: LIFTED, offset: 0.5 },
+      { translate: "0 0", scale: 1 },
+    ],
+    { duration: MOVE_MS, delay: staggerMs(order), easing: MOVE_EASING, fill: "backwards" },
+  );
   const settle = () => card.removeAttribute("data-moving");
   animation.addEventListener("finish", settle);
   animation.addEventListener("cancel", settle);
   return () => animation.cancel();
+}
+
+/**
+ * 見えなくなるカードのゴースト（複製した要素）を、描き替える前の位置に作る。描き替えたあとでは、元の要素は外され、
+ * 画像も手放している。傾きは外し、大きさは傾けたぶんを含まない元の要素の大きさにする。
+ */
+function ghostOf(card: HTMLElement): HTMLElement {
+  const ghost = card.cloneNode(true) as HTMLElement;
+  const rect = card.getBoundingClientRect();
+  const [width, height] = [card.offsetWidth, card.offsetHeight];
+  ghost.removeAttribute("data-instance-id");
+  // 動いているあいだに押されたりマウスが載ったりしても、下のカードへ通す。読み上げにも出さない。
+  ghost.inert = true;
+  ghost.style.cssText = "";
+  Object.assign(ghost.style, {
+    position: "fixed",
+    left: `${rect.left + rect.width / 2 - width / 2}px`,
+    top: `${rect.top + rect.height / 2 - height / 2}px`,
+    margin: "0",
+    zIndex: "9",
+  });
+  ghost.style.setProperty("--w", `${width}px`);
+  ghost.setAttribute("data-moving", "arriving");
+  return ghost;
+}
+
+/**
+ * ゴーストを行き先へ動かして消す。山札や伏せた手札へ入るカードは要素ごと消えるので、ゴーストが無いと
+ * どこへ行ったかが分からない。ゴーストは盤面の外に置き、盤面の描き直しに巻き込まない。
+ */
+function depart(ghost: HTMLElement, target: Element, order: number): Animation {
+  // 伏せた手札では、増えたカードは後ろに並ぶ。
+  const landing = [...target.querySelectorAll(".card")].at(-1) ?? null;
+  const { x, y } = gapBetween(ghost, landing ?? target);
+  const scale = landing === null ? 1 : landing.getBoundingClientRect().width / ghost.offsetWidth;
+  const animation = ghost.animate(
+    [
+      { translate: "0 0", scale: 1, opacity: 1 },
+      { scale: LIFTED, offset: 0.4 },
+      { opacity: 1, offset: 0.75 },
+      { translate: `${x}px ${y}px`, scale, opacity: 0 },
+    ],
+    { duration: MOVE_MS, delay: staggerMs(order), easing: MOVE_EASING, fill: "backwards" },
+  );
+  const remove = () => ghost.remove();
+  animation.addEventListener("finish", remove);
+  animation.addEventListener("cancel", remove);
+  return animation;
+}
+
+interface Leaving {
+  ghost: HTMLElement;
+  move: Move;
+}
+
+/**
+ * 局面が変わって見えなくなるカードを、行き先へ動かす。消える要素の位置は、描き替える前にしか測れないので、
+ * React が DOM を変える直前に呼ぶ `getSnapshotBeforeUpdate` で測る。関数の部品にはこれに当たるフックが無い。
+ */
+class Departures extends Component<{
+  moves: BoardMoves;
+  board: RefObject<HTMLElement | null>;
+  children: ReactNode;
+}> {
+  private readonly ghosts = new Set<Animation>();
+
+  override getSnapshotBeforeUpdate(previous: Readonly<{ moves: BoardMoves }>): Leaving[] | null {
+    const { moves, board } = this.props;
+    const area = board.current;
+    if (previous.moves === moves || area === null) return null;
+    return [...moves.departures].flatMap(([id, move]) => {
+      const card = area.querySelector<HTMLElement>(`.card[data-instance-id="${CSS.escape(id)}"]`);
+      return card === null ? [] : [{ ghost: ghostOf(card), move }];
+    });
+  }
+
+  override componentDidUpdate(
+    previous: Readonly<{ moves: BoardMoves }>,
+    _state: unknown,
+    leaving: Leaving[] | null,
+  ) {
+    // 演出を切ったら、動いているゴーストも消す。Web Animations で動かしているので、演出を切る CSS では止まらない。
+    if (this.props.moves === NO_MOVES && previous.moves !== NO_MOVES) this.cancel();
+    const area = this.props.board.current;
+    if (leaving === null || area === null) return;
+    const flights = leaving.flatMap(({ ghost, move }) => {
+      const target = placeElement(area, move.place);
+      return target === null ? [] : [{ ghost, target, order: move.order }];
+    });
+    // 先に全部置いてから測る。1 枚ずつ置いては測ると、そのたびにページ全体の配置を計算し直す。
+    document.body.append(...flights.map(({ ghost }) => ghost));
+    for (const { ghost, target, order } of flights) {
+      const animation = depart(ghost, target, order);
+      this.ghosts.add(animation);
+      animation.addEventListener("finish", () => this.ghosts.delete(animation));
+    }
+  }
+
+  override componentWillUnmount() {
+    this.cancel();
+  }
+
+  private cancel() {
+    for (const animation of this.ghosts) animation.cancel();
+    this.ghosts.clear();
+  }
+
+  override render() {
+    return this.props.children;
+  }
 }
 
 /** 名前と、種類やワザの説明。画像が無くても、何のカードか読めるようにする。 */
@@ -548,6 +590,7 @@ export function Board({
   near,
   far,
   stadium,
+  shuffled = NO_MOVES.shuffled,
   drops,
   children,
 }: {
@@ -555,43 +598,64 @@ export function Board({
   near: Side | null;
   far: Side | null;
   stadium: SpectatorView["stadium"];
+  /** この局面へ来るあいだに山札を切った側。 */
+  shuffled?: readonly BoardSide[];
   /** 手札のカードをつかんで落とし、手を指せる盤面なら渡す。 */
   drops?: CardDrops;
   children: ReactNode;
 }) {
   const frame = useMemo(() => ({ near, far, stadium }), [near, far, stadium]);
-  // 前に描いた局面と比べて、新しく見えたカードを決める。
-  const [shown, setShown] = useState<{ sides: BoardSides; arrivals: BoardArrivals }>(() => ({
+  const animate = useMotionOn();
+  // 前に描いた局面と比べて、動かすカードを決める。演出を切っているときに動いたカードは、あとで演出を戻しても動かさない。
+  const [shown, setShown] = useState<{ sides: BoardSides; moves: BoardMoves }>(() => ({
     sides: { near, far, stadium },
-    arrivals: { cards: new Map(), backs: {} },
+    moves: NO_MOVES,
   }));
   if (shown.sides.near !== near || shown.sides.far !== far || shown.sides.stadium !== stadium) {
     const sides = { near, far, stadium };
-    setShown({ sides, arrivals: boardArrivals(shown.sides, sides) });
+    setShown({ sides, moves: animate ? boardMoves(shown.sides, sides, shuffled) : NO_MOVES });
+  } else if (!animate && shown.moves !== NO_MOVES) {
+    // 局面の途中で演出を切ったら、決めてあった動きも捨てる。あとで演出を戻しても、前の動きをやり直さない。
+    setShown({ ...shown, moves: NO_MOVES });
   }
-  const body = <BoardBody frame={frame}>{children}</BoardBody>;
+  const area = useRef<HTMLDivElement>(null);
+  const body = (
+    <BoardBody frame={frame} area={area}>
+      {children}
+    </BoardBody>
+  );
   return (
     <LayoutGroup id={name}>
       <BoardFrame value={frame}>
-        <Arrivals value={shown.arrivals}>
-          {drops === undefined ? (
-            body
-          ) : (
-            <CardDragArea drops={drops} overlay={heldCard}>
-              {body}
-            </CardDragArea>
-          )}
-        </Arrivals>
+        <Moves value={shown.moves}>
+          <Departures moves={shown.moves} board={area}>
+            {drops === undefined ? (
+              body
+            ) : (
+              <CardDragArea drops={drops} overlay={heldCard}>
+                {body}
+              </CardDragArea>
+            )}
+          </Departures>
+        </Moves>
       </BoardFrame>
     </LayoutGroup>
   );
 }
 
-function BoardBody({ frame, children }: { frame: object; children: ReactNode }) {
+function BoardBody({
+  frame,
+  area,
+  children,
+}: {
+  frame: object;
+  area: RefObject<HTMLDivElement | null>;
+  children: ReactNode;
+}) {
   const taps = useTapArea();
   return (
     // 広い画面では盤面の中がスクロールする。送った量を差し引かないと、動き始めの位置がずれる。
-    <motion.div className="board" layoutScroll layoutDependency={frame} {...taps}>
+    <motion.div ref={area} className="board" layoutScroll layoutDependency={frame} {...taps}>
       {children}
     </motion.div>
   );
@@ -665,9 +729,7 @@ export const SideBoard = memo(function SideBoard({
         </Zone>
       </div>
       <div className="piles">
-        <Zone name="deck" label="山札" count={side.deckCount}>
-          {side.deckCount > 0 ? <CardBack /> : <EmptySlot />}
-        </Zone>
+        <DeckPile count={side.deckCount} side={mirrored ? "far" : "near"} />
         <PileZone name="discard" label="トラッシュ" pile={side.discard} />
       </div>
     </div>
@@ -733,19 +795,45 @@ function GripCard({ card }: { card: CardInstance }) {
  * 伏せた手札の 1 枚。位置で描くので、前の局面からあった要素も、引いたカードの位置になれば動かす。
  * 動いている途中で次の局面が届いても止めない。
  */
-function HiddenHandCard({ index, side }: { index: number; side: Arrival["side"] }) {
+function HiddenHandCard({ index, side }: { index: number; side: BoardSide }) {
   const back = useRef<HTMLDivElement>(null);
-  const drawn = use(Arrivals).backs[side];
-  const on = useMotionOn();
-  // 演出を切っているときに引いたカードは、あとで演出を戻しても動かさない。
-  const start = useEffectEvent((element: HTMLElement, zone: Arrival["zone"]) => {
-    if (on) arrive(element, { side, zone });
-  });
+  const drawn = use(Moves).backs[side];
   useLayoutEffect(() => {
     if (drawn === undefined || index < drawn.from || back.current === null) return;
-    start(back.current, drawn.zone);
-  }, [drawn, index]);
+    arrive(back.current, { place: { side, zone: drawn.zone }, order: index - drawn.from });
+  }, [drawn, index, side]);
   return <div ref={back} className="card back" />;
+}
+
+/**
+ * 山札。切ったら、2 つに分けた山を左右へ広げて重ね直して見せる。切ったことは結果の通知には出さないので、
+ * 盤面で伝える。
+ */
+function DeckPile({ count, side }: { count: number; side: BoardSide }) {
+  const moves = use(Moves);
+  // 切った回数を数え、見せ終える前にまた切ったら、広げるところからやり直す。演出を切ったら見せるのをやめる。
+  const [shuffles, setShuffles] = useState({ moves, started: 0, ended: 0 });
+  if (shuffles.moves !== moves) {
+    const started = shuffles.started + (count > 0 && moves.shuffled.includes(side) ? 1 : 0);
+    setShuffles({ moves, started, ended: moves === NO_MOVES ? started : shuffles.ended });
+  }
+  const { started, ended } = shuffles;
+  return (
+    <Zone name="deck" label="山札" count={count}>
+      {count > 0 ? <CardBack /> : <EmptySlot />}
+      {started > ended && (
+        <div
+          key={started}
+          className="shuffling"
+          aria-hidden="true"
+          onAnimationEnd={() => setShuffles((current) => ({ ...current, ended: started }))}
+        >
+          <div className="card back" />
+          <div className="card back" />
+        </div>
+      )}
+    </Zone>
+  );
 }
 
 /** トレーナーズやスタジアムは、盤面の真ん中へ落として使う。 */

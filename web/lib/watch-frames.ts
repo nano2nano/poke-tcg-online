@@ -20,6 +20,8 @@ export interface WatchFrame {
   /** 座席ごとの場。添字は座席。 */
   sides: [Side, Side];
   stadium: SpectatorView["stadium"];
+  /** この局面へ来るあいだに山札を切った座席。 */
+  shuffled: Player[];
   clock: ClockView | null;
   /** この局面へ来た手。繋いだ直後の局面と、人が座る対戦には無い。 */
   moved: { seat: Player; text: string; targets: string[] } | null;

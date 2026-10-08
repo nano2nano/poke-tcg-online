@@ -20,6 +20,7 @@ import type {
   SpectatorEndedMessage,
   SpectatorSeat,
 } from "../../src/protocol.js";
+import { shuffledDecks } from "./board-moves.js";
 
 /** 対戦準備で選びかけのバトル場とベンチ。局面が届き直しても、まだ出せる候補なら残す。 */
 export interface SetupDraft {
@@ -43,6 +44,8 @@ export interface SeatState {
   toss: Player | null;
   firstPlayer: Player | null;
   clock: ClockView | null;
+  /** いまの局面へ来るあいだに山札を切った座席。 */
+  shuffled: Player[];
   /** 終わった対戦では通らないので、決着したら null にする。 */
   spectatorToken: string | null;
   ended: Omit<EndedMessage, "t" | "view"> | null;
@@ -73,6 +76,7 @@ export function initialSeatState(seat: Player): SeatState {
     toss: null,
     firstPlayer: null,
     clock: null,
+    shuffled: [],
     spectatorToken: null,
     ended: null,
     setupDraft: emptyDraft(),
@@ -101,6 +105,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
         // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
         mulligans: action.mulligans ?? state.mulligans,
         clock: action.clock,
+        shuffled: action.t === "delta" ? shuffledDecks(action.events) : [],
         ...(action.t === "sync"
           ? {
               matchId: action.matchId,
@@ -125,6 +130,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
           answerDestinations: null,
           revealedDeck: null,
           attacks: null,
+          shuffled: [],
           spectatorToken: null,
           ended,
         },
