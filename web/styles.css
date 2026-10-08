@@ -454,6 +454,36 @@ button[aria-pressed="true"] {
 .moves button {
   text-align: left;
 }
+/* 種類ごとの見出し。ボタンの並びを種類で切る。 */
+.move-group {
+  margin: 6px 0 0;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+.move-group:first-child {
+  margin-top: 0;
+}
+.moves > .move-group {
+  flex-basis: 100%;
+}
+/* ワザは使うと番が終わるので、ほかの手と見分けられる色にする。 */
+button[data-kind="attack"] {
+  border-color: #c05621;
+  box-shadow: inset 4px 0 0 #c05621;
+}
+/* 先のポケモンを選んでいるあいだは、番を終えるボタンの代わりに盤面の真ん中に出す。 */
+.pick-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 2px solid #2b6cb0;
+  border-radius: 8px;
+  background: Canvas;
+  font-weight: bold;
+}
 .end-turn {
   padding: 10px 24px;
 }
@@ -1215,11 +1245,17 @@ button.choice-card:enabled > .card {
     transform: translateY(-50%);
   }
   /* 番を終えるボタンは、スタジアムと向かい合うバトル場の右に置く。指せる手の数で動かない。 */
-  .table .board-center > .end-turn {
+  .table .board-center > :is(.end-turn, .pick-prompt) {
     position: absolute;
     top: 50%;
     left: calc(50% + var(--b) * 2.2);
     transform: translateY(-50%);
+  }
+  /* 右の山札とサイドに掛からない幅にする。 */
+  .table .board-center > .pick-prompt {
+    width: max-content;
+    max-width: calc(var(--b) * 3.2);
+    font-size: 0.9rem;
   }
 
   .table .mat {
@@ -1510,4 +1546,18 @@ button.choice-card:enabled > .card {
 }
 .move-menu button {
   text-align: left;
+}
+/* 種類ごとの組。組の中もメニューと同じく縦に並べる。 */
+.move-menu fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.move-menu .move-group {
+  margin: 4px 4px 0;
+  padding: 0;
 }

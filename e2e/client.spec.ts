@@ -112,6 +112,10 @@ async function playOne(page: Page): Promise<boolean> {
     if (await folded.isVisible()) await folded.click({ timeout: 1_000 });
     const move = page.locator("#moves button").first();
     await ((await move.isVisible()) ? move : page.locator("#end-turn")).click({ timeout: 1_000 });
+    // にげる手やつける先が何匹もある手は、盤面で先のポケモンを選んで指す。
+    if (await page.locator("#pick-prompt").isVisible()) {
+      await page.locator("#table .pokemon[data-choosable]").first().click({ timeout: 1_000 });
+    }
     return true;
   } catch {
     return false;
@@ -2739,7 +2743,9 @@ async function openWith(page: Page, sync: object): Promise<{ move: object; offer
 test("番を終える手は指せる手の並びに混ぜず、盤面の決まった場所のボタンで指す", async ({ page }) => {
   const sync = crowdedSync(5) as CrowdedSync;
   const sent = await openWith(page, sync);
-  await expect(page.locator("#moves button")).toHaveCount(sync.legalMoves.length - 1);
+  await page.click("#all-moves > summary");
+  await expect(page.locator("#moves button")).toHaveCount(3);
+  await expect(page.locator("#moves button", { hasText: "番を終わる" })).toHaveCount(0);
   await page.click("#end-turn");
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0]!.move).toEqual({ type: "EndTurn", player: 0 });
@@ -2756,39 +2762,97 @@ test("番の中の手は畳んだ「すべての手」に入れ、開けば並�
   await expect(first).toBeVisible();
 });
 
-test("つける先だけが違う手は見出しで見分けられ、ボタンに載せると盤面のつける先を囲む", async ({
+test("つける先だけが違う手は 1 つにまとめ、載せると先をすべて囲み、押すと盤面で先を選ぶ", async ({
   page,
 }) => {
   const sync = crowdedSync(20) as CrowdedSync;
   const sent = await openWith(page, sync);
   await page.click("#all-moves > summary");
   const buttons = page.locator("#moves button");
-  // 番を終える手は盤面のボタンで指す。
-  await expect(buttons).toHaveCount(sync.legalMoves.length - 1);
-  // ベンチの 5 匹は同じカードなので、名前だけでは見出しが重なる。
-  const labels = await buttons.allTextContents();
-  expect(new Set(labels).size).toBe(labels.length);
+  // エネルギーとどうぐのつける手を 1 つずつにまとめ、番が終わるワザは見出しを分けて最後に置く。
+  await expect(buttons).toHaveCount(3);
+  await expect(page.locator("#moves .move-group")).toHaveText([
+    "つける・進化させる",
+    "ワザ（使うと番が終わる）",
+  ]);
+  await expect(buttons.last()).toHaveAttribute("data-kind", "attack");
 
-  const { target } = sync.legalMoves[3] as { target: string };
-  await buttons.nth(3).hover();
+  // バトル場とベンチの 6 匹のどれにもつけられる。
   const aimed = page.locator("#table .pokemon.aimed");
-  await expect(aimed).toHaveCount(1);
-  await expect(aimed).toHaveAttribute("data-in-play-id", target);
+  await buttons.first().hover();
+  await expect(aimed).toHaveCount(6);
   await buttons.last().hover();
   await expect(aimed).toHaveCount(0);
-
-  // エネルギーとどうぐの 1 つ目は、どちらもバトル場へつける。片方から外れても、選んだ方の囲みは残す。
-  const { target: active } = sync.legalMoves[0] as { target: string };
+  // 片方から外れても、選んだ方の囲みは残す。
   await buttons.first().focus();
-  await buttons.nth(6).hover();
+  await buttons.nth(1).hover();
   await buttons.last().hover();
-  await expect(aimed).toHaveCount(1);
-  await expect(aimed).toHaveAttribute("data-in-play-id", active);
+  await expect(aimed).toHaveCount(6);
 
-  // 1 つも畳んでいなければ、見せた手の位置は添えない。
-  await buttons.last().click();
+  // 押しただけでは指さず、盤面で先を選んだら、その先へつける手を指す。
+  await buttons.first().click();
+  await expect(page.locator("#pick-prompt")).toBeVisible();
+  await expect(page.locator("#end-turn")).toHaveCount(0);
+  await expect(page.locator("#table .pokemon[data-choosable]")).toHaveCount(6);
+  const { target } = sync.legalMoves[3] as { target: string };
+  await page.click(`#table .pokemon[data-in-play-id="${target}"]`);
   await expect.poll(() => sent.length).toBe(1);
-  expect(sent[0]?.offered).toBeUndefined();
+  expect(sent[0]!.move).toEqual(sync.legalMoves[3]);
+  // まとめた手も盤面で選べば指せるので、すべての手を見せたことにする。
+  expect(sent[0]!.offered).toBeUndefined();
+});
+
+test("にげる手は、先が 1 匹でも盤面で選んでから指し、やめるか Esc で取り消せる", async ({
+  page,
+}) => {
+  const sync = crowdedSync(5) as CrowdedSync & {
+    view: { self: { bench: { inPlayId: string }[] } };
+  };
+  const [bench] = sync.view.self.bench;
+  const retreat = { type: "Retreat", player: 0, to: bench!.inPlayId };
+  sync.legalMoves = [retreat, { type: "EndTurn", player: 0 }];
+  // 一覧が盤面の下に来る狭い画面にする。一覧の手を押したら、盤面の真ん中の案内が見えるところまで送る。
+  await page.setViewportSize({ width: 820, height: 600 });
+  const sent = await openWith(page, sync);
+  await page.click("#all-moves > summary");
+  const button = page.locator("#moves button");
+  const prompt = page.locator("#pick-prompt");
+  const choosable = page.locator("#table .pokemon[data-choosable]");
+  await expect(button).toHaveText("にげる…");
+
+  await button.click();
+  await expect(prompt).toContainText("バトル場に出すポケモンを選んでください");
+  await expect(prompt).toBeInViewport();
+  await expect(choosable).toHaveCount(1);
+  await page.click("#pick-cancel");
+  await expect(prompt).toHaveCount(0);
+  await expect(choosable).toHaveCount(0);
+  await expect(page.locator("#end-turn")).toBeVisible();
+
+  // 選んでいるあいだに相手のポケモンを大きく出しても、それを閉じる Esc ではやめない。
+  await button.click();
+  await page.click("#opponent .pokemon >> nth=0");
+  await expect(page.locator("#card-zoom")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#card-zoom")).toBeHidden();
+  await expect(prompt).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(prompt).toHaveCount(0);
+
+  // にげる先のベンチポケモンを大きく出したなら、先はもう選んであるので、そのまま指す手を出す。
+  await page.click(`#table .pokemon[data-in-play-id="${bench!.inPlayId}"]`);
+  await expect(page.locator("#card-zoom-moves button")).toHaveText(/^にげて、.+ をバトル場に出す$/);
+  await page.keyboard.press("Escape");
+
+  // 大きく出したバトルポケモンの手からは、同じ途中の状態へ入る。
+  await page.click('#self [data-zone="active"] .pokemon');
+  await expect(page.locator("#card-zoom-moves .move-group")).toHaveText(["にげる"]);
+  await page.click("#card-zoom-moves button");
+  await expect(page.locator("#card-zoom")).toBeHidden();
+  await choosable.click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]!.move).toEqual(retreat);
+  expect(sent).toHaveLength(1);
 });
 
 test("手札の同じカードを選ぶ答えは 1 つに畳んで見せた手の位置を添え、場の同じカードは畳まずに見分ける", async ({

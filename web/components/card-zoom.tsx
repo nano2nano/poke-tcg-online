@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { ZoomContext, ZoomMovesContext, type ZoomMoves, type ZoomTarget } from "../lib/zoom.js";
 import { CardCaption, CardFace } from "./board.js";
@@ -72,16 +72,22 @@ export function CardZoom({ children }: { children: ReactNode }) {
           </div>
           {shownMoves.length > 0 && (
             <div id="card-zoom-moves" className="moves">
-              {shownMoves.map(({ key, label, play }) => (
-                <button
-                  key={key}
-                  onClick={() => {
-                    play();
-                    dialog.current?.close();
-                  }}
-                >
-                  {label}
-                </button>
+              {shownMoves.map(({ kind, title, entries }) => (
+                <Fragment key={kind}>
+                  <p className="move-group">{title}</p>
+                  {entries.map(({ key, label, play }) => (
+                    <button
+                      key={key}
+                      data-kind={kind}
+                      onClick={() => {
+                        play();
+                        dialog.current?.close();
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </Fragment>
               ))}
             </div>
           )}

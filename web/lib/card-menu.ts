@@ -15,6 +15,8 @@ export const handSubject = (defId: string): MenuSubject => `hand ${defId}`;
 export const pokemonSubject = (inPlayId: string): MenuSubject => `pokemon ${inPlayId}`;
 export const STADIUM_SUBJECT: MenuSubject = "stadium";
 export const isHandSubject = (subject: MenuSubject): boolean => subject.startsWith("hand ");
+export const subjectPokemon = (subject: MenuSubject): string | null =>
+  subject.startsWith("pokemon ") ? subject.slice("pokemon ".length) : null;
 
 /** 右クリックしたものごとに、そこで指せる手（ボタンの `key`）。 */
 export type MenuPlan = ReadonlyMap<MenuSubject, readonly string[]>;

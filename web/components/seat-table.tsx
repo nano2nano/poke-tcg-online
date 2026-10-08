@@ -1,5 +1,14 @@
 import { Link } from "@tanstack/react-router";
-import { use, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  use,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
@@ -15,8 +24,16 @@ import {
   type MoveContext,
 } from "../lib/describe-move.js";
 import { NO_DROPS, planDrops } from "../lib/card-drops.js";
-import { isHandSubject, menuSubjectAt, planMenus } from "../lib/card-menu.js";
+import { isHandSubject, menuSubjectAt, planMenus, subjectPokemon } from "../lib/card-menu.js";
 import { setupOffer, type SeatState } from "../lib/match-state.js";
+import {
+  groupMoves,
+  pickKey,
+  type MoveEntry,
+  type MoveGroup,
+  type MoveKind,
+  type TargetPick,
+} from "../lib/move-groups.js";
 import { watchUrl, type StoredSeat } from "../lib/seat.js";
 import { useSeat, type Seating } from "../lib/use-seat.js";
 import { ZoomMovesContext } from "../lib/zoom.js";
@@ -69,7 +86,14 @@ export function SeatTable({
   const [listOpen, setListOpen] = useState(false);
   // 右クリックしたカードでできる手を、その場に出す。一覧が変わったら閉じる。
   const [menu, setMenu] = useState<Menu | null>(null);
+  // にげる先やつける先を、盤面のポケモンを押して選んでいるところ。一覧が変わったらやめる。
+  const [picking, setPicking] = useState<TargetPick | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
+  // 先を選び始めたら、落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
+  const startPick = useCallback((pick: TargetPick) => {
+    setNarrowed(null);
+    setPicking(pick);
+  }, []);
   // contextmenu が pointerType を持たないブラウザでは、直前に押したポインタで長押しのタッチを見分ける。
   const pressedWith = useRef("");
   // 一覧が変わったら、消えたボタンの狙いを捨てる。消えたボタンからはマウスが離れた知らせが来ないので、
@@ -79,7 +103,8 @@ export function SeatTable({
     setAimFor(listed);
     setNarrowed(null);
     setMenu(null);
-    const keys = new Set(listed.buttons.map(({ key }) => key));
+    setPicking(null);
+    const keys = new Set(listed.buttons.flatMap(({ key, move }) => [key, pickKey(move) ?? key]));
     const kept = (key: string | null) => (key !== null && keys.has(key) ? key : null);
     setAim((current) => ({ hovered: kept(current.hovered), focused: kept(current.focused) }));
   }
@@ -97,6 +122,7 @@ export function SeatTable({
   const drops: CardDrops = {
     plan: disabled || seating.awaiting ? NO_DROPS : plan,
     onDrop: (keys) => {
+      setPicking(null);
       if (keys.length > 1) {
         setNarrowed(keys);
         return;
@@ -106,8 +132,11 @@ export function SeatTable({
     },
   };
   const aimed = useMemo(() => {
+    // まとめた手に載せたら、まとめたどの手の先も囲む。
+    const aiming = (key: string | null) =>
+      key !== null && (key === aim.hovered || key === aim.focused);
     const targets = listed.buttons
-      .filter(({ key }) => key === aim.hovered || key === aim.focused)
+      .filter(({ key, move }) => aiming(key) || aiming(pickKey(move)))
       .flatMap((button) => button.targets);
     // 空の集合を毎回作ると、盤面の memo が効かず、狙いの無いボタンに載せるたびに盤面を描き直す。
     return targets.length === 0 ? NOTHING_AIMED : new Set(targets);
@@ -129,32 +158,54 @@ export function SeatTable({
     showZoomMoves({
       list: (subject) => {
         const keys = menus.get(subject) ?? [];
-        return listed.buttons
-          .filter(({ key }) => keys.includes(key))
-          .map(({ key, label, move }) => ({
-            key,
-            label,
-            play: () => {
-              // 落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
-              setNarrowed(null);
-              latestPlay.current(move);
-            },
-          }));
+        const buttons = listed.buttons.filter(({ key }) => keys.includes(key));
+        return groupMoves(buttons, context, subjectPokemon(subject)).map(
+          ({ kind, title, entries }) => ({
+            kind,
+            title,
+            entries: entries.map(({ key, label, button, pick }) => ({
+              key,
+              label,
+              play: () => {
+                if (pick !== undefined) startPick(pick);
+                else if (button !== undefined) {
+                  // 落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
+                  setNarrowed(null);
+                  latestPlay.current(button.move);
+                }
+              },
+            })),
+          }),
+        );
       },
     });
     return () => showZoomMoves(null);
-  }, [showZoomMoves, menus, listed, disabled, seating.awaiting]);
+  }, [showZoomMoves, menus, listed, context, disabled, seating.awaiting, startPick]);
   const pokemonChoices = useMemo(() => {
-    const moves = pokemonMoves(listed.buttons);
+    const moves = picking?.moves ?? pokemonMoves(listed.buttons);
     if (disabled || moves.size === 0) return null;
     return {
       targets: new Set(moves.keys()),
       choose: (inPlayId: string) => {
         const move = moves.get(inPlayId);
-        if (move !== undefined) latestPlay.current(move);
+        // 返事を待つあいだは指せないので、選んでいるところも残す。
+        if (move === undefined || seating.awaiting) return;
+        setPicking(null);
+        latestPlay.current(move);
       },
     };
-  }, [listed, disabled]);
+  }, [listed, picking, disabled, seating.awaiting]);
+  useEffect(() => {
+    if (picking === null) return;
+    const cancel = (event: KeyboardEvent) => {
+      // カードの拡大やメニューを閉じる Esc では、選んでいるところをやめない。
+      const closing =
+        event.target instanceof Element && event.target.closest("dialog, [role=menu]");
+      if (event.key === "Escape" && closing === null) setPicking(null);
+    };
+    document.addEventListener("keydown", cancel);
+    return () => document.removeEventListener("keydown", cancel);
+  }, [picking]);
   // 落とした先の手を選ぶあいだは、絞った手だけを見せたと記録するので、番を終えるボタンも出さない。
   const endTurn = narrowed === null ? listed.endTurn : undefined;
   const sheetChoice =
@@ -198,7 +249,7 @@ export function SeatTable({
           if (pointer === "touch") return;
           const subject = target instanceof Element ? menuSubjectAt(target) : null;
           const keys = subject === null ? undefined : menus.get(subject);
-          if (keys === undefined || disabled || seating.awaiting) return;
+          if (subject === null || keys === undefined || disabled || seating.awaiting) return;
           event.preventDefault();
           // 落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
           setNarrowed(null);
@@ -222,7 +273,7 @@ export function SeatTable({
           setMenu({
             x: mouse ? event.clientX : box.left,
             y: mouse ? event.clientY : box.bottom,
-            buttons,
+            groups: groupMoves(buttons, context, subjectPokemon(subject)),
           });
         }}
       >
@@ -259,7 +310,15 @@ export function SeatTable({
               </div>
               <div id="stadium" className="board-center">
                 {view !== null && <Stadium stadium={view.stadium} />}
-                {endTurn !== undefined && (
+                {picking !== null && (
+                  <p id="pick-prompt" className="pick-prompt" ref={showPrompt} data-tap-through>
+                    {picking.prompt}
+                    <button id="pick-cancel" onClick={() => setPicking(null)}>
+                      やめる
+                    </button>
+                  </p>
+                )}
+                {picking === null && endTurn !== undefined && (
                   <button
                     id="end-turn"
                     className="primary end-turn"
@@ -283,7 +342,9 @@ export function SeatTable({
             </Board>
           </ReadyAbilities>
         </PokemonChoices>
-        {menu !== null && !disabled && <MoveMenu menu={menu} onPlay={onPlay} onClose={closeMenu} />}
+        {menu !== null && !disabled && (
+          <MoveMenu menu={menu} onPlay={onPlay} onPick={startPick} onClose={closeMenu} />
+        )}
         {sheetChoice && (
           <ChoiceSheet
             key={view?.choices.at(-1)?.choiceId}
@@ -317,6 +378,7 @@ export function SeatTable({
               onListToggle={setListOpen}
               disabled={disabled}
               onAim={onAim}
+              onPick={startPick}
             />
           )}
           <button
@@ -359,10 +421,15 @@ export function SeatTable({
   );
 }
 
+/** 一覧が盤面の下にある狭い画面では、一覧の手を押すと案内が画面の外に出るので、見えるところまで送る。 */
+function showPrompt(node: HTMLElement | null) {
+  node?.scrollIntoView({ block: "nearest" });
+}
+
 interface Menu {
   x: number;
   y: number;
-  buttons: readonly ListedMove[];
+  groups: readonly MoveGroup<ListedMove>[];
 }
 
 /**
@@ -373,10 +440,12 @@ interface Menu {
 function MoveMenu({
   menu,
   onPlay,
+  onPick,
   onClose,
 }: {
   menu: Menu;
   onPlay: (move: Move) => void;
+  onPick: (pick: TargetPick) => void;
   onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -435,17 +504,24 @@ function MoveMenu({
         items.at(at === -1 && step === -1 ? -1 : (at + step) % items.length)?.focus();
       }}
     >
-      {menu.buttons.map(({ move, key, label }) => (
-        <button
-          key={key}
-          role="menuitem"
-          onClick={() => {
-            onPlay(move);
-            onClose();
-          }}
-        >
-          {label}
-        </button>
+      {menu.groups.map(({ kind, title, entries }) => (
+        <fieldset key={kind}>
+          <legend className="move-group">{title}</legend>
+          {entries.map(({ key, label, button, pick }) => (
+            <button
+              key={key}
+              role="menuitem"
+              data-kind={kind}
+              onClick={() => {
+                if (pick !== undefined) onPick(pick);
+                else if (button !== undefined) onPlay(button.move);
+                onClose();
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </fieldset>
       ))}
     </div>
   );
@@ -529,6 +605,7 @@ function Moves({
   onListToggle,
   disabled,
   onAim,
+  onPick,
 }: {
   seating: Seating;
   context: MoveContext;
@@ -541,6 +618,7 @@ function Moves({
   onListToggle: (open: boolean) => void;
   disabled: boolean;
   onAim: (kind: "hovered" | "focused", key: string | null) => void;
+  onPick: (pick: TargetPick) => void;
 }) {
   const { state, awaiting, send, choose } = seating;
   const { view, legalMoves: moves, setup, deckPlacement: placement } = state;
@@ -563,6 +641,15 @@ function Moves({
     buttons.length > 0 &&
     buttons.every(({ move }) => move.type !== "AnswerChoice");
 
+  // 選択への答えと落とした先で絞った手は、いま選ぶものだけなので分けない。
+  const groups: readonly {
+    kind?: MoveKind;
+    title?: string;
+    entries: readonly MoveEntry<ListedMove>[];
+  }[] = foldable
+    ? groupMoves(buttons, context)
+    : [{ entries: buttons.map((button) => ({ key: button.key, label: button.label, button })) }];
+
   const list = (
     <div id="moves" className="moves">
       {view === null && state.toss === state.seat
@@ -582,22 +669,30 @@ function Moves({
         : moves === null
           ? // 準備の待ちは `move-prompt` が伝える。「相手の番」と出すと、番が相手へ移ったと読まれる。
             playing && view !== null && view.phase !== "setup" && <WaitingNote state={state} />
-          : buttons.map(({ move, key, label }) => (
-              <button
-                key={key}
-                disabled={disabled}
-                // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
-                aria-disabled={awaiting}
-                onClick={() => {
-                  if (!awaiting) playMove(seating, offered, move);
-                }}
-                onPointerEnter={() => onAim("hovered", key)}
-                onPointerLeave={() => onAim("hovered", null)}
-                onFocus={() => onAim("focused", key)}
-                onBlur={() => onAim("focused", null)}
-              >
-                {label}
-              </button>
+          : groups.map(({ kind, title, entries }) => (
+              <Fragment key={kind ?? ""}>
+                {title !== undefined && <p className="move-group">{title}</p>}
+                {entries.map(({ key, label, button, pick }) => (
+                  <button
+                    key={key}
+                    disabled={disabled}
+                    // 返事を待つあいだは `disabled` にしない。押したボタンからフォーカスが外れる。
+                    aria-disabled={awaiting}
+                    data-kind={kind}
+                    onClick={() => {
+                      if (awaiting) return;
+                      if (pick !== undefined) onPick(pick);
+                      else if (button !== undefined) playMove(seating, offered, button.move);
+                    }}
+                    onPointerEnter={() => onAim("hovered", key)}
+                    onPointerLeave={() => onAim("hovered", null)}
+                    onFocus={() => onAim("focused", key)}
+                    onBlur={() => onAim("focused", null)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </Fragment>
             ))}
     </div>
   );
@@ -632,7 +727,7 @@ function Moves({
           open={listOpen}
           onToggle={(event) => onListToggle(event.currentTarget.open)}
         >
-          <summary>すべての手（{buttons.length}）</summary>
+          <summary>すべての手（{groups.flatMap(({ entries }) => entries).length}）</summary>
           {list}
         </details>
       ) : (
