@@ -53,8 +53,15 @@ export function shuffledDecks(events: readonly PlayerEvent[]): Player[] {
 
 type Pokemon = Extract<NonNullable<Side["active"]>, { inPlayId: string }>;
 
-/** 盤面でカードが見えている場所。ポケモンの重なりの下のカードも、場に数える。 */
-type Seen = { side: BoardSide | null; zone: "hand" | "field" | "discard" | "lost" | "stadium" };
+/**
+ * 射影に ID が載っているカードの場所。ポケモンの重なりの下のカードも、場に数える。`drawn` は盤面に 1 枚ずつ
+ * 描くカードで、山は上の 1 枚、ポケモンは重なりのいちばん上とついているカードだけを描く。
+ */
+interface Seen {
+  side: BoardSide | null;
+  zone: "hand" | "field" | "discard" | "lost" | "stadium";
+  drawn: boolean;
+}
 
 const SIDES = ["near", "far"] as const;
 
@@ -69,41 +76,40 @@ function stadiumCards(stadium: SpectatorView["stadium"]): CardInstance[] {
   return "instanceId" in stadium ? [stadium] : [stadium.left, stadium.right];
 }
 
-/** 射影に ID が載っているカードと、その場所。 */
 function seenPlaces(sides: BoardSides): Map<string, Seen> {
   const seen = new Map<string, Seen>();
-  const put = (cards: readonly CardInstance[], place: Seen) => {
-    for (const card of cards) seen.set(card.instanceId, place);
+  const put = (cards: readonly CardInstance[], place: Omit<Seen, "drawn">, drawn = true) => {
+    for (const card of cards) seen.set(card.instanceId, { ...place, drawn });
   };
   for (const name of SIDES) {
     const side = sides[name];
     if (side === null) continue;
     if ("hand" in side) put(side.hand, { side: name, zone: "hand" });
-    put(side.discard, { side: name, zone: "discard" });
-    put(side.lostZone, { side: name, zone: "lost" });
+    for (const [pile, zone] of [
+      [side.discard, "discard"],
+      [side.lostZone, "lost"],
+    ] as const) {
+      put(pile.slice(0, -1), { side: name, zone }, false);
+      put(pile.slice(-1), { side: name, zone });
+    }
     for (const pokemon of pokemonOf(side)) {
-      put([...pokemon.stack, ...pokemon.attached], { side: name, zone: "field" });
+      put(pokemon.stack.slice(0, -1), { side: name, zone: "field" }, false);
+      put([...pokemon.stack.slice(-1), ...pokemon.attached], { side: name, zone: "field" });
     }
   }
   put(stadiumCards(sides.stadium), { side: null, zone: "stadium" });
   return seen;
 }
 
-/** 盤面に 1 枚ずつ描くカード。山は上の 1 枚、ポケモンは重なりのいちばん上とついているカードだけを描く。 */
-function drawnIds(sides: BoardSides): Set<string> {
-  const ids: CardInstance[] = stadiumCards(sides.stadium);
-  for (const name of SIDES) {
-    const side = sides[name];
-    if (side === null) continue;
-    if ("hand" in side) ids.push(...side.hand);
-    for (const pile of [side.discard, side.lostZone]) {
-      const top = pile.at(-1);
-      if (top !== undefined) ids.push(top);
-    }
-    for (const pokemon of pokemonOf(side)) ids.push(pokemon.stack.at(-1)!, ...pokemon.attached);
-  }
-  return new Set(ids.map((card) => card.instanceId));
-}
+/** 上の 1 枚だけを描く山。 */
+const isPile = (seen: Seen | undefined): seen is Seen & { zone: "discard" | "lost" } =>
+  seen?.zone === "discard" || seen?.zone === "lost";
+
+/** 山の上に別のカードが載ったり、上のカードが外れて出てきたりしただけなら、カードは動いていない。 */
+const samePlace = (a: Seen, b: Seen) => a.side === b.side && a.zone === b.zone;
+
+const drawnIds = (seen: Map<string, Seen>) =>
+  new Set([...seen].flatMap(([id, place]) => (place.drawn ? [id] : [])));
 
 export function handCount(side: Side): number {
   return "hand" in side ? side.hand.length : side.handCount;
@@ -121,8 +127,8 @@ export function boardMoves(
   after: BoardSides,
   shuffled: readonly BoardSide[],
 ): BoardMoves {
-  const [was, now] = [drawnIds(before), drawnIds(after)];
   const [seenBefore, seenAfter] = [seenPlaces(before), seenPlaces(after)];
+  const [was, now] = [drawnIds(seenBefore), drawnIds(seenAfter)];
   const counted = new Map<string, number>();
   const move = (direction: string, place: Place): Move => {
     const key = `${direction} ${place.side} ${place.zone}`;
@@ -147,10 +153,8 @@ export function boardMoves(
     const at = seenAfter.get(id);
     const from = seenBefore.get(id)!;
     let place: Place | null = null;
-    if (at?.zone === "discard" || at?.zone === "lost") {
-      // 山の上に別のカードが載っただけなら、動いていない。
-      const stayed = at.side === from.side && at.zone === from.zone;
-      if (!stayed && at.side !== null) place = { side: at.side, zone: at.zone };
+    if (isPile(at)) {
+      if (!samePlace(at, from) && at.side !== null) place = { side: at.side, zone: at.zone };
     } else if (at === undefined && from.side !== null && changes[from.side] !== undefined) {
       const counts = changes[from.side]!;
       const into = [
@@ -190,8 +194,8 @@ export function boardMoves(
     const at = seenAfter.get(id)!;
     const from = seenBefore.get(id);
     let place: Place | null = null;
-    if ((from?.zone === "discard" || from?.zone === "lost") && from.side !== null) {
-      place = { side: from.side, zone: from.zone };
+    if (isPile(from)) {
+      if (!samePlace(at, from) && from.side !== null) place = { side: from.side, zone: from.zone };
     } else if (from === undefined && at.side === null) {
       if (stadiumFrom.length === 1) place = { side: stadiumFrom[0]!, zone: "hand" };
     } else if (from === undefined && at.side !== null) {

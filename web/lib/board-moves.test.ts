@@ -110,6 +110,16 @@ describe("boardMoves", () => {
     });
   });
 
+  it("トラッシュの上のカードが外れて下のカードが見えても、下のカードは動かさない", () => {
+    const view = firstTurn();
+    const before = structuredClone(view);
+    const [under, top] = handOf(before).splice(0, 2);
+    before.self.discard.push(under!, top!);
+    const after = structuredClone(before);
+    handOf(after).push({ ...after.self.discard.pop()!, identified: false });
+    expect(moves(before, after).arrivals.has(under!.instanceId)).toBe(false);
+  });
+
   it("相手の場のポケモンが相手の手札へもどると、相手の伏せた手札へ入れる", () => {
     const before = firstTurn();
     const after = structuredClone(before);

@@ -104,7 +104,10 @@ export function WatchTable({ token }: { token: string }) {
           near={frame?.sides[0] ?? null}
           far={frame?.sides[1] ?? null}
           stadium={frame?.stadium ?? null}
-          shuffled={frame?.shuffled.map((player) => (player === 0 ? "near" : "far")) ?? []}
+          // 戻ったときや何手も飛んだときは、切ったのがいま描く局面へ来るあいだとは限らない。
+          shuffled={
+            stepped ? (frame?.shuffled.map((player) => (player === 0 ? "near" : "far")) ?? []) : []
+          }
         >
           <SeatSide state={state} frame={frame} player={1} aimed={aimed} />
           <div id="watch-stadium" className="board-center">

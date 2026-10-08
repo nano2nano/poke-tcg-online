@@ -289,7 +289,6 @@ function ghostOf(card: HTMLElement): HTMLElement {
  * どこへ行ったかが分からない。ゴーストは盤面の外に置き、盤面の描き直しに巻き込まない。
  */
 function depart(ghost: HTMLElement, target: Element, order: number): Animation {
-  document.body.append(ghost);
   // 伏せた手札では、増えたカードは後ろに並ぶ。
   const landing = [...target.querySelectorAll(".card")].at(-1) ?? null;
   const { x, y } = gapBetween(ghost, landing ?? target);
@@ -344,10 +343,14 @@ class Departures extends Component<{
     if (this.props.moves === NO_MOVES && previous.moves !== NO_MOVES) this.cancel();
     const area = this.props.board.current;
     if (leaving === null || area === null) return;
-    for (const { ghost, move } of leaving) {
+    const flights = leaving.flatMap(({ ghost, move }) => {
       const target = placeElement(area, move.place);
-      if (target === null) continue;
-      const animation = depart(ghost, target, move.order);
+      return target === null ? [] : [{ ghost, target, order: move.order }];
+    });
+    // 先に全部置いてから測る。1 枚ずつ置いては測ると、そのたびにページ全体の配置を計算し直す。
+    document.body.append(...flights.map(({ ghost }) => ghost));
+    for (const { ghost, target, order } of flights) {
+      const animation = depart(ghost, target, order);
       this.ghosts.add(animation);
       animation.addEventListener("finish", () => this.ghosts.delete(animation));
     }

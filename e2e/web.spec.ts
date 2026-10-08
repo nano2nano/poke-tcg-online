@@ -2677,6 +2677,36 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
   await expect(position).toHaveAttribute("data-shown", "5");
 });
 
+test("観戦で戻ったときは、山札を切って見せない", async ({ page }) => {
+  const messages = await botWatchMessages(2);
+  // 1 手目で座席 1 が山札を切ったことにする。
+  const shuffled = JSON.parse(messages[1]!) as { events: Record<string, unknown>[] };
+  shuffled.events.push({ ...shuffled.events[0], kind: "deck-shuffled", player: 1 });
+  messages[1] = JSON.stringify(shuffled);
+  await page.clock.install();
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    for (const message of messages) ws.send(message);
+  });
+  await page.goto("/watch/e2e-bot-watch");
+  await holdAnimations(page);
+  const position = page.locator("#watch-position");
+  await expect(position).toHaveAttribute("data-latest", "2");
+  await page.click("#watch-play");
+  const overlay = page.locator('#watch-side-1 [data-zone="deck"] .shuffling');
+  await page.click("#watch-forward");
+  await expect(position).toHaveAttribute("data-shown", "1");
+  await expect(overlay).toBeVisible();
+  await overlay.evaluate((node) =>
+    node.getAnimations({ subtree: true }).forEach((animation) => animation.finish()),
+  );
+  await expect(overlay).toHaveCount(0);
+  await page.click("#watch-forward");
+  await page.click("#watch-back");
+  await expect(position).toHaveAttribute("data-shown", "1");
+  await page.clock.runFor(100);
+  await expect(overlay).toHaveCount(0);
+});
+
 /** 設定のダイアログを開いて、演出を出すかを切り替える。 */
 async function setMotion(page: Page, on: boolean): Promise<void> {
   await page.locator('[id$="settings-button"]:visible').first().click();
