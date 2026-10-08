@@ -71,11 +71,15 @@ export const joinBotRequestSchema = z
 /** 相手を待つのをやめる要求（7.1 節）。 */
 export const leaveRequestSchema = z.object({ ticket: z.string() });
 
-/** AI どうしの対戦を立てる要求（7.4 節）。AI とデッキは座席 0、座席 1 の順に並べる。 */
+/**
+ * AI どうしの対戦を立てる要求（7.4 節）。AI とデッキは座席 0、座席 1 の順に並べる。
+ * デッキは AI と対戦する要求の `botDeck` と同じく、表のデッキの名前か組んだデッキである。
+ */
+const watchDeckSchema = z.union([z.string(), deckListSchema]);
 export const watchBotsRequestSchema = z.object({
   secret: z.string(),
   bots: z.tuple([z.string(), z.string()]),
-  decks: z.tuple([z.string(), z.string()]),
+  decks: z.tuple([watchDeckSchema, watchDeckSchema]),
 });
 
 /** 自分のものを読むだけの要求。シークレットを URL に載せないので本文で受ける（7.2 節）。 */
