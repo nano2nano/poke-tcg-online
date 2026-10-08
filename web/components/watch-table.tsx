@@ -104,6 +104,7 @@ export function WatchTable({ token }: { token: string }) {
           near={frame?.sides[0] ?? null}
           far={frame?.sides[1] ?? null}
           stadium={frame?.stadium ?? null}
+          shuffled={frame?.shuffled.map((player) => (player === 0 ? "near" : "far")) ?? []}
         >
           <SeatSide state={state} frame={frame} player={1} aimed={aimed} />
           <div id="watch-stadium" className="board-center">

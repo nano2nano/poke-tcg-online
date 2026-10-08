@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { MOVE_SECONDS } from "../lib/motion.js";
+import { MOVE_EASE, MOVE_SECONDS } from "../lib/motion.js";
 
 /** 画面で OS の設定と違うほうを選んだことを覚えておく localStorage のキー。値は `on` か `off`。 */
 const MOTION_KEY = "poke-motion";
@@ -82,7 +82,7 @@ export function MotionSettingProvider({ children }: { children: ReactNode }) {
     <MotionSetting value={setting}>
       <MotionConfig
         reducedMotion={animate ? "never" : "always"}
-        transition={{ duration: MOVE_SECONDS, ease: "easeOut" }}
+        transition={{ duration: MOVE_SECONDS, ease: MOVE_EASE }}
       >
         {children}
       </MotionConfig>

@@ -744,6 +744,38 @@ button[aria-pressed="true"] {
 .zone.hand > .card.back + .card.back {
   margin-left: calc(var(--w) * -0.55);
 }
+/* 切った山札は、2 つに分けた山を左右へ広げては重ね直す。2 度くり返して 0.6 秒。動き終えるまでの長さ（`web/lib/motion.ts` の `SETTLE_MS`）に収める。 */
+.shuffling {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% 0;
+  width: var(--w);
+  aspect-ratio: 63 / 88;
+  z-index: 3;
+  pointer-events: none;
+}
+.shuffling > .card {
+  position: absolute;
+  inset: 0;
+  box-shadow: 0 4px 10px rgb(0 0 0 / 0.3);
+  animation: shuffle-split 0.3s ease-in-out 2;
+}
+.shuffling > .card + .card {
+  animation-name: shuffle-split-other;
+}
+@keyframes shuffle-split {
+  50% {
+    translate: -55% -6%;
+    rotate: -8deg;
+  }
+}
+@keyframes shuffle-split-other {
+  50% {
+    translate: 55% 6%;
+    rotate: 8deg;
+  }
+}
 
 .card {
   position: relative;
@@ -834,6 +866,11 @@ button[aria-pressed="true"] {
 .attached:has(> .card[data-moving="arriving"]),
 .board-center:has(.card[data-moving="arriving"]) {
   z-index: 3;
+}
+/* 動いているカードは、影を付けて持ち上げて見せる。どのカードが動いているかが目に入る。 */
+.card[data-moving="arriving"],
+.pokemon[data-moving="arriving"] > .card {
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.35);
 }
 .card.back {
   background: repeating-linear-gradient(45deg, #2c4a8a 0 6px, #24407a 6px 12px);
@@ -1438,6 +1475,9 @@ button.choice-card:enabled > .card {
 
 :root[data-no-motion] :is(.result, .coin-inner, .hit, .showcase) {
   animation: none;
+}
+:root[data-no-motion] .shuffling {
+  display: none;
 }
 
 .watch-controls label {
