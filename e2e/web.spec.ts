@@ -2678,11 +2678,14 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
 });
 
 test("観戦で戻ったときは、山札を切って見せない", async ({ page }) => {
-  const messages = await botWatchMessages(2);
-  // 1 手目で座席 1 が山札を切ったことにする。
-  const shuffled = JSON.parse(messages[1]!) as { events: Record<string, unknown>[] };
-  shuffled.events.push({ ...shuffled.events[0], kind: "deck-shuffled", player: 1 });
-  messages[1] = JSON.stringify(shuffled);
+  // 山札を切るのは、1 手目の座席 1 だけにする。AI の手でも、種によっては山札を切る。
+  const messages = (await botWatchMessages(2)).map((message, index) => {
+    const parsed = JSON.parse(message) as { events?: Record<string, unknown>[] };
+    if (parsed.events === undefined) return message;
+    const events = parsed.events.filter(({ kind }) => kind !== "deck-shuffled");
+    if (index === 1) events.push({ ...parsed.events[0], kind: "deck-shuffled", player: 1 });
+    return JSON.stringify({ ...parsed, events });
+  });
   await page.clock.install();
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     for (const message of messages) ws.send(message);
