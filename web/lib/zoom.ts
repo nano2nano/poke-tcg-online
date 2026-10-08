@@ -5,6 +5,7 @@
 
 import { createContext, useContext, type KeyboardEvent } from "react";
 import type { MenuSubject } from "./card-menu.js";
+import type { MoveKind } from "./move-groups.js";
 
 /** 出す見出しとカード。場のポケモンなら、進化の下のカードとついているカードもまとめて出す。 */
 export interface ZoomTarget {
@@ -16,9 +17,13 @@ export interface ZoomTarget {
 
 export const ZoomContext = createContext<(target: ZoomTarget) => void>(() => {});
 
-/** 大きく出したものでできる手。 */
+/** 大きく出したものでできる手を、種類ごとに分けたもの。 */
 export interface ZoomMoves {
-  list: (subject: MenuSubject) => readonly { key: string; label: string; play: () => void }[];
+  list: (subject: MenuSubject) => readonly {
+    kind: MoveKind;
+    title: string;
+    entries: readonly { key: string; label: string; play: () => void }[];
+  }[];
 }
 
 /** 座席の画面が、大きく出したものでできる手を渡す。座席を離れたら null を渡す。 */
