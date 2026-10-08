@@ -216,7 +216,7 @@ function useArrival(element: RefObject<HTMLElement | null>, arrival: Move | unde
   }, [element, from]);
 }
 
-/** 山札、サイド、手札などの場所の要素。向かいの側は、卓を挟んで見たとおりに返して描いている（`SideBoard` の `mirrored`）。 */
+/** 向かいの側は、卓を挟んで見たとおりに返して描いている（`SideBoard` の `mirrored`）。 */
 function placeElement(board: Element, { side, zone }: Place): Element | null {
   const mat = board.querySelector(side === "far" ? ".mat.mirrored" : ".mat:not(.mirrored)");
   if (mat === null) return null;
@@ -225,7 +225,6 @@ function placeElement(board: Element, { side, zone }: Place): Element | null {
     : mat.querySelector(`[data-zone="${zone}"]`);
 }
 
-/** 2 つの要素の中心の隔たり。 */
 function gapBetween(from: Element, to: Element): { x: number; y: number } {
   const [start, end] = [from.getBoundingClientRect(), to.getBoundingClientRect()];
   return {
@@ -262,7 +261,7 @@ function arrive(card: HTMLElement, { place, order }: Move): (() => void) | undef
 }
 
 /**
- * 見えなくなるカードの写しを、描き替える前の位置に作る。描き替えたあとでは、元の要素は外され、
+ * 見えなくなるカードのゴースト（複製した要素）を、描き替える前の位置に作る。描き替えたあとでは、元の要素は外され、
  * 画像も手放している。傾きは外し、大きさは傾けたぶんを含まない元の要素の大きさにする。
  */
 function ghostOf(card: HTMLElement): HTMLElement {
@@ -286,12 +285,12 @@ function ghostOf(card: HTMLElement): HTMLElement {
 }
 
 /**
- * 写しを行き先へ動かして消す。山札や伏せた手札へ入るカードは要素ごと消えるので、写しが無いと
- * どこへ行ったかが分からない。写しは盤面の外に置き、盤面の描き直しに巻き込まない。
+ * ゴーストを行き先へ動かして消す。山札や伏せた手札へ入るカードは要素ごと消えるので、ゴーストが無いと
+ * どこへ行ったかが分からない。ゴーストは盤面の外に置き、盤面の描き直しに巻き込まない。
  */
 function depart(ghost: HTMLElement, target: Element, order: number): Animation {
   document.body.append(ghost);
-  // 手札とサイドでは、増えたカードは後ろに並ぶ。
+  // 伏せた手札では、増えたカードは後ろに並ぶ。
   const landing = [...target.querySelectorAll(".card")].at(-1) ?? null;
   const { x, y } = gapBetween(ghost, landing ?? target);
   const scale = landing === null ? 1 : landing.getBoundingClientRect().width / ghost.offsetWidth;
@@ -341,7 +340,7 @@ class Departures extends Component<{
     _state: unknown,
     leaving: Leaving[] | null,
   ) {
-    // 演出を切ったら、動いている写しも消す。写しは盤面の外にあり、CSS では止まらない。
+    // 演出を切ったら、動いているゴーストも消す。Web Animations で動かしているので、演出を切る CSS では止まらない。
     if (this.props.moves === NO_MOVES && previous.moves !== NO_MOVES) this.cancel();
     const area = this.props.board.current;
     if (leaving === null || area === null) return;

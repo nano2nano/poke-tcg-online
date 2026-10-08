@@ -35,7 +35,6 @@ export interface BoardMoves {
   departures: ReadonlyMap<string, Move>;
   /** 伏せた手札で、この局面に引いたカードの位置（何枚目から）と来た場所。 */
   backs: Partial<Record<BoardSide, { from: number; zone: "deck" | "prizes" }>>;
-  /** 山札を切った側。 */
   shuffled: readonly BoardSide[];
 }
 

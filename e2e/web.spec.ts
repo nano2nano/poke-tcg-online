@@ -1508,7 +1508,7 @@ test("前の局面でスタジアムに見えていたカードが手札に入�
   expect(await animationsOf(await newestHandCard(page, next))).toBe(0);
 });
 
-test("手札のカードが山札へ入ると、写しを山札まで動かして消す", async ({ page }) => {
+test("手札のカードが山札へ入ると、ゴーストを山札まで動かして消す", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
   await holdAnimations(page);
@@ -1537,7 +1537,7 @@ test("手札のカードが山札へ入ると、写しを山札まで動かし�
   await expect(ghost).toHaveCount(0);
 });
 
-test("写しが動いているあいだに演出を切ると、写しを消す", async ({ page }) => {
+test("ゴーストが動いているあいだに演出を切ると、ゴーストを消す", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
   await holdAnimations(page);

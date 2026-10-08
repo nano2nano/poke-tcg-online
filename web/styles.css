@@ -744,7 +744,7 @@ button[aria-pressed="true"] {
 .zone.hand > .card.back + .card.back {
   margin-left: calc(var(--w) * -0.55);
 }
-/* 切った山札は、2 つに分けた山を左右へ広げては重ね直す。2 度くり返して 0.6 秒。動き終えるまでの長さ（`web/lib/motion.ts` の `SETTLE_MS`）に収める。 */
+/* 切った山札は、2 つに分けた山を左右へ広げては重ね直す。長さは、動き終えるまでの長さ（`web/lib/motion.ts` の `SETTLE_MS`）に収める。 */
 .shuffling {
   position: absolute;
   top: 0;
