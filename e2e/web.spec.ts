@@ -171,6 +171,29 @@ test("AI のデッキには、学習したデッキの名前か、選んだデ�
   expect(sent[1]?.botDeck).toMatchObject({ cards: expect.any(Array) });
 });
 
+test("AI どうしの対戦でも、学習していないデッキを選ぶとそのカードを送る", async ({ page }) => {
+  await page.route("**/api/bots", async (route) => {
+    const answer = (await (await route.fetch()).json()) as { decks: unknown[] };
+    await route.fulfill({
+      json: { ...answer, bots: [{ name: "g0", size: 0, uploadedAt: "" }] },
+    });
+  });
+  const sent: { decks: unknown[] }[] = [];
+  await page.route("**/api/watch-bots", async (route) => {
+    sent.push(route.request().postDataJSON() as { decks: unknown[] });
+    await route.fulfill({ status: 400, json: { ok: false, errors: ["断った"] } });
+  });
+
+  await page.goto("/watch");
+  await expect(page.locator("#watch-bots-button")).toBeEnabled();
+  await expect(page.locator("#watch-deck-note-1")).toHaveCount(0);
+  await page.selectOption("#watch-deck-1", "sample");
+  await expect(page.locator("#watch-deck-note-1")).toBeVisible();
+  await page.click("#watch-bots-button");
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]?.decks).toEqual([expect.any(String), { cards: expect.any(Array) }]);
+});
+
 test("相手を待つあいだに押し直して断られても、前のチケットを待ち続ける", async ({ page }) => {
   const claimed = () => page.waitForResponse((response) => response.url().includes("/api/claim?"));
   const status = page.locator("#join-status");

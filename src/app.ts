@@ -441,7 +441,7 @@ async function route(request: Request, origin: string, context: RouteContext): P
     const body = parseBody(joinBotRequestSchema, await readBody(request));
     await archive.settled();
     const deck = chosenDeck(body.deck, body.deckPreset);
-    const botDeck = typeof body.botDeck === "string" ? presetDeck(body.botDeck) : body.botDeck;
+    const botDeck = givenDeck(body.botDeck);
     if (deck === null || botDeck === null) {
       return unknownPreset();
     }
@@ -472,8 +472,8 @@ async function route(request: Request, origin: string, context: RouteContext): P
   }
   if (request.method === "POST" && url.pathname === "/api/watch-bots") {
     const body = parseBody(watchBotsRequestSchema, await readBody(request));
-    const first = presetDeck(body.decks[0]);
-    const second = presetDeck(body.decks[1]);
+    const first = givenDeck(body.decks[0]);
+    const second = givenDeck(body.decks[1]);
     if (first === null || second === null) {
       return unknownPreset();
     }
@@ -511,6 +511,11 @@ async function route(request: Request, origin: string, context: RouteContext): P
 /** 組んだデッキか、表のデッキの名前から引いたデッキ。表に無い名前なら null。 */
 function chosenDeck(built: DeckList | undefined, preset: string | undefined): DeckList | null {
   return built ?? presetDeck(preset ?? "");
+}
+
+/** AI に握らせるデッキ。表のデッキの名前なら表から引き、組んだデッキはそのまま。表に無い名前なら null。 */
+function givenDeck(given: string | DeckList): DeckList | null {
+  return typeof given === "string" ? presetDeck(given) : given;
 }
 
 /**

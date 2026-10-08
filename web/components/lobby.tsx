@@ -12,7 +12,7 @@ import {
 } from "../lib/account.js";
 import { messageOf, postJson } from "../lib/api.js";
 import { useCardData } from "../lib/cards.js";
-import { savedDecksQuery, useSavedDecks, type SavedDeck } from "../lib/deck.js";
+import { savedDecksQuery, useSavedDecks } from "../lib/deck.js";
 import {
   botListQuery,
   claim,
@@ -34,6 +34,7 @@ import {
   type SeedShare,
 } from "../lib/join.js";
 import type { StoredSeat } from "../lib/seat.js";
+import { BotDeckOptions, savedDeckLabel, UnplayableNote, UntrainedDeckNote } from "./bot-deck.js";
 
 /** 覚えておくシェアの数。押すたびに増えるので、古いものから捨てる。 */
 const SHARES_KEPT = 8;
@@ -517,34 +518,14 @@ export function Lobby({
                 value={botChoice}
                 onChange={(event) => setBotPicked(event.target.value as DeckChoice)}
               >
-                {decks.length > 0 && (
-                  <optgroup label="AI が学習したデッキ">
-                    {decks.map((deck) => (
-                      <option key={deck.label} value={`preset:${deck.label}`}>
-                        {deckName(deck)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                <optgroup label="AI が学習していないデッキ">
-                  {savedDecks.map((deck) => (
-                    <option key={deck.deckId} value={`saved:${deck.deckId}`}>
-                      {savedDeckLabel(deck)}
-                    </option>
-                  ))}
-                  <option value="sample">サンプルデッキ</option>
-                </optgroup>
+                <BotDeckOptions presets={decks} saved={savedDecks} presetName={deckName} />
               </select>
             </label>
           </div>
           {/* 表が届くまでは、選んでいなくてもサンプルデッキを指している。 */}
           {bots.isSuccess && !botChoice.startsWith("preset:") && (
             <p id="bot-deck-note" className="note">
-              {botSaved !== null && botSaved.errors.length > 0 ? (
-                <UnplayableNote deck={botSaved} />
-              ) : (
-                "AI はこのデッキの回し方を学習していません。"
-              )}
+              <UntrainedDeckNote deck={botSaved} />
             </p>
           )}
           <div className="actions">
@@ -564,21 +545,6 @@ export function Lobby({
       </div>
     </section>
   );
-}
-
-function UnplayableNote({ deck }: { deck: SavedDeck }) {
-  return (
-    <>
-      このデッキは規則を通りません（{deck.errors.join("、")}）。{" "}
-      <Link to="/decks/$deckId" params={{ deckId: deck.deckId }}>
-        デッキを直す
-      </Link>
-    </>
-  );
-}
-
-function savedDeckLabel(deck: SavedDeck): string {
-  return deck.errors.length === 0 ? deck.name : `${deck.name}（規則を通りません）`;
 }
 
 async function secretOf(ensureAccount: () => Promise<unknown>): Promise<string> {
