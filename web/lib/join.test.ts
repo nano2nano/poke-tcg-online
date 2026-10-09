@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SavedDeck } from "./deck.js";
 import {
   claim,
+  defaultBotName,
   liveSeatOf,
   resolveBotDeckChoice,
   resolveDeckChoice,
@@ -131,5 +132,16 @@ describe("resolveBotDeckChoice", () => {
     expect(resolveBotDeckChoice(null, saved, presets)).toBe("preset:表のデッキ");
     expect(resolveBotDeckChoice("saved:消した", saved, presets)).toBe("preset:表のデッキ");
     expect(resolveBotDeckChoice(null, saved, [])).toBe("sample");
+  });
+});
+
+describe("選ぶ前に出しておく AI", () => {
+  it("latest が置かれていれば、一覧の先頭でなくても latest にする", () => {
+    expect(defaultBotName([{ name: "2026-10-07-g546" }, { name: "latest" }])).toBe("latest");
+  });
+
+  it("latest が無ければ一覧の先頭にし、一覧が空なら空にする", () => {
+    expect(defaultBotName([{ name: "b" }, { name: "a" }])).toBe("b");
+    expect(defaultBotName([])).toBe("");
   });
 });

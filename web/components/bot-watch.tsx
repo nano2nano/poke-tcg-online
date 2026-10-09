@@ -8,6 +8,7 @@ import { useCardData } from "../lib/cards.js";
 import { useSavedDecks } from "../lib/deck.js";
 import {
   botListQuery,
+  defaultBotName,
   deckRequest,
   isListed,
   presetName,
@@ -35,12 +36,12 @@ export function BotWatchForm() {
   const [status, setStatus] = useState("");
   const [requesting, setRequesting] = useState(false);
 
-  // 選ぶまでは、AI は一覧の先頭、デッキは表の先頭と 2 番目にする。同じデッキどうしでは見比べにくい。
+  // 選ぶまでは、AI は `latest`（無ければ一覧の先頭）、デッキは表の先頭と 2 番目にする。同じデッキどうしでは見比べにくい。
   // 選んだデッキが一覧から消えたら（消した保存したデッキ）、選ぶ前に戻す。
   const chosen = ([0, 1] as const).map((seat) => {
     const deck = picked[seat].deck;
     return {
-      bot: picked[seat].bot ?? botNames[0]?.name ?? "",
+      bot: picked[seat].bot ?? defaultBotName(botNames),
       deck:
         deck !== undefined && isListed(deck, savedDecks, decks) ? deck : defaultDeck(decks, seat),
     };

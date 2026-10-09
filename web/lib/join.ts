@@ -154,6 +154,14 @@ export const botListQuery = queryOptions({
   staleTime: Infinity,
 });
 
+/** いちばん新しい重みを置く AI の名前。新しい重みが出るたびに、この名前の中身を置き換える。 */
+export const LATEST_BOT = "latest";
+
+/** 選ぶ前に出しておく AI。`latest` が置かれていればそれ、無ければ一覧の先頭にする。 */
+export function defaultBotName(bots: readonly { name: string }[]): string {
+  return bots.find((bot) => bot.name === LATEST_BOT)?.name ?? bots[0]?.name ?? "";
+}
+
 /** デッキの名前は看板のカードの名前をつなぐ。カードの表が届くまではラベルを出す（仕様 7.3 節）。 */
 export function presetName(deck: DeckPreset, cards: CardTable): string {
   const names = deck.aces.map((ace) => cards[ace]?.name);
