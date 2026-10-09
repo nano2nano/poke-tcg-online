@@ -16,6 +16,7 @@ import { savedDecksQuery, useSavedDecks } from "../lib/deck.js";
 import {
   botListQuery,
   claim,
+  defaultBotName,
   deckRequest,
   isListed,
   leaveQueue,
@@ -83,7 +84,7 @@ export function Lobby({
   const decks = bots.data?.decks ?? [];
   const deckName = (deck: DeckPreset) => presetName(deck, table);
   const [bot, setBot] = useState<string | null>(null);
-  const chosenBot = bot ?? botNames[0]?.name ?? "";
+  const chosenBot = bot ?? defaultBotName(botNames);
 
   const saved = useSavedDecks();
   const savedDecks = saved.decks.data ?? [];
