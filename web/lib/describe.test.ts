@@ -76,6 +76,22 @@ describe("describeEvents", () => {
     expect(capped?.hit).toBeUndefined();
   });
 
+  it("のせ替えで取りのぞいたダメカンは、元のポケモンに減ったダメージを浮かべる", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const removed = event({
+      kind: "damage-counters-removed",
+      target: "p0",
+      to: "p1",
+      count: 2,
+      requested: 3,
+      beforeDamage: 20,
+      afterDamage: 0,
+    });
+    const [notice] = describeEvents([removed], [view], who, cards);
+    expect(notice?.text).toContain("ダメカンを 2 個取りのぞいた");
+    expect(notice?.hit).toMatchObject({ target: "p0", text: "+20", tone: "positive" });
+  });
+
   it("続けて引いたカードは 1 つに畳み、枚数を書く", () => {
     const drawn = event({ kind: "card-drawn-hidden", player: 1, count: 1, actor: 1 });
     const notices = describeEvents([drawn, drawn, drawn], [null], who, cards);
