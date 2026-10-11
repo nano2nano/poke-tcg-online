@@ -21,7 +21,7 @@ import { validateDeck } from "../src/deck.js";
 import { commitSeed, commitShare } from "../src/fingerprint.js";
 import {
   applyMove,
-  cannotRevisit,
+  deciderOf,
   derivedView,
   encodeEntityWeights,
   encodePpoWeights,
@@ -29,6 +29,7 @@ import {
   legalMoves,
   newEntityWeightsFile,
   newPpoWeightsFile,
+  neverMasked,
   NO_KNOWLEDGE,
   positionKey,
   projectEvents,
@@ -40,6 +41,7 @@ import {
   type Move,
   type Player,
   type PlayerView,
+  touchesUnseen,
 } from "../src/engine.js";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { BOT_MATCH_LIVE, Lobby, MATCH_LIVE } from "../src/lobby.js";
@@ -218,9 +220,13 @@ describe("重みから作る AI", () => {
 
 describe("AI に見せる候補", () => {
   /**
-   * 座席 1 に AI が就いた対戦を、main で座席 1 の候補が 2 つ以上あり、そのどれかの行き先が既出になりうる
-   * （`cannotRevisit` でない）局面まで、先頭の合法手で進める。
+   * 座席 1 に AI が就いた対戦を、main で座席 1 の候補が 2 つ以上あり、そのどれかが外れうる局面まで、
+   * 先頭の合法手で進める。外れうるのは、行き先を見ずに残す手（`neverMasked`）でなく、偶然も開示も伴わない手である。
    */
+  function maskable(state: GameState, move: Move): boolean {
+    return !neverMasked(move) && !touchesUnseen(state, applyMove(state, move));
+  }
+
   function botMatchInMain(): Match {
     ensureCards();
     const match = createMatch({
@@ -245,7 +251,7 @@ describe("AI に見せる候補", () => {
         mover === 1 &&
         match.state.phase === "main" &&
         legal.length >= 2 &&
-        legal.some((move) => !cannotRevisit(move))
+        legal.some((move) => maskable(match.state, move))
       ) {
         return match;
       }
@@ -258,14 +264,14 @@ describe("AI に見せる候補", () => {
     const legal = legalMovesFor(match, 1)!;
     expect(botCandidates(match, legal)).toEqual(legal);
 
-    // 行き先が同じ番の既出の局面になりうる手を 1 つ選び、その行き先に既に来たことにする。同じ行き先へ進む手は
-    // どれも外れる。なりえない手（`cannotRevisit`）は行き先を当てずに残すので、既出にしても外れない。
-    const key = (move: Move) => positionKey(applyMove(match.state, move).state);
-    const picked = legal.find((move) => !cannotRevisit(move));
-    if (picked === undefined) throw new Error("行き先が既出になりうる手が候補に無い");
+    // 外れうる手を 1 つ選び、その行き先に既に来たことにする。行き先が座席 1 から見て同じになる外れうる手は
+    // どれも外れる。行き先を見ずに残す手（`neverMasked`）と、偶然か開示を伴う手は、既出にしても外れない。
+    const key = (move: Move) => positionKey(applyMove(match.state, move).state, 1);
+    const picked = legal.find((move) => maskable(match.state, move));
+    if (picked === undefined) throw new Error("外れうる手が候補に無い");
     const visited = key(picked);
     match.botRevisit!.arrive(applyMove(match.state, picked).state);
-    const kept = legal.filter((move) => key(move) !== visited);
+    const kept = legal.filter((move) => !maskable(match.state, move) || key(move) !== visited);
     expect(kept.length).toBeGreaterThan(0);
     expect(botCandidates(match, legal)).toEqual(kept);
   });
@@ -396,17 +402,22 @@ function replayed(match: Match, seat: Player): { tracker: SeatKnowledge; states:
 
 /**
  * 自己対戦が学習した方策に見せる候補を、指し直した局面から求め直す。main で候補が 2 つ以上あれば、
- * 同じ番で既に来た局面（途中の選択の局面も含む）へ戻る手を外す。すべて外れるなら全部を残す。
+ * 手を決める座席から見て、同じ番で既に来た局面（途中の選択の局面も含む）へ戻る手を外す。偶然か開示を伴う手は
+ * 外さない。すべて外れるなら全部を残す。
  */
 function expectedCandidates(states: readonly GameState[], legal: readonly Move[]): Move[] {
   const now = states.at(-1)!;
   if (now.phase !== "main" || legal.length <= 1) return [...legal];
+  const seat = deciderOf(now);
   const visited = new Set(
     states
       .filter((one) => one.turn === now.turn && one.turnPlayer === now.turnPlayer)
-      .map(positionKey),
+      .map((one) => positionKey(one, seat)),
   );
-  const admitted = legal.filter((move) => !visited.has(positionKey(applyMove(now, move).state)));
+  const admitted = legal.filter((move) => {
+    const applied = applyMove(now, move);
+    return !visited.has(positionKey(applied.state, seat)) || touchesUnseen(now, applied);
+  });
   return admitted.length === 0 ? [...legal] : admitted;
 }
 

@@ -141,6 +141,7 @@ describe("choicePrompt", () => {
     max: 2,
     remaining: 1,
     picked: ["選んだ"],
+    pickedInPlay: null,
     destination: "discard",
     revealsResult: true,
     window: null,

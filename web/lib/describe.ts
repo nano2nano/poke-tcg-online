@@ -398,6 +398,16 @@ function describeRun(
           : {}),
       };
     }
+    case "damage-counters-removed": {
+      // のせ替えの元から取りのぞいた分。先へのせた分は `damage-counters-placed` が別に届く。
+      const amount = event.beforeDamage - event.afterDamage;
+      return {
+        text: `${pokemon(event.target)}からダメカンを ${event.count} 個取りのぞいた`,
+        ...(amount > 0
+          ? { hit: { target: event.target, text: `+${amount}`, tone: "positive" } }
+          : {}),
+      };
+    }
     case "damage-healed":
       return {
         text: `${pokemon(event.target)}の HP を ${event.amount} 回復`,

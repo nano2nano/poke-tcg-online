@@ -94,8 +94,8 @@ export { derivedView } from "../engine/src/engine/derivedView.js";
 export { RevisitTracker } from "../engine/src/testing/revisit.js";
 /** テストが、サーバとは別の道で AI の座席の候補を求め直すのに使う。 */
 export { positionKey } from "../engine/src/testing/revisit.js";
-/** テストが、候補から外れうる手を選ぶのに使う。 */
-export { cannotRevisit } from "../engine/src/testing/revisit.js";
+/** テストが、候補から外れうる手を選ぶのと、外れる条件をサーバとは別の道で求め直すのに使う。 */
+export { deciderOf, neverMasked, touchesUnseen } from "../engine/src/testing/revisit.js";
 /**
  * AI の座席が握るデッキは、学習の `--decks` が握らせた大会の入賞デッキの本である（7.3 節）。
  * 学習と同じ読み方で `--decks` の値から本を引くのに要る。
