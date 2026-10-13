@@ -927,10 +927,12 @@ test("ベンチへ下がるポケモンは、ダメージの印も一緒に動�
 function anotherPokemon(views: PlayerView[], damage: number) {
   const active = views[0]!.self.active;
   if (active === null || "concealed" in active) throw new Error("バトル場にポケモンがいない");
-  const copy = structuredClone(active);
-  copy.inPlayId += "-2";
-  for (const card of copy.stack) card.instanceId += "-2";
-  copy.damage = damage;
+  const copy = {
+    ...structuredClone(active),
+    inPlayId: `${active.inPlayId}-2`,
+    stack: active.stack.map((card) => ({ ...card, instanceId: `${card.instanceId}-2` })),
+    damage,
+  };
   return { active, copy };
 }
 
