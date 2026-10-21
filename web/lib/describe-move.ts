@@ -258,6 +258,7 @@ const RULE_ANSWERS: Partial<
   "setup-place-bench": { card: "をベンチに出す", decline: "ベンチに出し終える" },
   "setup-bonus-draw": { decline: "追加で引かない" },
   "use-second-attack": { accept: "もう一度ワザを使う", decline: "使わずに番を終える" },
+  "use-moment-ability": { decline: "使わずに番を終える" },
 };
 
 /**
@@ -463,6 +464,8 @@ export function choicePrompt(context: MoveContext): string {
       return "バトル場に出すポケモンを選んでください。";
     case "use-second-attack":
       return "この番、もう一度ワザを使えます。使いますか。";
+    case "use-moment-ability":
+      return "番を終える前に、出たとき・もどったときの特性を使えます。使うポケモンを選んでください。";
     case "select-attack":
       return "使うワザを選んでください。";
     case "order-effects":

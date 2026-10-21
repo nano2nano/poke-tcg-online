@@ -230,6 +230,7 @@ describe("エンジン自身が積む選択", () => {
     const source = { defId: "x", label: "効果の元", instanceId: null };
     const prompts = [
       withChoice("use-second-attack", { kind: "confirm", count: 1 }),
+      withChoice("use-moment-ability", { kind: "selectInPlay", candidates: [] }),
       withChoice("select-attack", { kind: "selectAttack", candidates: [] }),
       withChoice("order-effects", { kind: "selectEffect", candidates: [], context: "trigger" }),
       withChoice("place-check-effect", { kind: "selectPlacement", effect: source }),
@@ -248,6 +249,11 @@ describe("エンジン自身が積む選択", () => {
   it("2 回目のワザを使うかの答えは、使うか番を終えるかで出す", () => {
     const context = withChoice("use-second-attack", { kind: "confirm", count: 1 });
     expect(answer(context, { kind: "accept" })).toBe("もう一度ワザを使う");
+    expect(answer(context, { kind: "decline" })).toBe("使わずに番を終える");
+  });
+
+  it("ワザのあとの、出たとき・もどったときの特性を使わない答えは、番を終えるで出す", () => {
+    const context = withChoice("use-moment-ability", { kind: "selectInPlay", candidates: [] });
     expect(answer(context, { kind: "decline" })).toBe("使わずに番を終える");
   });
 
