@@ -1153,7 +1153,7 @@ test("トスを見ないまま始まった対戦では、始まったときに�
   await expect(page.locator(".showcase .coin")).toHaveAttribute("data-face", "tails");
 });
 
-test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し、ページの終わりまで送れば手札に重ねない", async ({
+test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し、ページの終わりまで送れば下の欄に重ねない", async ({
   page,
 }) => {
   // 縦に持った iPad。盤面の横に空きが無い。
@@ -1171,12 +1171,10 @@ test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し�
 
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   const log = page.locator("#event-log");
-  const [bar, hand] = [
-    await log.boundingBox(),
-    await page.locator('#self [data-zone="hand"]').boundingBox(),
-  ];
-  if (bar === null || hand === null) throw new Error("ログか手札が描けていない");
-  expect(hand.y + hand.height).toBeLessThanOrEqual(bar.y);
+  // 盤面の下に指せる手の欄が続き、観戦のリンクがページのいちばん下に来る。
+  const [bar, last] = [await log.boundingBox(), await page.locator("#watch-link").boundingBox()];
+  if (bar === null || last === null) throw new Error("ログか観戦のリンクが描けていない");
+  expect(last.y + last.height).toBeLessThanOrEqual(bar.y);
 
   await log.getByRole("button").click();
   await expect(lines.filter({ visible: true })).toHaveCount(before + 2);
@@ -1223,7 +1221,7 @@ test("次の局面が届いたら、待たせている数字はコインが回�
   const send = await seatWithEvents(page, view);
   const hits = page.locator(".hit");
 
-  // 3 枚のコインが回り終えるのは 1.3 秒後。
+  // コインが回り終えるより前に、次の局面を届ける。
   send([
     { kind: "coin-flipped", player: 0, results: [true, false, true] },
     damageTo(activeOf(view).inPlayId),

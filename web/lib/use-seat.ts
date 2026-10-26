@@ -105,7 +105,6 @@ export function useSeat(
       const added = notices.map((notice) => ({ ...notice, id: (logged += 1) })).reverse();
       setEvents((shown) => [...added, ...shown]);
     };
-    /** トスの結果は、勝ち負けの色を付けてコインでも見せる。 */
     const tellToss = (won: boolean, text: string) => {
       const notice: Notice = {
         text,
