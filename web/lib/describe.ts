@@ -217,6 +217,8 @@ export interface Notice {
   by?: Player;
   /** ログにだけ残し、盤面の演出には出さない。 */
   quiet?: boolean;
+  /** 対戦ログで見出しになり、次の見出しまでの行をその下にまとめる。カードやワザを使ったことなど。 */
+  opens?: boolean;
 }
 
 export type View = PlayerView | SpectatorView;
@@ -258,6 +260,9 @@ export function describeSummary(summary: MatchSummary): string {
  * 届いたイベントを、人に見せる結果へ直す。人に見せる文の無いイベントは落とす。
  * 名前は適用後と適用前の盤面から引く。きぜつしたポケモンは適用後の盤面にもういない。
  * 1 枚ずつ届くイベント（引く、トラッシュする、移す、サイドを取る）が続いたら、1 つにまとめる。
+ *
+ * 効果を選びながら進めると、1 つの効果が何回かの局面に分かれて届く。局面の先頭の行が見出しでなければ、
+ * 前の局面で始まった効果の続きである。
  */
 export function describeEvents(
   events: readonly PlayerEvent[],
@@ -273,17 +278,78 @@ export function describeEvents(
     (event) => event.kind !== "card-discarded" || !played.has(event.card.instanceId),
   );
   const notices: Notice[] = [];
+  /** ポケモンチェックの見出し。チェックで何も起きなければ出さない。 */
+  let check: Notice | null = null;
+  /** この局面で、見出しの行を出したか。 */
+  let opened = false;
+  /** この局面で、もう効果が進んでいるか。見出しの行を出したか、効果の選択に答えた。 */
+  let underway = false;
   let start = 0;
   while (start < told.length) {
-    const key = foldKey(told[start]!);
+    const first = told[start]!;
+    const key = foldKey(first);
     const folds = (event: PlayerEvent) => key !== undefined && foldKey(event) === key;
     let end = start + 1;
     while (end < told.length && folds(told[end]!)) end += 1;
-    const notice = describeRun(told.slice(start, end), views, who, cards);
-    if (notice !== null) notices.push(notice);
+    const run = told.slice(start, end);
     start = end;
+    const opens = opensGroup(first, underway);
+    if (opens || first.kind === "choice-answered") underway = true;
+    const notice = describeRun(run, views, who, cards);
+    if (notice === null) continue;
+    if (first.kind === "pokemon-check-started") {
+      check = { ...notice, opens };
+    } else if (!opens) {
+      if (check !== null) notices.push(check);
+      check = null;
+      notices.push(notice);
+    } else {
+      check = null;
+      // にげる・進化・スタジアムを出すは、特殊状態を治す、前のスタジアムをトラッシュするなどを
+      // 済ませてからイベントが出る。この局面のそれより前の行は、その効果で起きたこと。
+      if (!opened && TRAILING.has(first.kind)) {
+        notices.unshift({ ...notice, opens });
+      } else notices.push({ ...notice, opens });
+      opened = true;
+    }
   }
   return notices;
+}
+
+const TRAILING = new Set<PlayerEvent["kind"]>([
+  "pokemon-retreated",
+  "pokemon-evolved",
+  "stadium-played",
+]);
+
+/**
+ * 対戦ログの見出しになるイベント。プレイヤーが指した手と、番やポケモンチェックの始まり。
+ * 対戦の準備は、手で選んだことと山札を配ることが入り混じるので、まとめない。
+ *
+ * スタジアムやポケモンを出す・進化させる・エネルギーやどうぐをつけるは、効果でも同じイベントが出て、
+ * `source` も空のことがある。効果がまだ始まっていない局面で起きたときだけ、手で指したものとする。
+ */
+function opensGroup(event: PlayerEvent, underway: boolean): boolean {
+  if (event.window.kind === "setup") return false;
+  switch (event.kind) {
+    case "turn-started":
+    case "pokemon-check-started":
+    case "attack-declared":
+    case "ability-used":
+    case "hand-ability-used":
+    case "trainer-played":
+    case "stadium-effect-used":
+    case "pokemon-retreated":
+      return true;
+    case "stadium-played":
+    case "pokemon-played":
+    case "pokemon-evolved":
+    case "energy-attached":
+    case "tool-attached":
+      return !underway;
+    default:
+      return false;
+  }
 }
 
 /** 盤面の演出に出すもの。`self` を渡すと、その座席が自分でしたことは出さない。 */
@@ -432,6 +498,8 @@ function describeRun(
       return { text: `${who(event.player)}の手札にたねポケモンが無く、引き直した` };
     case "turn-started":
       return { text: `${who(event.player)}の番`, tone: "turn" };
+    case "pokemon-check-started":
+      return { text: "ポケモンチェック", quiet: true };
     case "card-drawn":
     case "card-drawn-hidden":
       return {
@@ -582,7 +650,6 @@ function describeRun(
     case "knockout-batch-completed":
     case "turn-ended":
     case "phase-changed":
-    case "pokemon-check-started":
     case "pokemon-check-completed":
     case "choice-requested":
     case "choice-answered":

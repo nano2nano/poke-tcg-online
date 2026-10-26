@@ -20,7 +20,7 @@ import {
 } from "./describe.js";
 import { initialSeatState, seatReducer, type SeatState, type SetupAction } from "./match-state.js";
 import { checkShuffle, forgetSeat, type ShuffleCheck, type StoredSeat } from "./seat.js";
-import type { LoggedEvent } from "./use-watch.js";
+import { appendToLog, type LogEntry } from "./event-log.js";
 
 /** 繋がっていないあいだの様子。繋がっていれば null。 */
 export type Connection = { state: "reconnecting" | "replaced"; text: string } | null;
@@ -29,7 +29,7 @@ export interface Seating {
   state: SeatState;
   connection: Connection;
   /** 新しいものが先頭。 */
-  events: LoggedEvent[];
+  events: LogEntry[];
   shuffle: { result: ShuffleCheck; text: string } | null;
   /**
    * 座席を離れた理由。座席を失ったときと、座席へ繋がらなかったときに入る。
@@ -64,7 +64,7 @@ export function useSeat(
 ): Seating {
   const [state, setState] = useState(() => initialSeatState(seated.seat));
   const [connection, setConnection] = useState<Connection>(null);
-  const [events, setEvents] = useState<LoggedEvent[]>([]);
+  const [events, setEvents] = useState<LogEntry[]>([]);
   const [shuffle, setShuffle] = useState<Seating["shuffle"]>(null);
   const [left, setLeft] = useState<Seating["left"]>(null);
   const [awaiting, setAwaiting] = useState(false);
@@ -88,7 +88,6 @@ export function useSeat(
   });
 
   useEffect(() => {
-    let logged = 0;
     let disposed = false;
     /** 一度でも `sync` か `pending` が届いたか。届いていれば、サーバはこの座席を知っている。 */
     let known = false;
@@ -100,10 +99,10 @@ export function useSeat(
     let shownTimer: ReturnType<typeof setTimeout> | undefined;
 
     const who = (player: Player) => (player === seated.seat ? "あなた" : "相手");
-    const log = (notices: Notice[]) => {
+    /** 盤面のイベントの行だけを見出しの下にまとめ、ほかの知らせは 1 行ずつ残す。 */
+    const log = (notices: Notice[], alone = true) => {
       if (notices.length === 0) return;
-      const added = notices.map((notice) => ({ ...notice, id: (logged += 1) })).reverse();
-      setEvents((shown) => [...added, ...shown]);
+      setEvents((shown) => appendToLog(shown, notices, alone));
     };
     const tellToss = (won: boolean, text: string) => {
       const notice: Notice = {
@@ -159,7 +158,7 @@ export function useSeat(
         case "delta": {
           const happened = message.t === "delta" ? message.events : [];
           const notices = describeEvents(happened, [current.view, before.view], who, cardTable());
-          log(notices);
+          log(notices, false);
           // 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。
           if (message.t === "sync" && !firstPlayerShown && message.view.phase === "setup") {
             firstPlayerShown = true;

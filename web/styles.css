@@ -517,33 +517,55 @@ button[data-kind="attack"] {
   overflow-y: auto;
   list-style: none;
 }
-.events > li {
+.events li,
+.event-latest {
   padding: 4px 8px;
   border-left: 3px solid transparent;
   animation: log-in 0.6s ease-out;
 }
+.event-head {
+  display: block;
+}
+/* 効果で起きたことは見出しの下に字下げして並べ、どの見出しの続きかを線でつなぐ。 */
+.event-details {
+  margin: 2px 0 0 4px;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.events .event-details > li {
+  padding: 1px 0 1px 8px;
+  border-left: 2px solid var(--line);
+}
 /* 番の始まりを区切りの線にして、どちらの番に起きたことかを読み分けられるようにする。 */
-.events > li[data-tone="turn"] {
+.events > li[data-tone="turn"] > .event-head {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.events > li[data-tone="turn"] > .event-head,
+.event-latest[data-tone="turn"] {
   font-weight: 700;
   color: #2b6cb0;
 }
-.events > li[data-tone="turn"]::before,
-.events > li[data-tone="turn"]::after {
+.events > li[data-tone="turn"] > .event-head::before,
+.events > li[data-tone="turn"] > .event-head::after {
   content: "";
   flex: 1;
   border-top: 1px solid var(--line);
 }
-.events > li[data-tone="attention"] {
+:is(.events li, .event-latest)[data-tone="attention"] {
   border-left-color: #b7791f;
 }
-.events > li[data-tone="positive"] {
+:is(.events li, .event-latest)[data-tone="positive"] {
   border-left-color: #1d6b3a;
 }
-.events > li[data-tone="negative"] {
+:is(.events li, .event-latest)[data-tone="negative"] {
   border-left-color: #c0392b;
+}
+.event-latest {
+  display: none;
 }
 @keyframes log-in {
   from {
@@ -584,7 +606,11 @@ button[data-kind="attack"] {
     align-items: center;
     gap: 8px;
   }
-  .event-log:not([data-open]) .event-log-head > h2 {
+  /*
+   * 一覧は display で消さずに見た目だけ隠し、最新の 1 行を別に出す。display で消すと続けて届いた行を読み上げず、
+   * 開いたときに全部の行の出てくる動きがやり直しになる。
+   */
+  .event-log:not([data-open]) :is(.event-log-head > h2, .events) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -592,25 +618,16 @@ button[data-kind="attack"] {
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  /*
-   * 古い行は消さずに枠の外へ切る。display で消すと開いたときに全部の行の出てくる動きがやり直しになり、
-   * visibility で隠すと続けて届いた行を読み上げない。
-   */
-  .event-log:not([data-open]) .events {
-    --row: calc(1.5em + 8px);
+  .event-log:not([data-open]) .event-latest {
+    display: block;
     order: -1;
     flex: 1;
-    max-height: var(--row);
+    min-width: 0;
     margin: 0;
-    overflow: hidden;
-    line-height: 1.5;
-  }
-  .event-log:not([data-open]) .events > li {
-    box-sizing: border-box;
-    height: var(--row);
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+    line-height: 1.5;
   }
 }
 @media (min-width: 1024px) {
@@ -1584,7 +1601,7 @@ button.choice-card:enabled > .card {
   }
 }
 
-:root[data-no-motion] :is(.events > li, .coin-inner, .hit, .showcase > *) {
+:root[data-no-motion] :is(.events li, .event-latest, .coin-inner, .hit, .showcase > *) {
   animation: none;
 }
 
