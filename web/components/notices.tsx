@@ -1,6 +1,6 @@
 /**
- * コイントスやダメージなどの結果を、画面の上の端に少しのあいだ重ねて出す。
- * ダメージと回復の数字は、そのポケモンの上に浮かべる。出たカードは、盤面の左の端に大きく見せる。
+ * 結果を盤面の上で見せる演出。ダメージと回復の数字は、そのポケモンの上に浮かべる。出たカードと
+ * コインは、盤面の左の端に大きく見せる。結果の文は対戦ログ（`event-log.tsx`）に出す。
  */
 
 import {
@@ -11,19 +11,12 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import type { CoinToss, Hit, Notice, Tone } from "../lib/describe.js";
+import type { CoinToss, Hit, Notice } from "../lib/describe.js";
 import { SETTLE_MS } from "../lib/motion.js";
 import { CardFace } from "./board.js";
 import { useMotionOn } from "./motion-setting.js";
 
-/**
- * 同時に出しておく結果の数。溢れたら古いものから消すが、コインは残す。1 つの手でもコイン、
- * ダメージ、特殊状態、きぜつ、番の交代と重なりうるので、古い順だとコインから先に消える。
- */
-const NOTICE_LIMIT = 5;
-const NOTICE_MS = 4_000;
-/** コインは回り終えてから読むので、そのぶん長く残す。 */
-const COIN_NOTICE_MS = 6_000;
+const HIT_MS = 4_000;
 /** 1 つの局面の結果を、この間を置いて 1 つずつ出す。 */
 const STEP_MS = 400;
 /**
@@ -32,59 +25,56 @@ const STEP_MS = 400;
  */
 const COIN_SPIN_MS = 1_000;
 const COIN_GAP_MS = 150;
-/** 出たカードを大きく見せておく長さ。次のカードが出たら入れ替える。 */
+/** 出たカードと、回り終えたコインを大きく見せておく長さ。 */
 const SHOWCASE_MS = 1_500;
-
-interface Shown {
-  id: number;
-  text: string;
-  tone: Tone;
-  coins?: CoinToss;
-}
 
 interface Floating extends Hit {
   id: number;
 }
 
-interface Showcase {
+interface Shown<T> {
   id: number;
-  defId: string;
+  value: T;
 }
 
 export interface NoticeFeed {
-  notices: Shown[];
   hits: Floating[];
-  showcase: Showcase | null;
+  /**
+   * 大きく見せている、出たカードの defId とコイン。コインのあとにカードが出ても読み終える前に消さないよう、
+   * 枠を分けておき、それぞれ次のものが来たら入れ替える。
+   */
+  card: Shown<string> | null;
+  coins: Shown<CoinToss> | null;
   /**
    * 同じタスクの中で続けて渡した結果は、1 つの局面の結果として順に出す。次の局面の結果が来たら、
    * 出しきっていない前の結果は待たせずに出す。`hit` を持つ結果は、盤面の上に数字を浮かべる。
    */
   show: (notice: Notice) => void;
   /**
-   * 渡した結果を出し終え、出たカードを見せ終え、カードが動き終えるまでの長さ。演出を出さないなら 0。
+   * 渡した結果を出し終え、出たカードとコインを見せ終え、カードが動き終えるまでの長さ。演出を出さないなら 0。
    * 新しい局面を受けた直後に呼ぶ。結果の無い局面でも、カードが動き終えるまでは待つ。
    */
   remainingMs: () => number;
 }
 
 export function useNotices(): NoticeFeed {
-  const [notices, setNotices] = useState<Shown[]>([]);
   const [hits, setHits] = useState<Floating[]>([]);
-  const [showcase, setShowcase] = useState<Showcase | null>(null);
-  const [queue] = useState(() => createQueue(setNotices, setHits, setShowcase));
+  const [card, setCard] = useState<Shown<string> | null>(null);
+  const [coins, setCoins] = useState<Shown<CoinToss> | null>(null);
+  const [queue] = useState(() => createQueue(setHits, setCard, setCoins));
   useEffect(() => queue.dispose, [queue]);
   // 演出を出さないときはカードを動かさないので、結果も数字も待たせずに出す。
   const animate = useMotionOn();
   useEffect(() => queue.setAnimate(animate), [queue, animate]);
-  return { notices, hits, showcase, show: queue.show, remainingMs: queue.remainingMs };
+  return { hits, card, coins, show: queue.show, remainingMs: queue.remainingMs };
 }
 
-type Setter<T> = (update: (current: T[]) => T[]) => void;
+type Setter<T> = (update: (current: T) => T) => void;
 
 function createQueue(
-  setNotices: Setter<Shown>,
-  setHits: Setter<Floating>,
-  setShowcase: (update: (current: Showcase | null) => Showcase | null) => void,
+  setHits: Setter<Floating[]>,
+  setCard: Setter<Shown<string> | null>,
+  setCoins: Setter<Shown<CoinToss> | null>,
 ) {
   let nextId = 0;
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -123,7 +113,7 @@ function createQueue(
     settling = [];
     setHits((current) => [...current, ...ready]);
     for (const { id } of ready) {
-      later(NOTICE_MS, () => setHits((current) => current.filter((hit) => hit.id !== id)));
+      later(HIT_MS, () => setHits((current) => current.filter((hit) => hit.id !== id)));
     }
   };
   const schedule = () => {
@@ -133,29 +123,19 @@ function createQueue(
     else floating = later(wait, float);
   };
 
-  const reveal = ({ text, tone = "neutral", coins, hit, card }: Notice) => {
+  const present = <T,>(set: Setter<Shown<T> | null>, id: number, value: T, ms: number) => {
+    set(() => ({ id, value }));
+    later(ms, () => set((current) => (current?.id === id ? null : current)));
+  };
+
+  const reveal = ({ coins, hit, card }: Notice) => {
     const id = (nextId += 1);
-    const shown: Shown = coins === undefined ? { id, text, tone } : { id, text, tone, coins };
-    setNotices((current) => {
-      const next = [...current, shown];
-      while (next.length > NOTICE_LIMIT) {
-        const older = next.filter((notice) => notice !== shown);
-        const drop = older.find((notice) => notice.coins === undefined) ?? older[0]!;
-        next.splice(next.indexOf(drop), 1);
-      }
-      return next;
-    });
-    later(coins === undefined ? NOTICE_MS : COIN_NOTICE_MS, () =>
-      setNotices((current) => current.filter((notice) => notice.id !== id)),
-    );
     if (hit !== undefined) {
       settling.push({ ...hit, id });
       schedule();
     }
-    if (card !== undefined) {
-      setShowcase(() => ({ id, defId: card }));
-      later(SHOWCASE_MS, () => setShowcase((current) => (current?.id === id ? null : current)));
-    }
+    if (card !== undefined) present(setCard, id, card, SHOWCASE_MS);
+    if (coins !== undefined) present(setCoins, id, coins, showcaseOf(coins));
     return stepOf(coins);
   };
 
@@ -196,12 +176,16 @@ function createQueue(
         schedule();
         doneAt = busyUntil = performance.now();
       }
+      // 文だけの結果は対戦ログに出るので、盤面には出すものが無い。間を置くと、次の演出を遅らせるだけになる。
+      if (notice.coins === undefined && notice.hit === undefined && notice.card === undefined)
+        return;
       const revealAt = Math.max(performance.now(), doneAt);
       doneAt = revealAt + stepOf(notice.coins);
       busyUntil = Math.max(
         busyUntil,
         doneAt,
         notice.card === undefined ? 0 : revealAt + SHOWCASE_MS,
+        notice.coins === undefined ? 0 : revealAt + showcaseOf(notice.coins),
       );
       waiting.push(notice);
       if (!animate) flush();
@@ -213,7 +197,7 @@ function createQueue(
       animate = next;
       if (!next) skip();
     },
-    /** 出している結果を消す時計も止めるので、結果も消す。effect をやり直すと、同じ列をまた使う。 */
+    /** 出している演出を消す時計も止めるので、演出も消す。effect をやり直すと、同じ列をまた使う。 */
     dispose: () => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
@@ -221,9 +205,9 @@ function createQueue(
       floating = undefined;
       waiting = [];
       settling = [];
-      setNotices(() => []);
       setHits(() => []);
-      setShowcase(() => null);
+      setCard(() => null);
+      setCoins(() => null);
     },
   };
 }
@@ -231,6 +215,11 @@ function createQueue(
 /** 結果を 1 つ出してから次を出すまでの間。 */
 function stepOf(coins: CoinToss | undefined): number {
   return coins === undefined ? STEP_MS : COIN_SPIN_MS + COIN_GAP_MS * (coins.results.length - 1);
+}
+
+/** コインは回り終えてから読むので、回るあいだのぶん長く見せる。 */
+function showcaseOf(coins: CoinToss): number {
+  return stepOf(coins) + SHOWCASE_MS;
 }
 
 /** `board` は数字を浮かべる先のポケモンを探す範囲。同じ画面に盤面が 2 つあっても取り違えない。 */
@@ -241,31 +230,23 @@ export function NoticeLayer({
   feed: NoticeFeed;
   board: RefObject<HTMLElement | null>;
 }) {
+  const { card, coins } = feed;
   return (
     <>
-      <output id="results" className="results">
-        {feed.notices.map((notice) => (
-          <div key={notice.id} className="result" data-tone={notice.tone}>
-            {notice.coins !== undefined && <Coins {...notice.coins} />}
-            <p className="result-text">{notice.text}</p>
-          </div>
-        ))}
-      </output>
-      {/* 結果の枠は transform で中央へ寄せている。中に置くと、画面ではなく枠が位置の基準になる。 */}
       {feed.hits.map((hit) => (
         <FloatingHit key={hit.id} hit={hit} board={board} />
       ))}
-      {/* 読み上げには結果の文が同じことを言う。 */}
-      {feed.showcase !== null && (
-        <div key={feed.showcase.id} className="showcase" aria-hidden="true">
-          <CardFace defId={feed.showcase.defId} />
+      {/* 読み上げには対戦ログの文が同じことを言う。 */}
+      {(card !== null || coins !== null) && (
+        <div className="showcase" aria-hidden="true">
+          {card !== null && <CardFace key={card.id} defId={card.value} />}
+          {coins !== null && <Coins key={coins.id} {...coins.value} />}
         </div>
       )}
     </>
   );
 }
 
-/** 読み上げには結果の文が同じことを言うので、コインの絵は読ませない。 */
 function Coins({ results, faces }: CoinToss) {
   return (
     <div className="coins" aria-hidden="true">

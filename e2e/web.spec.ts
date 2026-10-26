@@ -1133,9 +1133,9 @@ async function seatWithEvents(page: Page, view: PlayerView) {
   await expect(page.locator("#self .mat")).toBeVisible();
   const now = await page.evaluate(() => Date.now());
   await page.clock.pauseAt(now + 1_000);
-  // 先攻を知らせる結果を消しておく。
+  // 先攻を知らせるコインを消しておく。
   await page.clock.runFor(10_000);
-  await expect(page.locator("#results .result")).toHaveCount(0);
+  await expect(page.locator(".showcase")).toHaveCount(0);
   return send;
 }
 
@@ -1143,13 +1143,56 @@ test("トスを見ないまま始まった対戦では、始まったときに�
   page,
 }) => {
   const [, placed] = placingActive();
+  await page.clock.install();
   await mockSeat(page, placed[0]!);
   await page.goto("/");
+  await expect(page.locator("#self .mat")).toBeVisible();
+  const now = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(now + 1_000);
   // 相手が勝ったトスなので、コインは負けの向きで止まる。
-  await expect(page.locator("#results .result").first().locator(".coin")).toHaveAttribute(
-    "data-face",
-    "tails",
+  await expect(page.locator(".showcase .coin")).toHaveAttribute("data-face", "tails");
+});
+
+test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し、ページの終わりまで送れば下の欄に重ねない", async ({
+  page,
+}) => {
+  // 縦に持った iPad。盤面の横に空きが無い。
+  await page.setViewportSize({ width: 820, height: 1180 });
+  const [, placed] = placingActive();
+  const send = await seatWithEvents(page, placed[0]!);
+  const lines = page.locator("#events li");
+  const before = await lines.count();
+  send([
+    { kind: "turn-started", player: 1 },
+    { kind: "turn-started", player: 0 },
+  ]);
+  await expect(lines).toHaveCount(before + 2);
+  // 行は出てくるときに動くので、動き終えてから測る。
+  await lines.evaluateAll((all) =>
+    Promise.all(all.flatMap((line) => line.getAnimations().map((motion) => motion.finished))),
   );
+  // 古い行は枠の外へ切る。
+  const list = page.locator("#events");
+  const box = async (locator: Locator) => {
+    const found = await locator.boundingBox();
+    if (found === null) throw new Error("描けていない");
+    return found;
+  };
+  const listBottom = async () => {
+    const { y, height } = await box(list);
+    return y + height;
+  };
+  expect((await box(lines.nth(1))).y).toBeGreaterThanOrEqual(await listBottom());
+
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const log = page.locator("#event-log");
+  // 盤面の下に指せる手の欄が続き、観戦のリンクがページのいちばん下に来る。
+  const [bar, last] = [await box(log), await box(page.locator("#watch-link"))];
+  expect(last.y + last.height).toBeLessThanOrEqual(bar.y);
+
+  await log.getByRole("button").click();
+  const older = await box(lines.nth(1));
+  expect(older.y + older.height).toBeLessThanOrEqual(await listBottom());
 });
 
 function activeOf(view: PlayerView) {
@@ -1167,34 +1210,54 @@ const damageTo = (target: string) => ({
   cause: { kind: "damage-counter" },
 });
 
-test("1 つの局面の結果は順に出し、次の局面が届いたら残りを待たせずに出す", async ({ page }) => {
+test("コインは盤面の端に出し、ダメージの数字はコインが回り終えてから浮かべる", async ({ page }) => {
   const [, placed] = placingActive();
   const view = placed[0]!;
   const send = await seatWithEvents(page, view);
-  const results = page.locator("#results .result");
+  const logged = page.locator("#events li");
+  const before = await logged.count();
   const hits = page.locator(".hit");
 
-  send([
-    { kind: "coin-flipped", player: 0, results: [true] },
-    damageTo(activeOf(view).inPlayId),
-    { kind: "turn-started", player: 1 },
-  ]);
-  await expect(results).toHaveCount(1);
-  await expect(results.first()).toContainText("コイン");
-  // コインの次は、コインが回り終えてから出す。
+  send([{ kind: "coin-flipped", player: 0, results: [true] }, damageTo(activeOf(view).inPlayId)]);
+  // ログには、届いた局面の行をすぐ足す。
+  await expect(logged).toHaveCount(before + 2);
+  await expect(page.locator(".showcase .coin")).toHaveCount(1);
   await page.clock.runFor(900);
-  await expect(results).toHaveCount(1);
   await expect(hits).toHaveCount(0);
   await page.clock.runFor(200);
-  await expect(results).toHaveCount(2);
-  await expect(results.last()).toContainText("30 ダメージ");
   await expect(hits).toHaveCount(1);
+});
 
-  // 番の交代はまだ待っている。次の局面が届いたら、それを待たせずに出してから、次の局面の結果を出す。
+test("次の局面が届いたら、待たせている数字はコインが回り終えるのを待たずに浮かべる", async ({
+  page,
+}) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  const hits = page.locator(".hit");
+
+  // コインが回り終えるより前に、次の局面を届ける。
+  send([
+    { kind: "coin-flipped", player: 0, results: [true, false, true] },
+    damageTo(activeOf(view).inPlayId),
+  ]);
+  await page.clock.runFor(100);
+  // 文だけの局面でも、届いたら前の局面の残りを出しきる。
   send([{ kind: "turn-started", player: 0 }]);
-  await expect(results).toHaveCount(4);
-  await expect(results.nth(2)).toContainText("相手の番");
-  await expect(results.nth(3)).toContainText("あなたの番");
+  // 次の局面のカードが動き終えたら浮かべる。
+  await page.clock.runFor(900);
+  await expect(hits).toHaveCount(1);
+});
+
+test("文だけの結果は盤面に出すものが無いので、数字を遅らせない", async ({ page }) => {
+  const [, placed] = placingActive();
+  const view = placed[0]!;
+  const send = await seatWithEvents(page, view);
+  const turn = { kind: "turn-started", player: 1 };
+  send([turn, turn, turn, damageTo(activeOf(view).inPlayId)]);
+  // カードが動き終えるのを待つだけで浮かべる。
+  await page.clock.runFor(900);
+  await expect(page.locator(".hit")).toHaveCount(1);
 });
 
 test("局面の結果を出し終えてから、見せ終えたことをサーバへ知らせる", async ({ page }) => {
@@ -1209,15 +1272,15 @@ test("局面の結果を出し終えてから、見せ終えたことをサー�
   await page.clock.runFor(10_000);
   await expect.poll(() => shown).toEqual([1]);
 
-  // コインが回り終え、続く 2 つの結果を出し終えるまでは知らせない。
+  // 回り終えたコインを見せ終えるまでは知らせない。
   send([
     { kind: "coin-flipped", player: 0, results: [true] },
     damageTo(activeOf(view).inPlayId),
     { kind: "turn-started", player: 1 },
   ]);
-  await page.clock.runFor(1_600);
+  await page.clock.runFor(2_400);
   expect(shown).toEqual([1]);
-  await page.clock.runFor(300);
+  await page.clock.runFor(200);
   await expect.poll(() => shown).toEqual([1, 2]);
 });
 
@@ -1230,8 +1293,8 @@ test("ダメージの数字は、ポケモンが動き終えてからその位�
   benched.self.active = null;
 
   send([damageTo(activeOf(view).inPlayId)], benched);
-  await expect(page.locator("#results .result")).toHaveCount(1);
   const pokemon = page.locator('#self [data-zone="bench"] .pokemon');
+  await expect(pokemon).toHaveCount(1);
   await page.clock.runFor(20);
   await expect(pokemon).toHaveAttribute("data-moving");
   await page.clock.runFor(200);
@@ -1302,38 +1365,40 @@ test("OS で動きを減らす設定にしていたら、結果と数字を待�
     damageTo(activeOf(view).inPlayId),
     { kind: "turn-started", player: 1 },
   ]);
-  await expect(page.locator("#results .result")).toHaveCount(3);
   await expect(page.locator(".hit")).toBeVisible();
-  expect(
-    await page
-      .locator("#results .result")
-      .first()
-      .evaluate((node) => getComputedStyle(node).animationName),
-  ).toBe("none");
+  for (const selector of ["#events li", ".showcase > *"]) {
+    expect(
+      await page
+        .locator(selector)
+        .first()
+        .evaluate((node) => getComputedStyle(node).animationName),
+    ).toBe("none");
+  }
 });
 
 test("画面で演出を切ると、結果を待たせずに出し、切ったことを覚えておく", async ({ page }) => {
   const [, placed] = placingActive();
   const view = placed[0]!;
   const send = await seatWithEvents(page, view);
-  const results = page.locator("#results .result");
   send([
     { kind: "coin-flipped", player: 0, results: [true] },
     damageTo(activeOf(view).inPlayId),
     { kind: "turn-started", player: 1 },
   ]);
-  await expect(results).toHaveCount(1);
+  await expect(page.locator(".showcase .coin")).toHaveCount(1);
+  await expect(page.locator(".hit")).toHaveCount(0);
 
-  // 待たせている結果と数字も、切ったらすぐ出す。
+  // 待たせている数字も、切ったらすぐ出す。
   await setMotion(page, false);
-  await expect(results).toHaveCount(3);
   await expect(page.locator(".hit")).toBeVisible();
-  expect(await results.first().evaluate((node) => getComputedStyle(node).animationName)).toBe(
-    "none",
-  );
+  expect(
+    await page
+      .locator(".showcase > *")
+      .first()
+      .evaluate((node) => getComputedStyle(node).animationName),
+  ).toBe("none");
 
   send([damageTo(activeOf(view).inPlayId), { kind: "turn-started", player: 0 }]);
-  await expect(results).toHaveCount(5);
   await expect(page.locator(".hit")).toHaveCount(2);
 
   await page.reload();
@@ -1488,12 +1553,22 @@ test("相手が手札から出したカードは、相手の手札から動か�
   await expect(attached).toHaveAttribute("data-def-id", card.defId);
   expect(await arrivalGap(attached, '#opponent [data-zone="hand"]')).toBeLessThan(2);
   await expect(page.locator(".showcase .card")).toHaveAttribute("data-def-id", card.defId);
-  await expect(page.locator("#results .result")).toHaveCount(1);
   await page.clock.runFor(1_600);
   await expect(page.locator(".showcase")).toHaveCount(0);
 });
 
-test("自分でしたことは、記録に残すが結果には出さず、大きくも見せない", async ({ page }) => {
+test("コインのあとに出たカードは、コインを消さずに並べて見せる", async ({ page }) => {
+  const { view } = firstTurn();
+  const send = await seatWithEvents(page, view);
+  const { next, event, card } = opponentAttaches(view);
+  send([{ kind: "coin-flipped", player: 1 - view.viewer, results: [true] }, event], next);
+  // コインが回り終えると、カードが出る。
+  await page.clock.runFor(1_100);
+  await expect(page.locator(".showcase .card")).toHaveAttribute("data-def-id", card.defId);
+  await expect(page.locator(".showcase .coin")).toHaveCount(1);
+});
+
+test("自分でしたことは、ログに残すが大きくは見せない", async ({ page }) => {
   const { view } = firstTurn();
   const send = await seatWithEvents(page, view);
   const { next, event } = opponentAttaches(view);
@@ -1502,7 +1577,6 @@ test("自分でしたことは、記録に残すが結果には出さず、大�
   send([{ ...event, window: self, actor: view.viewer, player: view.viewer }], next);
   await expect(page.locator("#events li")).toHaveCount(logged + 1);
   await page.clock.runFor(100);
-  await expect(page.locator("#results .result")).toHaveCount(0);
   await expect(page.locator(".showcase")).toHaveCount(0);
 });
 
@@ -1594,8 +1668,6 @@ test("山札を切ると、切った側の山札を広げて重ね直す", async
   send([{ kind: "deck-shuffled", player: 1 - view.viewer }]);
   await expect.poll(progress).toBeLessThan(1);
   await expect(page.locator('#self [data-zone="deck"] .shuffling')).toHaveCount(0);
-  // 切ったことは結果の通知には出さない。
-  await expect(page.locator("#results .result")).toHaveCount(0);
   await shuffling.evaluate((node) =>
     node.getAnimations({ subtree: true }).forEach((animation) => animation.finish()),
   );

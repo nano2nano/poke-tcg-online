@@ -558,7 +558,7 @@ test("自分の番の途中で相手が選んでいるあいだは、相手の�
 });
 
 /**
- * 相手が引き直したことは、相手に番が回る前に起きる。できごとの欄に流れるだけだと、準備を選んでいるうちに
+ * 相手が引き直したことは、相手に番が回る前に起きる。対戦ログに流れるだけだと、準備を選んでいるうちに
  * 見落とす。どちらが引き直すかは seed で決まるので、届いた局面に相手のマリガンを書き足して作る。
  */
 test("引き直しで見せた手札は、準備のあいだ開いた欄に並び、対戦が始まったら畳む", async ({
@@ -614,16 +614,15 @@ test("コイントスが盤面の上に出て、勝った側だけが先攻か�
   await expect(a.locator("#join-status")).not.toBeEmpty();
   await join(b, room);
 
-  // コインの向きは座席ごとに勝ちか負けかを表す。両座席で同じ向きなら、どちらかが違う勝者を見ている。
-  const faces: string[] = [];
+  // ログの色は座席ごとに勝ちか負けかを表す。両座席で同じ色なら、どちらかが違う勝者を見ている。
+  const tones: string[] = [];
   for (const page of [a, b]) {
-    const coin = page.locator("#results .coin");
-    await expect(coin).toHaveCount(1);
-    faces.push((await coin.getAttribute("data-face")) ?? "");
-    await expect(page.locator("#event-log")).not.toHaveAttribute("open");
+    const logged = page.locator("#events li");
+    await expect(logged).toHaveCount(1);
+    tones.push((await logged.getAttribute("data-tone")) ?? "");
   }
-  expect([...faces].sort()).toEqual(["heads", "tails"]);
-  const won = faces[0] === "heads" ? 0 : 1;
+  expect([...tones].sort()).toEqual(["negative", "positive"]);
+  const won = tones[0] === "positive" ? 0 : 1;
   const [winner, loser] = won === 0 ? [a, b] : [b, a];
   await expect(winner.locator("#turn-order-first, #turn-order-second")).toHaveCount(2);
   await expect(loser.locator("#turn-order-first, #turn-order-second")).toHaveCount(0);
@@ -679,7 +678,7 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
   // 負荷の高い実行では、`seenA` が対戦の始まった局面を見たときに、`held.last` がまだ準備の局面のことがあった。
   await expect.poll(() => held.last?.stateVersion === seenA()?.stateVersion).toBe(true);
 
-  // 結果を溢れさせて確かめるので、1 つずつ待たせずに一度に出す。
+  // 続けて届いたコインで入れ替わるところまで確かめるので、1 つずつ待たせずに一度に出す。
   await setMotion(a, false);
   const view = held.last!.view;
   const target = view.self.active.inPlayId as string;
@@ -708,30 +707,18 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
           afterDamage: 30,
           cause: { kind: "damage-counter" },
         },
-        // 結果を溢れさせる。古いものから消すときに、コインを先に消さない。
-        ...Array.from({ length: 4 }, () => ({
-          ...header,
-          actor: null,
-          source: null,
-          kind: "turn-started",
-          player: view.turnPlayer,
-        })),
       ],
     }),
   );
 
-  const coins = a
-    .locator("#results .result")
-    .filter({ has: a.locator(".coin") })
-    .last()
-    .locator(".coin");
+  const coins = a.locator(".showcase .coin");
   await expect(coins).toHaveCount(3);
   expect(
     await coins.evaluateAll((all) => all.map((coin) => coin.getAttribute("data-face"))),
   ).toEqual(["heads", "tails", "heads"]);
   await expect(a.locator(".hit")).toHaveCount(1);
 
-  // コインで埋まっていても、あとから届いた結果は出す。続けて取ったサイドは記録でも 1 行に畳む。
+  // 次のコインが出たら入れ替える。続けて取ったサイドはログでも 1 行に畳む。
   const logged = await a.locator("#events li").count();
   const opponent = 1 - view.viewer;
   const coin = { ...header, actor: opponent, source: null, kind: "coin-flipped", player: opponent };
@@ -748,7 +735,7 @@ test("コインを投げたイベントが届くと投げた数だけコイン�
     }),
   );
   await expect(a.locator("#events li")).toHaveCount(logged + 6);
-  await expect(a.locator("#results .result").last().locator(".coin")).toHaveCount(0);
+  await expect(coins).toHaveCount(1);
 
   await close();
 });
@@ -1354,11 +1341,11 @@ test("観戦のリンクを開くと、プレイヤーを作らずに両者の�
   await expect(watcher.locator("#table")).toBeHidden();
   await expect(watcher.locator("#watch-side-0")).not.toBeEmpty();
   await expect(watcher.locator("#watch-side-1")).not.toBeEmpty();
-  await expect(watcher.locator("#watch-events li")).toHaveCount(0);
+  const logged = await watcher.locator("#watch-events li").count();
 
   expect(await playEither(a, b)).toBe(true);
-  // 座席の 1 手が観戦者へも届いた印は、できごとの行が増えることである。
-  await expect(watcher.locator("#watch-events li")).not.toHaveCount(0);
+  // 座席の 1 手が観戦者へも届いた印は、ログの行が増えることである。
+  await expect(watcher.locator("#watch-events li")).not.toHaveCount(logged);
 
   expect(created).toEqual([]);
   await context.close();
@@ -1464,9 +1451,10 @@ test("観戦中に切れたら、繋ぎ直して続きを映す", async ({ brows
   held.open();
   await expect(watcher.locator("#watch-status")).toBeEmpty();
   expect(opened).toBe(2);
+  const logged = await watcher.locator("#watch-events li").count();
 
   expect(await playEither(a, b)).toBe(true);
-  await expect(watcher.locator("#watch-events li")).not.toHaveCount(0);
+  await expect(watcher.locator("#watch-events li")).not.toHaveCount(logged);
 
   await context.close();
   await close();
@@ -2616,7 +2604,10 @@ for (const viewport of [
     for (const card of await page.locator("#table .card").all()) {
       expect(overlaps(endTurn, (await card.boundingBox()) as Box)).toBe(false);
     }
-    // 一覧を開いても、時計、投了、できごとの記録を画面の外へ押し出さない。
+    // 対戦ログは右の欄に置き、盤面に重ねない。
+    const log = (await page.locator("#event-log").boundingBox()) as Box;
+    expect(overlaps(log, board)).toBe(false);
+    // 一覧を開いても、時計、投了、対戦ログを画面の外へ押し出さない。
     await page.click("#all-moves > summary");
     const screen = { x: 0, y: 0, ...viewport };
     for (const selector of ["#clock", "#concede-button", "#moves button >> nth=0", "#event-log"]) {
@@ -2691,6 +2682,8 @@ test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる",
   }
   await expectInside(page, '#watch-stadium [data-zone="stadium"] .card', board);
   await expectInside(page, "#watch-clock", { x: 0, y: 0, ...viewport });
+  const log = (await page.locator("#watch-event-log").boundingBox()) as Box;
+  expect(overlaps(log, board)).toBe(false);
   // 長い名前は省いて、手札に重ねない。
   const name = (await page.locator("#watch-name-0").boundingBox()) as Box;
   const backs = (await page

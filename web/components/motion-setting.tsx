@@ -74,7 +74,7 @@ export function MotionSettingProvider({ children }: { children: ReactNode }) {
     }),
     [animate, reduced],
   );
-  // 結果の枠やコインの CSS のアニメーションも止める。最初の描画から効かせる。
+  // ログの行やコインの CSS のアニメーションも止める。最初の描画から効かせる。
   useLayoutEffect(() => {
     document.documentElement.toggleAttribute("data-no-motion", !animate);
   }, [animate]);

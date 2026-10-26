@@ -4,7 +4,7 @@
  * 切れたら座席と同じく繋ぎ直す。断られたら、観戦は断っても誰も負けないので、そこでやめる。
  *
  * 届いた局面はすぐには描かず、`watch-frames.ts` に溜めて見る人の速さで送る。
- * 結果の文と記録の行は、届いた時点の盤面とカードの表で作って局面に添えておく。
+ * ログの行と盤面の演出は、届いた時点の盤面とカードの表で作って局面に添えておく。
  */
 
 import { useEffect, useEffectEvent, useReducer, useState, type ActionDispatch } from "react";
@@ -14,7 +14,7 @@ import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl } from "./connection.js";
 import { describeMove, moveTargets } from "./describe-move.js";
 import { shuffledDecks } from "./board-moves.js";
-import { describeEvents, noticesToShow, seatDisplayName, type Notice } from "./describe.js";
+import { describeEvents, seatDisplayName, type Notice } from "./describe.js";
 import { initialWatchState, watchReducer, type WatchState } from "./match-state.js";
 import {
   initialPlayback,
@@ -24,21 +24,17 @@ import {
   type WatchFrame,
 } from "./watch-frames.js";
 
-export interface LoggedEvent {
-  id: number;
-  text: string;
-}
+export type LoggedEvent = Notice & { id: number };
 
 export interface Watching {
   state: WatchState;
-  /** 繋がっていないあいだの説明。繋がっていれば空。 */
+  /** 繋がっていないあいだの説明か、繋がっているあいだにサーバが返したエラー応答（次の局面が届くまで）。 */
   status: string;
   playback: Playback;
   control: ActionDispatch<[PlaybackAction]>;
 }
 
-/** `notify` は、繋いでいるあいだにサーバが返したエラー応答を、局面の送りを待たずに出す。 */
-export function useWatch(token: string, notify: (notice: Notice) => void): Watching {
+export function useWatch(token: string): Watching {
   const [state, setState] = useState(initialWatchState);
   const [status, setStatus] = useState("");
   const [playback, control] = useReducer(playbackReducer, undefined, initialPlayback);
@@ -46,7 +42,6 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
   // 名前は届いた時点の表で引く。表が届いても繋ぎ直さない。
   const { table } = useCardData();
   const cardTable = useEffectEvent(() => table);
-  const show = useEffectEvent(notify);
 
   useEffect(() => {
     let current = initialWatchState();
@@ -101,12 +96,12 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
               shuffled: [],
               clock: message.clock,
               moved: null,
-              lines: [],
-              notices,
+              lines: notices,
             });
             return;
           }
           case "spectator-delta": {
+            setStatus("");
             const cards = cardTable();
             const moved =
               message.moved === undefined
@@ -127,14 +122,13 @@ export function useWatch(token: string, notify: (notice: Notice) => void): Watch
               shuffled: shuffledDecks(message.events),
               clock: message.clock,
               moved,
-              lines: notices.map((notice) => notice.text),
-              notices: noticesToShow(notices),
+              lines: notices,
             });
             return;
           }
           case "error":
             refusal = message.message;
-            if (synced) show({ text: message.message, tone: "attention" });
+            if (synced) setStatus(message.message);
             return;
           default:
             return;

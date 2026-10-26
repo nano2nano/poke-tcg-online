@@ -1,11 +1,11 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { LoggedEvent } from "../lib/use-watch.js";
 
 /**
- * 起きたことの記録。結果は画面の上の端に出すので、ここは見逃したものを後から辿るときと、
- * 不具合を調べるとき用である。
+ * 対戦ログ。新しい行が先頭。狭い画面には盤面の横に空きが無く、下の端に出すので、畳んでいるあいだは
+ * 最新の 1 行だけを見せる（`styles.css`）。
  *
- * 対戦が長いと行が増え続ける。結果の通知が出入りするたびには描き直さない。
+ * 対戦が長いと行が増え続ける。盤面の演出が出入りするたびには描き直さない。
  */
 export const EventLog = memo(function EventLog({
   id,
@@ -16,14 +16,27 @@ export const EventLog = memo(function EventLog({
   listId: string;
   events: LoggedEvent[];
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details id={id} className="event-log">
-      <summary>できごとの記録</summary>
-      <ol id={listId} className="events">
+    <section id={id} className="event-log" data-open={open ? "" : undefined}>
+      <div className="event-log-head">
+        <h2>対戦ログ</h2>
+        <button
+          className="event-log-toggle"
+          aria-expanded={open}
+          aria-controls={listId}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? "閉じる" : "すべて見る"}
+        </button>
+      </div>
+      <ol id={listId} className="events" aria-live="polite">
         {events.map((event) => (
-          <li key={event.id}>{event.text}</li>
+          <li key={event.id} data-tone={event.tone}>
+            {event.text}
+          </li>
         ))}
       </ol>
-    </details>
+    </section>
   );
 });

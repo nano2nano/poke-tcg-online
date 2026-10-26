@@ -213,9 +213,9 @@ export interface Notice {
   hit?: Hit;
   /** 大きく見せるカードの defId。出たカードを、文を読む前に絵で分かるようにする。 */
   card?: string;
-  /** 誰がしたことか。座席の画面は、自分でしたことを結果に出さない。 */
+  /** 誰がしたことか。座席の画面は、自分でしたことを盤面の演出に出さない。 */
   by?: Player;
-  /** 記録にだけ残し、結果には出さない。 */
+  /** ログにだけ残し、盤面の演出には出さない。 */
   quiet?: boolean;
 }
 
@@ -286,7 +286,7 @@ export function describeEvents(
   return notices;
 }
 
-/** 結果として画面に出すもの。`self` を渡すと、その座席が自分でしたことは出さない。 */
+/** 盤面の演出に出すもの。`self` を渡すと、その座席が自分でしたことは出さない。 */
 export function noticesToShow(notices: readonly Notice[], self?: Player): Notice[] {
   return notices.filter((notice) => !notice.quiet && (self === undefined || notice.by !== self));
 }

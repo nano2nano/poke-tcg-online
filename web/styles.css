@@ -491,19 +491,132 @@ button[data-kind="attack"] {
 .end-turn[aria-disabled="true"] {
   cursor: progress;
 }
+/*
+ * 対戦ログは盤面に重ねない。重ねると、相手の手札やベンチが読めない。横に広い画面では右の欄の残りを使い、
+ * 狭い画面では下の端に出す。
+ */
 .event-log {
-  margin: 16px 0 0;
+  display: flex;
+  flex-direction: column;
   font-size: 0.85rem;
 }
-.event-log summary {
-  cursor: pointer;
-  opacity: 0.7;
+.event-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.event-log-head > h2 {
+  margin: 0;
+  font-size: 0.9rem;
 }
 .events {
-  max-height: 260px;
+  min-height: 0;
+  margin: 4px 0 0;
+  padding: 0;
   overflow-y: auto;
-  font-size: 0.85rem;
-  padding-left: 1.4em;
+  list-style: none;
+}
+.events > li {
+  padding: 4px 8px;
+  border-left: 3px solid transparent;
+  animation: log-in 0.6s ease-out;
+}
+/* 番の始まりを区切りの線にして、どちらの番に起きたことかを読み分けられるようにする。 */
+.events > li[data-tone="turn"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: #2b6cb0;
+}
+.events > li[data-tone="turn"]::before,
+.events > li[data-tone="turn"]::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+.events > li[data-tone="attention"] {
+  border-left-color: #b7791f;
+}
+.events > li[data-tone="positive"] {
+  border-left-color: #1d6b3a;
+}
+.events > li[data-tone="negative"] {
+  border-left-color: #c0392b;
+}
+@keyframes log-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    background: color-mix(in srgb, #2b6cb0 18%, transparent);
+  }
+}
+@media (max-width: 1023px) {
+  /* 畳んだログは 1 行に収めて高さを決めておき、ページの終わりと効果の選択の下にその高さを空ける。 */
+  .table {
+    --log-bar: 4.5rem;
+    padding-bottom: var(--log-bar);
+  }
+  .table > .choice-sheet {
+    bottom: var(--log-bar);
+  }
+  /* 効果の選択の下に隠れると、送れなかったことや断られたことが読めない。開いたときは選択の上に重ねる。 */
+  .event-log {
+    position: fixed;
+    inset: auto 8px 8px;
+    z-index: 6;
+    max-width: 640px;
+    margin-inline: auto;
+    padding: 6px 8px 6px 4px;
+    border-radius: 10px;
+    background: Canvas;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+  }
+  .event-log[data-open] {
+    padding-left: 8px;
+  }
+  .event-log[data-open] .events {
+    max-height: 50dvh;
+  }
+  .event-log:not([data-open]) {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+  .event-log:not([data-open]) .event-log-head > h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /*
+   * 古い行は消さずに枠の外へ切る。display で消すと開いたときに全部の行の出てくる動きがやり直しになり、
+   * visibility で隠すと続けて届いた行を読み上げない。
+   */
+  .event-log:not([data-open]) .events {
+    --row: calc(1.5em + 8px);
+    order: -1;
+    flex: 1;
+    max-height: var(--row);
+    margin: 0;
+    overflow: hidden;
+    line-height: 1.5;
+  }
+  .event-log:not([data-open]) .events > li {
+    box-sizing: border-box;
+    height: var(--row);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}
+@media (min-width: 1024px) {
+  .event-log-toggle {
+    display: none;
+  }
 }
 .waiting {
   opacity: 0.6;
@@ -1139,7 +1252,7 @@ button.choice-card:enabled > .card {
 }
 
 /*
- * 横に広い画面の対戦と観戦では、両者の盤面を 1 画面に収める。盤面を左に、時計と指せる手とできごとを右の欄に置く。
+ * 横に広い画面の対戦と観戦では、両者の盤面を 1 画面に収める。盤面を左に、時計と指せる手と対戦ログを右の欄に置く。
  * カードの大きさは、ベンチの 1 枚の幅 `--b` から比で決める。縦に積むのは相手の手札、相手の場、自分の場、
  * 自分の手札で、合わせて `--b` のおよそ 9.8 倍になる。横は、ベンチ 5 匹とサイドと山札の列でおよそ 8.5 倍になる。
  * 見えている高さと盤面の幅のうち、きついほうから決める。リプレイはページの流れの中にあるので、ここに含めない。
@@ -1148,10 +1261,11 @@ button.choice-card:enabled > .card {
   .table:not([hidden]) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 400px);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, auto) minmax(10rem, 1fr);
     grid-template-areas:
       "board status"
-      "board panel";
+      "board panel"
+      "board log";
     column-gap: 16px;
     box-sizing: border-box;
     height: 100dvh;
@@ -1171,7 +1285,7 @@ button.choice-card:enabled > .card {
   .table-panel h2 {
     margin-top: 8px;
   }
-  /* 指せる手が多い局面でも、投了のボタンとできごとの記録を押し出さない。 */
+  /* 指せる手が多い局面でも、投了のボタンを押し出さない。 */
   .table-panel > .moves,
   .table-panel > .all-moves[open] {
     flex: 0 1 auto;
@@ -1186,6 +1300,11 @@ button.choice-card:enabled > .card {
   }
   .table-panel > .note {
     margin: 8px 0 0;
+  }
+  .table > .event-log {
+    grid-area: log;
+    min-height: 0;
+    padding: 8px 0;
   }
 
   /* 選ぶ画面は盤面の上に重ね、右の欄の時計と投了は隠さない。 */
@@ -1338,63 +1457,17 @@ button.choice-card:enabled > .card {
   }
 }
 
-/*
- * 結果は画面の上の端に重ねて出す。真ん中のバトル場とダメージの数字は隠さない。
- * 押す場所を塞がないよう、触っても下の盤面へ通す。カードのプレビューは結果の上に出す。
- */
-.results {
-  position: fixed;
-  top: 16px;
-  left: 50%;
-  z-index: 9;
-  width: min(320px, calc(100vw - 32px));
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  pointer-events: none;
-}
-.result {
-  padding: 8px 12px;
-  border-left: 4px solid var(--line);
-  border-radius: 8px;
-  background: Canvas;
-  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
-  animation: result-in 0.2s ease-out;
-}
-.result[data-tone="turn"] {
-  border-left-color: #2b6cb0;
-}
-.result[data-tone="attention"] {
-  border-left-color: #b7791f;
-}
-.result[data-tone="positive"] {
-  border-left-color: #1d6b3a;
-}
-.result[data-tone="negative"] {
-  border-left-color: #c0392b;
-}
-.result-text {
-  margin: 0;
-}
-@keyframes result-in {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-}
-
+/* 何度も投げる効果でも盤面の端から大きくはみ出さないよう、1 段に 3 枚までにする。 */
 .coins {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 8px;
-  margin-bottom: 6px;
+  max-width: calc(3 * 72px + 2 * 8px);
   perspective: 400px;
 }
 .coin {
-  width: 56px;
-  height: 56px;
+  width: 72px;
+  height: 72px;
 }
 .coin-inner {
   position: relative;
@@ -1480,36 +1553,38 @@ button.choice-card:enabled > .card {
   }
 }
 
-/* 真ん中のバトル場と、上の端の結果を隠さないよう、盤面の左の端に置く。触っても下の盤面へ通す。 */
+/*
+ * 真ん中のバトル場を隠さないよう、盤面の左の端に置く。触っても下の盤面へ通す。
+ * カードとコインは消える時刻が違うので、互いの有無で動かないよう、それぞれ決まった位置に置く。
+ */
 .showcase {
+  --w: clamp(96px, 14vw, 240px);
   position: fixed;
-  top: 50%;
-  left: 16px;
+  inset: 0;
   z-index: 9;
-  transform: translateY(-50%);
-  filter: drop-shadow(0 8px 24px rgb(0 0 0 / 0.35));
   pointer-events: none;
+}
+.showcase > * {
+  position: absolute;
+  left: 16px;
+  filter: drop-shadow(0 8px 24px rgb(0 0 0 / 0.35));
   animation: showcase-in 0.25s ease-out;
 }
-.showcase .card {
-  --w: clamp(96px, 14vw, 240px);
+.showcase > .card {
+  top: 50%;
+  translate: 0 -50%;
+}
+.showcase > .coins {
+  top: calc(50% + var(--w) * 88 / 63 / 2 + 12px);
 }
 @keyframes showcase-in {
   from {
     opacity: 0;
-    transform: translate(-24px, -50%) scale(0.85);
+    transform: translateX(-24px) scale(0.85);
   }
 }
 
-/* 狭い画面には盤面の横に空きが無く、どこに出しても盤面に重なる。スマートフォンのトーストにならって下に出す。 */
-@media (max-width: 640px) {
-  .results {
-    top: auto;
-    bottom: 16px;
-  }
-}
-
-:root[data-no-motion] :is(.result, .coin-inner, .hit, .showcase) {
+:root[data-no-motion] :is(.events > li, .coin-inner, .hit, .showcase > *) {
   animation: none;
 }
 

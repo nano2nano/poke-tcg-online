@@ -665,7 +665,7 @@ function BoardBody({
  * 1 人ぶんの場。`mirrored` は向かいに座る側で、卓を挟んで見たとおりに上下と左右を返す。
  * 手札の中身が見えない側は、射影が `hand` の代わりに `handCount` を持っている。
  *
- * 局面が変わらないあいだは描き直さない。結果の通知が出入りするたびに、卓のカードを全部描き直すことになる。
+ * 局面が変わらないあいだは描き直さない。数字や大きく見せるカードが出入りするたびに、卓のカードを全部描き直すことになる。
  */
 export const SideBoard = memo(function SideBoard({
   side,
@@ -806,8 +806,8 @@ function HiddenHandCard({ index, side }: { index: number; side: BoardSide }) {
 }
 
 /**
- * 山札。切ったら、2 つに分けた山を左右へ広げて重ね直して見せる。切ったことは結果の通知には出さないので、
- * 盤面で伝える。
+ * 山札。切ったら、2 つに分けた山を左右へ広げて重ね直して見せる。切ったことは対戦ログに 1 行残るだけなので、
+ * 盤面でも伝える。
  */
 function DeckPile({ count, side }: { count: number; side: BoardSide }) {
   const moves = use(Moves);

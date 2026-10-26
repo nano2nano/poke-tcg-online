@@ -20,7 +20,6 @@ function frame(stateVersion: number, open: boolean): WatchFrame {
     clock: null,
     moved: null,
     lines: [],
-    notices: [],
   };
 }
 

@@ -25,10 +25,8 @@ export interface WatchFrame {
   clock: ClockView | null;
   /** この局面へ来た手。繋いだ直後の局面と、人が座る対戦には無い。 */
   moved: { seat: Player; text: string; targets: string[] } | null;
-  /** できごとの記録に足す行。古い順。 */
-  lines: string[];
-  /** この局面へ 1 手ずつ進んだときに出す通知。 */
-  notices: Notice[];
+  /** 対戦ログに足す行。古い順。1 手ずつ進んだときは、盤面の演出にも出す。 */
+  lines: Notice[];
 }
 
 /**
@@ -58,8 +56,8 @@ export interface Playback {
   /** 人が選んだ、演出のあとの間。選ぶまでは null で、`defaultStepMs` に従う。 */
   stepMs: number | null;
   /**
-   * 最後の送りが、届いた順に局面を見せたものか。通知を出すのはそのときだけにする。
-   * 戻ったときや最新へ飛んだときに出すと、描いている局面と合わない結果が画面の上に並ぶ。
+   * 最後の送りが、届いた順に局面を見せたものか。演出を出すのはそのときだけにする。
+   * 戻ったときや最新へ飛んだときに出すと、描いている局面と合わない数字やカードが盤面に出る。
    */
   stepped: boolean;
 }
