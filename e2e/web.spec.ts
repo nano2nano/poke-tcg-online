@@ -1153,6 +1153,20 @@ test("トスを見ないまま始まった対戦では、始まったときに�
   await expect(page.locator(".showcase .coin")).toHaveAttribute("data-face", "tails");
 });
 
+test("対戦ログは、番やカードを使ったことを見出しにして、そこで起きたことを下にまとめる", async ({
+  page,
+}) => {
+  const [, placed] = placingActive();
+  const send = await seatWithEvents(page, placed[0]!);
+  send([
+    { kind: "turn-started", player: 1 },
+    { kind: "card-drawn-hidden", player: 1, count: 1, actor: 1 },
+  ]);
+  const newest = page.locator("#events > li").first();
+  await expect(newest.locator(".event-head")).toHaveText("相手の番");
+  await expect(newest.locator(".event-details > li")).toHaveText(["相手がカードを 1 枚引いた"]);
+});
+
 test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し、ページの終わりまで送れば下の欄に重ねない", async ({
   page,
 }) => {
@@ -1160,29 +1174,21 @@ test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し�
   await page.setViewportSize({ width: 820, height: 1180 });
   const [, placed] = placingActive();
   const send = await seatWithEvents(page, placed[0]!);
-  const lines = page.locator("#events li");
-  const before = await lines.count();
   send([
     { kind: "turn-started", player: 1 },
-    { kind: "turn-started", player: 0 },
+    { kind: "card-drawn-hidden", player: 1, count: 1, actor: 1 },
   ]);
-  await expect(lines).toHaveCount(before + 2);
-  // 行は出てくるときに動くので、動き終えてから測る。
-  await lines.evaluateAll((all) =>
-    Promise.all(all.flatMap((line) => line.getAnimations().map((motion) => motion.finished))),
-  );
-  // 古い行は枠の外へ切る。
-  const list = page.locator("#events");
+  // まとまりの見出しではなく、いちばん新しい行を出す。
+  const latest = page.locator(".event-latest");
+  await expect(latest).toHaveText("相手がカードを 1 枚引いた");
   const box = async (locator: Locator) => {
     const found = await locator.boundingBox();
     if (found === null) throw new Error("描けていない");
     return found;
   };
-  const listBottom = async () => {
-    const { y, height } = await box(list);
-    return y + height;
-  };
-  expect((await box(lines.nth(1))).y).toBeGreaterThanOrEqual(await listBottom());
+  // 一覧は読み上げのために残すが、見た目には出さない。
+  const list = page.locator("#events");
+  expect((await box(list)).height).toBeLessThanOrEqual(1);
 
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   const log = page.locator("#event-log");
@@ -1191,8 +1197,10 @@ test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し�
   expect(last.y + last.height).toBeLessThanOrEqual(bar.y);
 
   await log.getByRole("button").click();
-  const older = await box(lines.nth(1));
-  expect(older.y + older.height).toBeLessThanOrEqual(await listBottom());
+  await expect(latest).toBeHidden();
+  const drawn = await box(list.getByText("相手がカードを 1 枚引いた"));
+  const shown = await box(list);
+  expect(drawn.y + drawn.height).toBeLessThanOrEqual(shown.y + shown.height);
 });
 
 function activeOf(view: PlayerView) {

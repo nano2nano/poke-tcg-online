@@ -24,8 +24,6 @@ import {
   type WatchFrame,
 } from "./watch-frames.js";
 
-export type LoggedEvent = Notice & { id: number };
-
 export interface Watching {
   state: WatchState;
   /** 繋がっていないあいだの説明か、繋がっているあいだにサーバが返したエラー応答（次の局面が届くまで）。 */

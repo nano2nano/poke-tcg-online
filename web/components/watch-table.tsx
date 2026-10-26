@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef } from "react";
 import type { Player } from "../../src/engine.js";
 import { noticesToShow, seatDisplayName, watchClockText, watchEndText } from "../lib/describe.js";
-import type { LoggedEvent } from "../lib/use-watch.js";
+import { appendToLog, type LogEntry } from "../lib/event-log.js";
 import { useWatch } from "../lib/use-watch.js";
 import {
   STEP_CHOICES,
@@ -53,7 +53,7 @@ export function WatchTable({ token }: { token: string }) {
   const endText = ended !== null && atEnd ? watchEndText(ended.matchResult, who) : null;
   const events = useMemo(() => {
     const logged = loggedUpTo(frames, at);
-    return endText === null ? logged : [{ id: 0, text: endText }, ...logged];
+    return endText === null ? logged : [{ id: 0, text: endText, details: [] }, ...logged];
   }, [frames, at, endText]);
   const aimed = useMemo<AimedSet>(
     () => (frame?.moved == null ? NOTHING_AIMED : new Set(frame.moved.targets)),
@@ -190,12 +190,11 @@ function Controls({
 }
 
 /** 描いている局面までのログ。新しいものが先頭。 */
-function loggedUpTo(frames: readonly WatchFrame[], at: number): LoggedEvent[] {
-  const logged: LoggedEvent[] = [];
-  for (const frame of frames.slice(0, at + 1)) {
-    for (const line of frame.lines) logged.push({ ...line, id: logged.length + 1 });
-  }
-  return logged.reverse();
+function loggedUpTo(frames: readonly WatchFrame[], at: number): LogEntry[] {
+  return appendToLog(
+    [],
+    frames.slice(0, at + 1).flatMap((frame) => frame.lines),
+  );
 }
 
 /** 座席 1 は向かいに座る側として、上下と左右を返して描く。 */

@@ -219,6 +219,97 @@ describe("describeEvents", () => {
     expect(notice?.text).toBe("あのピカチュウがraichuに進化した");
   });
 
+  it("使ったカードやワザを見出しにし、その効果で起きたことは見出しにしない", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const source = { defId: "pikachu", instanceId: "p0-card", label: "でんきショック" };
+    const notices = describeEvents(
+      [
+        event({ kind: "attack-declared", player: 0, sourceInPlay: "p0", attackIndex: 0, source }),
+        event({ kind: "coin-flipped", player: 0, results: [true], source }),
+        event({ kind: "card-drawn-hidden", player: 0, count: 1 }),
+      ],
+      [view],
+      who,
+      cards,
+    );
+    expect(notices.map(({ text, opens }) => [text, opens])).toEqual([
+      ["あのピカチュウがワザ「でんきショック」を使った", true],
+      ["あのコイン（ピカチュウ）: オモテ", undefined],
+      ["あがカードを 1 枚引いた", undefined],
+    ]);
+  });
+
+  it("効果の途中で出たポケモンやエネルギーは見出しにせず、手で出したものは見出しにする", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const card = { instanceId: "c1", defId: "pikachu" };
+    const played = event({
+      kind: "pokemon-played",
+      player: 0,
+      card,
+      from: { kind: "deck", player: 0 },
+      to: { kind: "bench", player: 0 },
+    });
+    const attached = event({
+      kind: "energy-attached",
+      player: 0,
+      card,
+      target: "p0",
+      from: { kind: "hand", player: 0 },
+    });
+    const answered = event({ kind: "choice-answered", player: 0 });
+    const opens = (events: PlayerEvent[]) =>
+      describeEvents(events, [view], who, cards).map((notice) => notice.opens);
+    expect(opens([played])).toEqual([true]);
+    expect(opens([answered, played, attached])).toEqual([undefined, undefined]);
+  });
+
+  it("にげたことは、先に済ませたことより前に見出しとして出す", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const card = { instanceId: "c1", defId: "pikachu" };
+    const notices = describeEvents(
+      [
+        event({ kind: "choice-answered", player: 0 }),
+        event({
+          kind: "card-discarded",
+          player: 0,
+          actor: null,
+          card,
+          from: { kind: "active", player: 0 },
+        }),
+        event({ kind: "pokemon-retreated", player: 0, from: "p0", to: "p1" }),
+      ],
+      [view],
+      who,
+      cards,
+    );
+    expect(notices.map(({ text, opens }) => [text, opens])).toEqual([
+      ["あがピカチュウをにがし、ポケモンをバトル場に出した", true],
+      ["あのピカチュウをトラッシュした", undefined],
+    ]);
+  });
+
+  it("ポケモンチェックは、何か起きたときだけ見出しを出す", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const check = { window: { kind: "pokemon-check" }, actor: null };
+    const started = event({ kind: "pokemon-check-started", ...check });
+    const completed = event({ kind: "pokemon-check-completed", ...check });
+    const placed = event({
+      kind: "damage-counters-placed",
+      ...check,
+      target: "p0",
+      count: 1,
+      beforeDamage: 0,
+      afterDamage: 10,
+    });
+    const texts = (events: PlayerEvent[]) =>
+      describeEvents(events, [view], who, cards).map((notice) => notice.text);
+    expect(texts([started, completed])).toEqual([]);
+    expect(texts([started, placed, completed])).toEqual([
+      "ポケモンチェック",
+      "あのピカチュウにダメカンを 1 個",
+    ]);
+  });
+
   it("見せる文の無いイベントは落とす", () => {
     expect(describeEvents([event({ kind: "pokemon-check-started" })], [null], who, cards)).toEqual(
       [],
