@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef } from "react";
 import type { Player } from "../../src/engine.js";
-import { seatDisplayName, watchClockText, watchEndText } from "../lib/describe.js";
+import { noticesToShow, seatDisplayName, watchClockText, watchEndText } from "../lib/describe.js";
 import type { LoggedEvent } from "../lib/use-watch.js";
 import { useWatch } from "../lib/use-watch.js";
 import {
@@ -41,7 +41,7 @@ export function WatchTable({ token }: { token: string }) {
   useEffect(() => {
     if (stepped) {
       for (const passed of frames.slice(announced.current + 1, at + 1)) {
-        for (const notice of passed.notices) show(notice);
+        for (const notice of noticesToShow(passed.lines)) show(notice);
       }
     }
     announced.current = at;

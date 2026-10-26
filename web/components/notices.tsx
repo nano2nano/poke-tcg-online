@@ -164,9 +164,6 @@ function createQueue(
 
   return {
     show: (notice: Notice) => {
-      // 文だけの結果は対戦ログに出るので、盤面には出すものが無い。間を置くと、次の演出を遅らせるだけになる。
-      if (notice.coins === undefined && notice.hit === undefined && notice.card === undefined)
-        return;
       if (!inBatch) {
         // 新しい局面が届いた。前の局面の結果の残りはすぐ出し、数字は新しい局面のカードが
         // 動き終えるまで待たせる。
@@ -179,6 +176,9 @@ function createQueue(
         schedule();
         doneAt = busyUntil = performance.now();
       }
+      // 文だけの結果は対戦ログに出るので、盤面には出すものが無い。間を置くと、次の演出を遅らせるだけになる。
+      if (notice.coins === undefined && notice.hit === undefined && notice.card === undefined)
+        return;
       const revealAt = Math.max(performance.now(), doneAt);
       doneAt = revealAt + stepOf(notice.coins);
       busyUntil = Math.max(

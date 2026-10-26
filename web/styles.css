@@ -555,7 +555,7 @@ button[data-kind="attack"] {
 @media (max-width: 1023px) {
   /* 畳んだログは 1 行に収めて高さを決めておき、ページの終わりと効果の選択の下にその高さを空ける。 */
   .table {
-    --log-bar: 72px;
+    --log-bar: 4.5rem;
     padding-bottom: var(--log-bar);
   }
   .table > .choice-sheet {
@@ -592,21 +592,25 @@ button[data-kind="attack"] {
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  /* 古い行は display で消さずに隠す。消すと、開いたときに全部の行の出てくる動きがやり直しになる。 */
+  /*
+   * 古い行は消さずに枠の外へ切る。display で消すと開いたときに全部の行の出てくる動きがやり直しになり、
+   * visibility で隠すと続けて届いた行を読み上げない。
+   */
   .event-log:not([data-open]) .events {
+    --row: calc(1.5em + 8px);
     order: -1;
     flex: 1;
-    max-height: calc(1lh + 8px);
+    max-height: var(--row);
     margin: 0;
     overflow: hidden;
+    line-height: 1.5;
   }
   .event-log:not([data-open]) .events > li {
+    box-sizing: border-box;
+    height: var(--row);
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-  }
-  .event-log:not([data-open]) .events > li:not(:first-child) {
-    visibility: hidden;
   }
 }
 @media (min-width: 1024px) {
@@ -1549,25 +1553,29 @@ button.choice-card:enabled > .card {
   }
 }
 
-/* 真ん中のバトル場を隠さないよう、盤面の左の端に置く。触っても下の盤面へ通す。 */
+/*
+ * 真ん中のバトル場を隠さないよう、盤面の左の端に置く。触っても下の盤面へ通す。
+ * カードとコインは消える時刻が違うので、互いの有無で動かないよう、それぞれ決まった位置に置く。
+ */
 .showcase {
+  --w: clamp(96px, 14vw, 240px);
   position: fixed;
-  top: 50%;
-  left: 16px;
+  inset: 0;
   z-index: 9;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  transform: translateY(-50%);
-  filter: drop-shadow(0 8px 24px rgb(0 0 0 / 0.35));
   pointer-events: none;
 }
 .showcase > * {
+  position: absolute;
+  left: 16px;
+  filter: drop-shadow(0 8px 24px rgb(0 0 0 / 0.35));
   animation: showcase-in 0.25s ease-out;
 }
-.showcase .card {
-  --w: clamp(96px, 14vw, 240px);
+.showcase > .card {
+  top: 50%;
+  translate: 0 -50%;
+}
+.showcase > .coins {
+  top: calc(50% + var(--w) * 88 / 63 / 2 + 12px);
 }
 @keyframes showcase-in {
   from {

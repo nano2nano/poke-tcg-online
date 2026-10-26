@@ -1167,17 +1167,32 @@ test("狭い画面では対戦ログを下の端に最新の 1 行だけ出し�
     { kind: "turn-started", player: 0 },
   ]);
   await expect(lines).toHaveCount(before + 2);
-  await expect(lines.filter({ visible: true })).toHaveCount(1);
+  // 行は出てくるときに動くので、動き終えてから測る。
+  await lines.evaluateAll((all) =>
+    Promise.all(all.flatMap((line) => line.getAnimations().map((motion) => motion.finished))),
+  );
+  // 古い行は枠の外へ切る。
+  const list = page.locator("#events");
+  const box = async (locator: Locator) => {
+    const found = await locator.boundingBox();
+    if (found === null) throw new Error("描けていない");
+    return found;
+  };
+  const listBottom = async () => {
+    const { y, height } = await box(list);
+    return y + height;
+  };
+  expect((await box(lines.nth(1))).y).toBeGreaterThanOrEqual(await listBottom());
 
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   const log = page.locator("#event-log");
   // 盤面の下に指せる手の欄が続き、観戦のリンクがページのいちばん下に来る。
-  const [bar, last] = [await log.boundingBox(), await page.locator("#watch-link").boundingBox()];
-  if (bar === null || last === null) throw new Error("ログか観戦のリンクが描けていない");
+  const [bar, last] = [await box(log), await box(page.locator("#watch-link"))];
   expect(last.y + last.height).toBeLessThanOrEqual(bar.y);
 
   await log.getByRole("button").click();
-  await expect(lines.filter({ visible: true })).toHaveCount(before + 2);
+  const older = await box(lines.nth(1));
+  expect(older.y + older.height).toBeLessThanOrEqual(await listBottom());
 });
 
 function activeOf(view: PlayerView) {
@@ -1227,10 +1242,11 @@ test("次の局面が届いたら、待たせている数字はコインが回�
     damageTo(activeOf(view).inPlayId),
   ]);
   await page.clock.runFor(100);
-  send([damageTo(activeOf(view).inPlayId)]);
-  // 次の局面のカードが動き終えたら、どちらの数字も浮かべる。
+  // 文だけの局面でも、届いたら前の局面の残りを出しきる。
+  send([{ kind: "turn-started", player: 0 }]);
+  // 次の局面のカードが動き終えたら浮かべる。
   await page.clock.runFor(900);
-  await expect(hits).toHaveCount(2);
+  await expect(hits).toHaveCount(1);
 });
 
 test("文だけの結果は盤面に出すものが無いので、数字を遅らせない", async ({ page }) => {

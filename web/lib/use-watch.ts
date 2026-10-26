@@ -14,7 +14,7 @@ import { useCardData } from "./cards.js";
 import { keepAlive, reconnector, socketUrl } from "./connection.js";
 import { describeMove, moveTargets } from "./describe-move.js";
 import { shuffledDecks } from "./board-moves.js";
-import { describeEvents, noticesToShow, seatDisplayName, type Notice } from "./describe.js";
+import { describeEvents, seatDisplayName, type Notice } from "./describe.js";
 import { initialWatchState, watchReducer, type WatchState } from "./match-state.js";
 import {
   initialPlayback,
@@ -97,7 +97,6 @@ export function useWatch(token: string): Watching {
               clock: message.clock,
               moved: null,
               lines: notices,
-              notices,
             });
             return;
           }
@@ -124,7 +123,6 @@ export function useWatch(token: string): Watching {
               clock: message.clock,
               moved,
               lines: notices,
-              notices: noticesToShow(notices),
             });
             return;
           }
