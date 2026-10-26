@@ -27,7 +27,7 @@ import { NoticeLayer, useNotices } from "./notices.js";
 export function WatchTable({ token }: { token: string }) {
   const board = useRef<HTMLElement>(null);
   const feed = useNotices();
-  const { state, status, playback, control } = useWatch(token, feed.show);
+  const { state, status, playback, control } = useWatch(token);
   const { seats, ended } = state;
   const { frames, at, stepped } = playback;
   const frame = frames[at] ?? null;
@@ -35,7 +35,7 @@ export function WatchTable({ token }: { token: string }) {
   const atEnd = at === frames.length - 1;
   const who = (player: Player) => seatDisplayName(seats, player);
 
-  // 届いた順に進んだときだけ、進んだぶんの結果を出す。届きしだい描くと、1 度に何手も進むことがある。
+  // 届いた順に進んだときだけ、進んだぶんの演出を出す。届きしだい描くと、1 度に何手も進むことがある。
   const show = feed.show;
   const announced = useRef(-1);
   useEffect(() => {
@@ -46,30 +46,23 @@ export function WatchTable({ token }: { token: string }) {
     }
     announced.current = at;
   }, [at, stepped, frames, show]);
-  // 次の局面へ送るまでの長さは、いま出した結果から測る。結果を出す effect より後に置く。
+  // 次の局面へ送るまでの長さは、いま出した演出から測る。演出を出す effect より後に置く。
   useTicker(playback, control, feed.remainingMs);
 
   // 決着は、描いている局面が最後に届いたものに追いついたときに出す。
-  const endShown = useRef(false);
-  const reachedEnd = ended !== null && atEnd;
-  useEffect(() => {
-    if (!reachedEnd || endShown.current || ended === null) return;
-    endShown.current = true;
-    show({ text: watchEndText(ended.matchResult, (player) => seatDisplayName(seats, player)) });
-  }, [reachedEnd, ended, seats, show]);
-
-  const events = useMemo(() => loggedUpTo(frames, at), [frames, at]);
+  const endText = ended !== null && atEnd ? watchEndText(ended.matchResult, who) : null;
+  const events = useMemo(() => {
+    const logged = loggedUpTo(frames, at);
+    return endText === null ? logged : [{ id: 0, text: endText }, ...logged];
+  }, [frames, at, endText]);
   const aimed = useMemo<AimedSet>(
     () => (frame?.moved == null ? NOTHING_AIMED : new Set(frame.moved.targets)),
     [frame],
   );
 
   // AI どうしの対戦では時計を出さない。AI は持ち時間を使い切らず、届いた時点の残りは見ている局面とずれる。
-  const clockText = reachedEnd
-    ? watchEndText(ended.matchResult, who)
-    : frame?.clock != null && !open
-      ? watchClockText(frame.clock, who)
-      : "";
+  const clockText =
+    endText ?? (frame?.clock != null && !open ? watchClockText(frame.clock, who) : "");
 
   return (
     <>
@@ -115,9 +108,7 @@ export function WatchTable({ token }: { token: string }) {
           </div>
           <SeatSide state={state} frame={frame} player={0} aimed={aimed} />
         </Board>
-        <div className="table-panel">
-          <EventLog id="watch-event-log" listId="watch-events" events={events} />
-        </div>
+        <EventLog id="watch-event-log" listId="watch-events" events={events} />
       </section>
       <NoticeLayer feed={feed} board={board} />
     </>
@@ -198,11 +189,11 @@ function Controls({
   );
 }
 
-/** 描いている局面までの記録。新しいものが先頭。 */
+/** 描いている局面までのログ。新しいものが先頭。 */
 function loggedUpTo(frames: readonly WatchFrame[], at: number): LoggedEvent[] {
   const logged: LoggedEvent[] = [];
   for (const frame of frames.slice(0, at + 1)) {
-    for (const text of frame.lines) logged.push({ id: logged.length + 1, text });
+    for (const line of frame.lines) logged.push({ ...line, id: logged.length + 1 });
   }
   return logged.reverse();
 }

@@ -399,7 +399,6 @@ export function SeatTable({
             </p>
           )}
           <SettingsButton id="settings-button" />
-          <EventLog id="event-log" listId="events" events={events} />
           <p className="note">
             観戦のリンク（渡された人は、両者の手札の中身を除いた盤面を見られます）
             <input
@@ -415,6 +414,7 @@ export function SeatTable({
             />
           </p>
         </div>
+        <EventLog id="event-log" listId="events" events={events} />
       </section>
       <NoticeLayer feed={feed} board={board} />
     </>
@@ -1010,7 +1010,7 @@ function ChoiceSheet({
 
 /**
  * 引き直すときに見せた手札を、見せた順に並べる。準備のあいだに増えたら開き、対戦が始まったら畳む。
- * 相手が引き直したことは、相手に番が回る前に起きるので、できごとの欄だけでは見落とす。
+ * 相手が引き直したことは、相手に番が回る前に起きるので、対戦ログだけでは見落とす。
  * それ以外の局面では開け閉めしない。プレイヤーが開いた欄を、次の局面で閉じてしまう。
  */
 function Mulligans({ state: { mulligans, view } }: { state: SeatState }) {

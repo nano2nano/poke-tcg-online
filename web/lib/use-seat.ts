@@ -77,7 +77,11 @@ export function useSeat(
   const refreshRating = useEffectEvent(() => refreshAccount(queryClient).catch(() => {}));
 
   /** いまの状態と接続。ボタンから読むので、描いた時点の値ではなく最新を持つ。 */
-  const live = useRef<{ state: SeatState; socket: WebSocket | null; log: (text: string) => void }>({
+  const live = useRef<{
+    state: SeatState;
+    socket: WebSocket | null;
+    log: (notice: Notice) => void;
+  }>({
     state,
     socket: null,
     log: () => {},
@@ -96,15 +100,25 @@ export function useSeat(
     let shownTimer: ReturnType<typeof setTimeout> | undefined;
 
     const who = (player: Player) => (player === seated.seat ? "あなた" : "相手");
-    const log = (texts: string[]) => {
-      if (texts.length === 0) return;
-      const added = texts.map((text) => ({ id: (logged += 1), text })).reverse();
+    const log = (notices: Notice[]) => {
+      if (notices.length === 0) return;
+      const added = notices.map((notice) => ({ ...notice, id: (logged += 1) })).reverse();
       setEvents((shown) => [...added, ...shown]);
+    };
+    /** トスの結果は、勝ち負けの色を付けてコインでも見せる。 */
+    const tellToss = (won: boolean, text: string) => {
+      const notice: Notice = {
+        text,
+        tone: won ? "positive" : "negative",
+        coins: { results: [won], faces: ["勝ち", "負け"] },
+      };
+      log([notice]);
+      show(notice);
     };
     live.current = {
       state: initialSeatState(seated.seat),
       socket: null,
-      log: (text) => log([text]),
+      log: (notice) => log([notice]),
     };
 
     const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(CHANNEL);
@@ -146,7 +160,7 @@ export function useSeat(
         case "delta": {
           const happened = message.t === "delta" ? message.events : [];
           const notices = describeEvents(happened, [current.view, before.view], who, cardTable());
-          log(notices.map((notice) => notice.text));
+          log(notices);
           // 対戦が始まったあとに開いた画面では、先攻はもう済んだ話なので出さない。
           if (message.t === "sync" && !firstPlayerShown && message.view.phase === "setup") {
             firstPlayerShown = true;
@@ -155,14 +169,11 @@ export function useSeat(
                 ? "あなたが先攻です"
                 : "相手が先攻です（あなたは後攻）";
             // AI が勝った対戦は繋ぐ前に始まっているので、トスを見ないままここへ来る。
-            if (tossShown) show({ text: first });
+            if (tossShown) log([{ text: first }]);
             else {
               tossShown = true;
               const won = message.toss === seated.seat;
-              show({
-                text: `コイントスに${won ? "勝ちました" : "負けました"}。${first}`,
-                coins: { results: [won], faces: ["勝ち", "負け"] },
-              });
+              tellToss(won, `コイントスに${won ? "勝ちました" : "負けました"}。${first}`);
             }
           }
           for (const notice of noticesToShow(notices, seated.seat)) show(notice);
@@ -173,20 +184,23 @@ export function useSeat(
           if (message.toss === null || tossShown) return;
           tossShown = true;
           const won = message.toss === seated.seat;
-          show({
-            text: won
+          tellToss(
+            won,
+            won
               ? "コイントスに勝ちました。先攻か後攻かを選んでください"
               : "コイントスに負けました。相手が先攻か後攻かを選びます",
-            coins: { results: [won], faces: ["勝ち", "負け"] },
-          });
+          );
           return;
         }
         case "ended": {
           // 終わった座席へは繋ぎ直せない。覚えたままだと、次に開いたときに繋ぎに行って断られる。
           forgetSeat(seated.seatToken);
-          const text = seatEndText(message, seated.seat);
-          log([text]);
-          show({ text, tone: seatEndTone(message.matchResult.winner, seated.seat) });
+          log([
+            {
+              text: seatEndText(message, seated.seat),
+              tone: seatEndTone(message.matchResult.winner, seated.seat),
+            },
+          ]);
           void refreshRating();
           void checkShuffle(seated, message).then(([result, shown]) => {
             if (!disposed) setShuffle({ result, text: shown });
@@ -195,14 +209,11 @@ export function useSeat(
         }
         case "reject": {
           // 古い画面から押したときは、サーバが正しい局面を送り直してくる。
-          const text = rejectText(message.reason);
-          log([text]);
-          show({ text, tone: "attention" });
+          log([{ text: rejectText(message.reason), tone: "attention" }]);
           return;
         }
         case "error":
-          log([message.message]);
-          show({ text: message.message, tone: "attention" });
+          log([{ text: message.message, tone: "attention" }]);
           return;
         default:
           return;
@@ -299,24 +310,21 @@ export function useSeat(
     return () => clearTimeout(timer);
   }, [awaiting]);
 
-  const send = useCallback(
-    (message: ClientMessage) => {
-      const { socket, log } = live.current;
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(message));
-        if (message.t === "move" || message.t === "setup" || message.t === "turn-order") {
-          setAwaiting(true);
-        }
-        return;
+  const send = useCallback((message: ClientMessage) => {
+    const { socket, log } = live.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(message));
+      if (message.t === "move" || message.t === "setup" || message.t === "turn-order") {
+        setAwaiting(true);
       }
-      // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。
-      // できごとの欄は畳んであるので、そこに書くだけでは目に入らない。
-      const text = "接続が切れているので送れませんでした。繋がってから、もう一度押してください。";
-      log(text);
-      notify({ text, tone: "attention" });
-    },
-    [notify],
-  );
+      return;
+    }
+    // 押してから確かめるまでのあいだに切れることがある。黙って捨てると、送れたと思われる。
+    log({
+      text: "接続が切れているので送れませんでした。繋がってから、もう一度押してください。",
+      tone: "attention",
+    });
+  }, []);
 
   const choose = useCallback((action: SetupAction) => {
     const next = seatReducer(live.current.state, action);
