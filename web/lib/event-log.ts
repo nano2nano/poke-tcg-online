@@ -24,8 +24,13 @@ export function appendToLog(
   for (const notice of notices) {
     const line = { ...notice, id: (id += 1) };
     const last = entries.at(-1);
-    if (!alone && last?.opens === true && notice.opens !== true) last.details.push(line);
-    else entries.push({ ...line, details: [] });
+    if (!alone && last?.opens === true && notice.opens !== true) {
+      // 山札を見てから取り出したなら、見たことは言わなくても分かる。取り出した行だけを残す。
+      if (line.deckTaken !== undefined) {
+        last.details = last.details.filter((seen) => seen.deckSeen !== line.deckTaken);
+      }
+      last.details.push(line);
+    } else entries.push({ ...line, details: [] });
   }
   return [...entries.reverse(), ...older];
 }

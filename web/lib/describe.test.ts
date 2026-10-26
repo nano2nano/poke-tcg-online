@@ -310,6 +310,44 @@ describe("describeEvents", () => {
     ]);
   });
 
+  it("山札から自分の手札へは「加えた」と言い、山札から取り出したことを覚える。山札へ戻すのは取り出しではない", () => {
+    const card = { instanceId: "c1", defId: "pikachu" };
+    const deck = { kind: "deck", player: 0 };
+    const [added, returned] = describeEvents(
+      [
+        event({ kind: "card-moved", card, from: deck, to: { kind: "hand", player: 0 } }),
+        event({ kind: "card-moved", card, from: deck, to: deck, actor: 1 }),
+      ],
+      [null],
+      who,
+      cards,
+    );
+    expect(added).toMatchObject({ text: "あがピカチュウを山札から手札に加えた", deckTaken: 0 });
+    expect(returned?.deckTaken).toBeUndefined();
+  });
+
+  it("山札を見たことと、山札からポケモンを出したことを覚える", () => {
+    const card = { instanceId: "c1", defId: "pikachu" };
+    const deck = { kind: "deck", player: 1 };
+    const [seen, played] = describeEvents(
+      [
+        event({ kind: "cards-revealed-hidden", player: 1, actor: 1, zone: deck, count: 3 }),
+        event({
+          kind: "pokemon-played",
+          player: 1,
+          card,
+          from: deck,
+          to: { kind: "bench", player: 1 },
+        }),
+      ],
+      [null],
+      who,
+      cards,
+    );
+    expect(seen?.deckSeen).toBe(1);
+    expect(played?.deckTaken).toBe(1);
+  });
+
   it("見せる文の無いイベントは落とす", () => {
     expect(describeEvents([event({ kind: "pokemon-check-started" })], [null], who, cards)).toEqual(
       [],

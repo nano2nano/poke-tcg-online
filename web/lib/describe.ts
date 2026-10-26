@@ -219,6 +219,10 @@ export interface Notice {
   quiet?: boolean;
   /** 対戦ログで見出しになり、次の見出しまでの行をその下にまとめる。カードやワザを使ったことなど。 */
   opens?: boolean;
+  /** 山札を見た行なら、その山札の持ち主。 */
+  deckSeen?: Player;
+  /** 山札からカードを取り出した行なら、その山札の持ち主。 */
+  deckTaken?: Player;
 }
 
 export type View = PlayerView | SpectatorView;
@@ -295,8 +299,9 @@ export function describeEvents(
     start = end;
     const opens = opensGroup(first, underway);
     if (opens || first.kind === "choice-answered") underway = true;
-    const notice = describeRun(run, views, who, cards);
-    if (notice === null) continue;
+    const described = describeRun(run, views, who, cards);
+    if (described === null) continue;
+    const notice = { ...described, ...deckUse(first) };
     if (first.kind === "pokemon-check-started") {
       check = { ...notice, opens };
     } else if (!opens) {
@@ -349,6 +354,30 @@ function opensGroup(event: PlayerEvent, underway: boolean): boolean {
       return !underway;
     default:
       return false;
+  }
+}
+
+/**
+ * 山札を見たか、山札からカードを取り出したイベントなら、その山札の持ち主を返す。
+ * 見たカードを山札へ戻すのは、取り出しに数えない。
+ */
+function deckUse(event: PlayerEvent): Pick<Notice, "deckSeen" | "deckTaken"> {
+  switch (event.kind) {
+    case "cards-revealed":
+    case "cards-revealed-hidden":
+      return event.zone.kind === "deck" ? { deckSeen: event.zone.player } : {};
+    case "card-moved":
+    case "card-moved-hidden":
+      return event.from.kind === "deck" && event.to.kind !== "deck"
+        ? { deckTaken: event.from.player }
+        : {};
+    case "pokemon-played":
+    case "pokemon-evolved":
+    case "energy-attached":
+    case "tool-attached":
+      return event.from.kind === "deck" ? { deckTaken: event.from.player } : {};
+    default:
+      return {};
   }
 }
 
@@ -521,7 +550,12 @@ function describeRun(
     case "card-moved-hidden": {
       const subject = event.actor ?? (event.from.kind === "stadium" ? null : event.from.player);
       const what = event.kind === "card-moved" ? names() : ` ${run.length} 枚`;
-      const text = `${what}を${place(event.from, subject)}から${place(event.to, subject)}へ移した${cause}`;
+      // カードの文と同じく、自分の手札へは「加える」と言う。
+      const moved =
+        event.to.kind === "hand" && event.to.player === subject
+          ? "手札に加えた"
+          : `${place(event.to, subject)}へ移した`;
+      const text = `${what}を${place(event.from, subject)}から${moved}${cause}`;
       return subject === null
         ? { text: text.trimStart() }
         : { text: `${who(subject)}が${text}`, by: byTurn(subject) };
