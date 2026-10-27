@@ -45,6 +45,7 @@ import {
   ReadyAbilities,
   SideBoard,
   Stadium,
+  TurnOrder,
 } from "./board.js";
 import type { CardDrops } from "./card-drag.js";
 import { EventLog } from "./event-log.js";
@@ -303,7 +304,12 @@ export function SeatTable({
               drops={drops}
             >
               <div className="board-side">
-                <h2>相手</h2>
+                <h2>
+                  {state.firstPlayer !== null && (
+                    <TurnOrder first={state.firstPlayer !== state.seat} />
+                  )}
+                  相手
+                </h2>
                 <div id="opponent">
                   {view !== null && <SideBoard side={view.opponent} mirrored aimed={aimed} />}
                 </div>
@@ -332,7 +338,12 @@ export function SeatTable({
                 )}
               </div>
               <div className="board-side">
-                <h2>自分</h2>
+                <h2>
+                  {state.firstPlayer !== null && (
+                    <TurnOrder first={state.firstPlayer === state.seat} />
+                  )}
+                  自分
+                </h2>
                 <div id="self">
                   {view !== null && (
                     <SideBoard side={view.self} mirrored={false} aimed={aimed} drops />

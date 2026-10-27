@@ -1153,6 +1153,19 @@ test("トスを見ないまま始まった対戦では、始まったときに�
   await expect(page.locator(".showcase .coin")).toHaveAttribute("data-face", "tails");
 });
 
+test("先攻か後攻かは、対戦の途中で開いた画面でも盤面の名前の前に出す", async ({ page }) => {
+  ensureCards();
+  const match = newMatch("turn-order");
+  finishSetup(match);
+  // 差し替えたサーバは、開いた座席を先攻として送る。
+  await mockSeat(page, viewFor(match, 1));
+  await page.goto("/");
+  await expect(page.locator("#self .mat")).toBeVisible();
+  const order = (side: string) => page.locator(`.board-side:has(> ${side}) .turn-order`);
+  await expect(order("#self")).toHaveAttribute("data-order", "first");
+  await expect(order("#opponent")).toHaveAttribute("data-order", "second");
+});
+
 test("対戦ログは、番やカードを使ったことを見出しにして、そこで起きたことを下にまとめる", async ({
   page,
 }) => {
@@ -2780,6 +2793,21 @@ test("AI どうしの対戦は 1 手ずつ送り、止めて進めて戻せる�
   await page.selectOption("#watch-speed", "0");
   await page.click("#watch-play");
   await expect(position).toHaveAttribute("data-shown", "5");
+});
+
+test("観戦でも、先攻か後攻かを座席の名前の前に出す", async ({ page }) => {
+  const messages = await botWatchMessages(1);
+  const { firstPlayer } = JSON.parse(messages[0]!) as { firstPlayer: Player };
+  await page.routeWebSocket(/\/ws\?/, (ws) => {
+    for (const message of messages) ws.send(message);
+  });
+  await page.goto("/watch/e2e-bot-watch");
+  for (const player of [0, 1]) {
+    await expect(page.locator(`#watch-name-${player} .turn-order`)).toHaveAttribute(
+      "data-order",
+      player === firstPlayer ? "first" : "second",
+    );
+  }
 });
 
 test("観戦で戻ったときは、山札を切って見せない", async ({ page }) => {

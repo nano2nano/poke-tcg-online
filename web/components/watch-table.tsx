@@ -12,7 +12,7 @@ import {
   type WatchFrame,
 } from "../lib/watch-frames.js";
 import type { WatchState } from "../lib/match-state.js";
-import { Board, NOTHING_AIMED, SideBoard, Stadium, type AimedSet } from "./board.js";
+import { Board, NOTHING_AIMED, SideBoard, Stadium, TurnOrder, type AimedSet } from "./board.js";
 import { EventLog } from "./event-log.js";
 import { SettingsButton } from "./settings.js";
 import { NoticeLayer, useNotices } from "./notices.js";
@@ -199,7 +199,7 @@ function loggedUpTo(frames: readonly WatchFrame[], at: number): LogEntry[] {
 
 /** 座席 1 は向かいに座る側として、上下と左右を返して描く。 */
 function SeatSide({
-  state: { seats },
+  state: { seats, firstPlayer },
   frame,
   player,
   aimed,
@@ -218,7 +218,10 @@ function SeatSide({
   const side = frame?.sides[player] ?? null;
   return (
     <div className="board-side">
-      <h2 id={`watch-name-${player}`}>{name}</h2>
+      <h2 id={`watch-name-${player}`}>
+        {firstPlayer !== null && <TurnOrder first={firstPlayer === player} />}
+        {name}
+      </h2>
       <div id={`watch-side-${player}`}>
         {side !== null && <SideBoard side={side} mirrored={player === 1} aimed={aimed} />}
       </div>

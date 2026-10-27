@@ -862,3 +862,15 @@ export const Stadium = memo(function Stadium({ stadium }: { stadium: SpectatorVi
     </Zone>
   );
 });
+
+/**
+ * 盤面の名前の前に置く、先攻か後攻かの印。対戦ログの先攻の行は流れていき、途中から開いた画面には出ないので、
+ * 盤面に残しておく。名前の後ろに置くと、長い名前を切ったときに一緒に切れる。
+ */
+export function TurnOrder({ first }: { first: boolean }) {
+  return (
+    <span className="turn-order" data-order={first ? "first" : "second"}>
+      {first ? "先攻" : "後攻"}
+    </span>
+  );
+}
