@@ -509,6 +509,17 @@ function describeRun(
         tone: "positive",
         hit: { target: event.target, text: `+${event.amount}`, tone: "positive" },
       };
+    // 「きぜつせず、残りHPが「10」の状態で場に残る」型の効果。回復ではないので、回復の文にしない。
+    case "damage-reduced-to-residual": {
+      const amount = event.beforeDamage - event.afterDamage;
+      return {
+        text: `${pokemon(event.target)}はきぜつせず、残り HP ${event.residual} で場に残った`,
+        tone: "positive",
+        ...(amount > 0
+          ? { hit: { target: event.target, text: `+${amount}`, tone: "positive" } }
+          : {}),
+      };
+    }
     case "condition-applied":
       return { text: `${pokemon(event.target)}が${conditionName(event.condition)}になった` };
     case "condition-removed":
