@@ -812,6 +812,23 @@ button[data-kind="attack"] {
 .board h2 {
   margin: 4px 0;
 }
+.turn-order {
+  display: inline-block;
+  margin-inline-end: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  /* 暗い背景では --accent の小さな字は読みにくいので、明るくする。 */
+  color: light-dark(var(--accent), #8ab4f8);
+  font-size: 0.75rem;
+  font-weight: normal;
+  line-height: 1.5;
+  vertical-align: 0.1em;
+}
+.turn-order[data-order="first"] {
+  background: var(--accent);
+  color: #fff;
+}
 .board-center {
   display: flex;
   align-items: center;
@@ -1357,6 +1374,11 @@ button.choice-card:enabled > .card {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* 名前の幅は手札の段の左の余白に限られるので、印は名前の上の行に置き、名前を短く切らない。 */
+  .table .board-side > h2 > .turn-order {
+    display: block;
+    width: fit-content;
   }
   .table .board-side:first-child > h2 {
     top: 0;
