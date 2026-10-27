@@ -92,6 +92,22 @@ describe("describeEvents", () => {
     expect(notice?.hit).toMatchObject({ target: "p0", text: "+20", tone: "positive" });
   });
 
+  it("きぜつせずに残り HP で場に残る効果は、回復と書かず、残り HP と減ったダメージを出す", () => {
+    const view = board([{ active: pokemon("p0") }, {}]);
+    const reduced = event({
+      kind: "damage-reduced-to-residual",
+      target: "p0",
+      amount: 50,
+      beforeDamage: 120,
+      afterDamage: 70,
+      residual: 10,
+    });
+    const [notice] = describeEvents([reduced], [view], who, cards);
+    expect(notice?.text).toContain("きぜつせず、残り HP 10 で場に残った");
+    expect(notice?.text).not.toContain("回復");
+    expect(notice?.hit).toMatchObject({ target: "p0", text: "+50", tone: "positive" });
+  });
+
   it("続けて引いたカードは 1 つに畳み、枚数を書く", () => {
     const drawn = event({ kind: "card-drawn-hidden", player: 1, count: 1, actor: 1 });
     const notices = describeEvents([drawn, drawn, drawn], [null], who, cards);
