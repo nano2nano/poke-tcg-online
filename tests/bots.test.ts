@@ -47,6 +47,7 @@ import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { BOT_MATCH_LIVE, Lobby, MATCH_LIVE } from "../src/lobby.js";
 import type { MatchRecord } from "../src/log.js";
 import {
+  BOT_TURN_MOVE_LIMIT,
   botCandidates,
   botExtrasFor,
   createMatch,
@@ -274,6 +275,70 @@ describe("AI に見せる候補", () => {
     const kept = legal.filter((move) => !maskable(match.state, move) || key(move) !== visited);
     expect(kept.length).toBeGreaterThan(0);
     expect(botCandidates(match, legal)).toEqual(kept);
+  });
+
+  /** 座席 1 の番で、番を終える手とほかの手の両方が候補にある局面まで進める。 */
+  function botMatchWithEnding(): Match {
+    const match = botMatchInMain();
+    for (;;) {
+      const mover = toMove(match);
+      if (mover === null) throw new Error("座席 1 が番を終えられる局面が来なかった");
+      const legal = legalMoves(match.state);
+      if (mover === 1 && legal.some(endsTurn) && legal.some((move) => !endsTurn(move))) {
+        return match;
+      }
+      submitMove(match, mover, match.version, legal[0] as Move, 0);
+    }
+  }
+
+  function endsTurn(move: Move): boolean {
+    return move.type === "EndTurn" || move.type === "Attack";
+  }
+
+  function unlimited(match: Match): Match {
+    return { ...match, turnMoves: { ...match.turnMoves, count: 0 } };
+  }
+
+  it("1 つの番の手の数が上限に達したら、番を終える手だけを見せる", () => {
+    const match = botMatchWithEnding();
+    const legal = legalMovesFor(match, 1)!;
+    const ending = legal.filter(endsTurn);
+
+    match.turnMoves.count = BOT_TURN_MOVE_LIMIT - 1;
+    expect(botCandidates(match, legal)).toEqual(botCandidates(unlimited(match), legal));
+    match.turnMoves.count = BOT_TURN_MOVE_LIMIT;
+    expect(botCandidates(match, legal)).toEqual(ending);
+  });
+
+  it("番を終える手が候補に無ければ、上限を越えても絞らない", () => {
+    const match = botMatchWithEnding();
+    const legal = legalMovesFor(match, 1)!.filter((move) => !endsTurn(move));
+    match.turnMoves.count = BOT_TURN_MOVE_LIMIT;
+    expect(botCandidates(match, legal)).toEqual(botCandidates(unlimited(match), legal));
+  });
+
+  it("手の数は番の中で 1 手ごとに増え、番が替わると 0 に戻る", () => {
+    const match = botMatchWithEnding();
+    const turn = match.state.turn;
+    const before = match.turnMoves.count;
+    const step = legalMovesFor(match, 1)!.find((move) => !endsTurn(move)) as Move;
+    submitMove(match, 1, match.version, step, 0);
+    expect(match.state.turn).toBe(turn);
+    expect(match.turnMoves.count).toBe(before + 1);
+
+    while (match.state.turn === turn) {
+      const mover = toMove(match);
+      if (mover === null) throw new Error("番が替わる前に止まった");
+      const legal = legalMoves(match.state);
+      submitMove(
+        match,
+        mover,
+        match.version,
+        legal.find((move) => move.type === "EndTurn") ?? (legal[0] as Move),
+        0,
+      );
+    }
+    expect(match.turnMoves.count).toBe(0);
   });
 
   it("人どうしの対戦では局面を記録しない", () => {

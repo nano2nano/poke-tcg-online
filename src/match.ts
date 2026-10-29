@@ -142,6 +142,11 @@ export interface Match {
    * AI のいない対戦では null で、局面を記録しない。
    */
   readonly botRevisit: RevisitTracker | null;
+  /**
+   * いまの番に打たれた手の数（効果の選択への答えも 1 手と数える）。`scope` は番の印で、番が替わると 0 から数え直す。
+   * AI の座席の候補を `BOT_TURN_MOVE_LIMIT` で絞るのに使う。
+   */
+  turnMoves: { scope: string; count: number };
   state: GameState;
   /**
    * 対戦準備で、座席がまとめて出したバトル場とベンチ（2.4 節）。エンジンの順番が来るまで預かる。
@@ -225,6 +230,7 @@ export function createMatch(options: CreateMatchOptions): Match {
     bots,
     botKnowledge,
     botRevisit,
+    turnMoves: { scope: turnScope(created.state), count: 0 },
     state: created.state,
     setupPlans: [null, null],
     setupSinceMs: [options.nowMs, options.nowMs],
@@ -337,6 +343,7 @@ function record(
   }
   match.botKnowledge.observe(applied.events);
   match.botRevisit?.arrive(match.state);
+  countTurnMove(match);
 
   if (match.state.phase === "gameover") {
     finish(match, { kind: "normal", winner: match.state.outcome?.winner ?? null }, timing.nowMs);
@@ -627,9 +634,35 @@ export function botsOnly(match: Pick<Match, "bots">): boolean {
  * 同じである。全候補を当てると不変条件の検査が投げうり、対戦の中で投げると AI の投了になるので、検査は自己対戦に任せる。
  */
 export function botCandidates(match: Match, legal: Move[]): Move[] {
-  return match.botRevisit === null
-    ? legal
-    : match.botRevisit.filter(match.state, legal, false).admitted;
+  const admitted =
+    match.botRevisit === null ? legal : match.botRevisit.filter(match.state, legal, false).admitted;
+  if (match.turnMoves.count < BOT_TURN_MOVE_LIMIT) return admitted;
+  const ending = admitted.filter(endsTurn);
+  return ending.length > 0 ? ending : admitted;
+}
+
+/**
+ * 1 つの番に AI の座席へ見せる手の数の上限。これを越えたら、番を終える手（ワザと番の終わり）だけを見せる。
+ *
+ * 既出の局面へ戻る手を外すだけでは、何回でも使える特性（メガフシギバナex「ソーラートランス」など）で
+ * 新しい並びを作り続けられ、学習の対戦では 1 つの番が 8959 手まで伸びた。AI は 1 手ごとに間を置いて指すので、
+ * そのままだと人は何時間も待たされる。学習の対戦のふつうの番は多くて 88 手なので、200 手で絞ってもふつうの番には掛からない。
+ * 効果の選択の途中で番を終える手が無ければ、絞らずにそのまま見せる。
+ */
+export const BOT_TURN_MOVE_LIMIT = 200;
+
+function endsTurn(move: Move): boolean {
+  return move.type === "EndTurn" || move.type === "Attack";
+}
+
+function turnScope(state: GameState): string {
+  return `${state.turn}:${state.turnPlayer}`;
+}
+
+function countTurnMove(match: Match): void {
+  const scope = turnScope(match.state);
+  if (scope === match.turnMoves.scope) match.turnMoves.count += 1;
+  else match.turnMoves = { scope, count: 0 };
 }
 
 /** AI の座席の方策へ渡す導出値と記憶。要素の集合を読む方策（形式 6）だけが求める。 */
