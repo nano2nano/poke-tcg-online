@@ -225,7 +225,7 @@ describe("AI に見せる候補", () => {
    * 先頭の合法手で進める。外れうるのは、行き先を見ずに残す手（`neverMasked`）でなく、偶然も開示も伴わない手である。
    */
   function maskable(state: GameState, move: Move): boolean {
-    return !neverMasked(move) && !touchesUnseen(state, applyMove(state, move));
+    return !neverMasked(state, move) && !touchesUnseen(state, applyMove(state, move));
   }
 
   function botMatchInMain(): Match {
