@@ -101,8 +101,6 @@ export interface PlayOptions {
   inspect?: (match: Match, seat: Player) => void;
   /** 手の数の上限。越えたら打ち切る（決着しない構成でテストが止まらないように）。 */
   maxMoves?: number;
-  /** 手番側が 1 手に掛ける時間。持ち時間のテストで使う。 */
-  thinkMs?: number;
   /** 1 手を適用するたびに、適用前の局面と出たイベントを添えて呼ぶ。イベントの漏洩の検査に使う。 */
   applied?: (before: GameState, match: Match, events: DomainEvent[]) => void;
 }
@@ -116,9 +114,8 @@ export interface PlayedMatch {
 /** ランダムな合法手で対戦を進める。`submitMove` を通すので、サーバ側の検査も一緒に踏む。 */
 export function playToEnd(match: Match, rngSeed: number, options: PlayOptions = {}): PlayedMatch {
   const maxMoves = options.maxMoves ?? 4000;
-  const thinkMs = options.thinkMs ?? 0;
   let rng = createRng(rngSeed);
-  let nowMs = match.turnStartedAtMs;
+  const nowMs = match.turnStartedAtMs;
   let moves = 0;
 
   for (;;) {
@@ -131,7 +128,6 @@ export function playToEnd(match: Match, rngSeed: number, options: PlayOptions = 
     const legal = legalMoves(match.state);
     const [index, next] = nextInt(rng, legal.length);
     rng = next;
-    nowMs += thinkMs;
     const before = match.state;
     const outcome = submitMove(match, mover, match.version, legal[index] as Move, nowMs);
     if (!outcome.ok) throw new Error(`合法手が拒否された: ${outcome.reason}`);

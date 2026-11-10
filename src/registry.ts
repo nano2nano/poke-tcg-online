@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { Player } from "./engine.js";
-import { applyTimeout, type Match, type SeatInfo } from "./match.js";
+import type { Match, SeatInfo } from "./match.js";
 import { toRecord, type MatchRecord } from "./log.js";
 import { botTurnOrder, startPending, tossCoin, type PendingMatch } from "./pending.js";
 import type { SeedShares } from "./fingerprint.js";
@@ -154,7 +154,7 @@ export class MatchRegistry {
     return this.matches.size + this.pending.size;
   }
 
-  /** 時計の流れているものが 1 つも無い。始める前の対戦も、来ない座席の時計が流れる。 */
+  /** 定期処理で見る対戦が 1 つも無い。始まる前の対戦にも期限がある。 */
   idle(): boolean {
     return this.liveCount() === 0;
   }
@@ -169,13 +169,5 @@ export class MatchRegistry {
     for (const token of match.seatTokens) this.seats.delete(token);
     this.spectators.delete(match.spectatorToken);
     return toRecord(match);
-  }
-
-  /**
-   * 持ち時間の尽きた対戦を終わらせる。終わった対戦を返す。
-   * 切断中も時計は流れるので、このスイープは接続の生死を見ない（3.4 節）。
-   */
-  sweepTimeouts(nowMs: number): Match[] {
-    return this.live().filter((match) => applyTimeout(match, nowMs));
   }
 }

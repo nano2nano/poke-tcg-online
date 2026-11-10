@@ -82,7 +82,7 @@ export class MatchArchive {
    * 作り直せる、というのが 7.2 節である。記録に無い対戦でレーティングだけ動かすと、
    * どこから来た差か誰にも言えなくなる。
    *
-   * 投げない。ここは持ち時間のスイープと WebSocket の処理から呼ばれる。
+   * 投げない。ここは定期処理と WebSocket の処理から呼ばれる。
    */
   settle(record: MatchRecord): Promise<void> {
     return this.enqueue(async () => {

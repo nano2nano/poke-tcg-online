@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef } from "react";
 import type { Player } from "../../src/engine.js";
-import { noticesToShow, seatDisplayName, watchClockText, watchEndText } from "../lib/describe.js";
+import { noticesToShow, seatDisplayName, watchEndText, watchTurnText } from "../lib/describe.js";
 import { appendToLog, type LogEntry } from "../lib/event-log.js";
 import { useWatch } from "../lib/use-watch.js";
 import {
@@ -60,9 +60,7 @@ export function WatchTable({ token }: { token: string }) {
     [frame],
   );
 
-  // AI どうしの対戦では時計を出さない。AI は持ち時間を使い切らず、届いた時点の残りは見ている局面とずれる。
-  const clockText =
-    endText ?? (frame?.clock != null && !open ? watchClockText(frame.clock, who) : "");
+  const turnText = endText ?? (frame == null ? "" : watchTurnText(frame.toMove, who));
 
   return (
     <>
@@ -74,8 +72,8 @@ export function WatchTable({ token }: { token: string }) {
               ? "AI どうしの対戦です。両者の手札も見えます。"
               : "両者とも、相手から見えるのと同じだけが見えます。手札の中身は出ません。"}
           </p>
-          <div id="watch-clock" className="clock">
-            {clockText}
+          <div id="watch-turn" className="turn">
+            {turnText}
           </div>
           <Controls playback={playback} control={control} />
           {open && (

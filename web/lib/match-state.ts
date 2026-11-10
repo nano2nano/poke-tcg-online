@@ -14,7 +14,6 @@ import type {
   SetupView,
 } from "../../src/match.js";
 import type {
-  ClockView,
   EndedMessage,
   ServerMessage,
   SpectatorEndedMessage,
@@ -43,7 +42,7 @@ export interface SeatState {
   /** 対戦が始まる前に届く、コイントスに勝った座席。 */
   toss: Player | null;
   firstPlayer: Player | null;
-  clock: ClockView | null;
+  toMove: Player | null;
   /** いまの局面へ来るあいだに山札を切った座席。 */
   shuffled: Player[];
   /** 終わった対戦では通らないので、決着したら null にする。 */
@@ -75,7 +74,7 @@ export function initialSeatState(seat: Player): SeatState {
     mulligans: [],
     toss: null,
     firstPlayer: null,
-    clock: null,
+    toMove: null,
     shuffled: [],
     spectatorToken: null,
     ended: null,
@@ -104,7 +103,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
         attacks: action.attacks,
         // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
         mulligans: action.mulligans ?? state.mulligans,
-        clock: action.clock,
+        toMove: action.toMove,
         shuffled: action.t === "delta" ? shuffledDecks(action.events) : [],
         ...(action.t === "sync"
           ? {
@@ -180,12 +179,12 @@ export interface WatchState {
   view: SpectatorView | null;
   seats: [SpectatorSeat, SpectatorSeat] | null;
   firstPlayer: Player | null;
-  clock: ClockView | null;
+  toMove: Player | null;
   ended: Omit<SpectatorEndedMessage, "t" | "view"> | null;
 }
 
 export function initialWatchState(): WatchState {
-  return { stateVersion: 0, view: null, seats: null, firstPlayer: null, clock: null, ended: null };
+  return { stateVersion: 0, view: null, seats: null, firstPlayer: null, toMove: null, ended: null };
 }
 
 export function watchReducer(state: WatchState, message: ServerMessage): WatchState {
@@ -197,14 +196,14 @@ export function watchReducer(state: WatchState, message: ServerMessage): WatchSt
         view: message.view,
         seats: message.seats,
         firstPlayer: message.firstPlayer,
-        clock: message.clock,
+        toMove: message.toMove,
       };
     case "spectator-delta":
       return {
         ...state,
         stateVersion: message.stateVersion,
         view: message.view,
-        clock: message.clock,
+        toMove: message.toMove,
       };
     case "spectator-ended": {
       const { t: _t, view, ...ended } = message;

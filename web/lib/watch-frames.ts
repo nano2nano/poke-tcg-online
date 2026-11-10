@@ -6,7 +6,6 @@
  */
 
 import type { Player, SpectatorView } from "../../src/engine.js";
-import type { ClockView } from "../../src/protocol.js";
 import type { Notice, Side } from "./describe.js";
 
 /**
@@ -22,7 +21,7 @@ export interface WatchFrame {
   stadium: SpectatorView["stadium"];
   /** この局面へ来るあいだに山札を切った座席。 */
   shuffled: Player[];
-  clock: ClockView | null;
+  toMove: Player | null;
   /** この局面へ来た手。繋いだ直後の局面と、人が座る対戦には無い。 */
   moved: { seat: Player; text: string; targets: string[] } | null;
   /** 対戦ログに足す行。古い順。1 手ずつ進んだときは、盤面の演出にも出す。 */

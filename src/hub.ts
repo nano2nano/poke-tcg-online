@@ -1,8 +1,8 @@
 /**
  * 座席と WebSocket の接続を束ねる（`docs/spec/battle-server.md` 3 節）。
  *
- * **時刻を読むのはこの層だけである。** 下の層（`match.ts`、`clock.ts`）は現在時刻を
- * 引数で受け取るので、時計の進みをテストで書ける。
+ * **時刻を読むのはこの層だけである。** 下の層（`match.ts`）は現在時刻を
+ * 引数で受け取るので、時刻の進みをテストで書ける。
  *
  * 座席へ出る値は `syncFor` / `deltaFor` が、観戦者へ出る値は `spectatorSyncFor` /
  * `spectatorDeltaFor` が組み立てるものに限る。`match.ts` の `viewFor` / `spectatorViewFor` /
@@ -16,8 +16,8 @@ import {
   botCandidates,
   botExtrasFor,
   botKnowledgeFor,
+  abandon,
   botsOnly,
-  clockView,
   concede,
   deckPlacementFor,
   engineOutcome,
@@ -82,7 +82,7 @@ const BOT_DELAY_MS = 700;
 
 /**
  * 人の画面から `shown` が届くのを待つ上限（7.3 節）。裏へ回したタブではブラウザがタイマーを間引くので
- * 遅れることがあり、待っているあいだに閉じたタブからは届かない。待ち続けると AI の持ち時間が尽きる。
+ * 遅れることがあり、待っているあいだに閉じたタブからは届かない。待ち続けると AI が指さないままになる。
  */
 const SHOWN_WAIT_MS = 10_000;
 
@@ -94,13 +94,27 @@ const WATCH_DELAY_MS = 200;
 
 /**
  * AI どうしの対戦で、見る人が繋ぐのを待つ上限（7.4 節）。繋ぐ前に動かすと、見る人は最初の数手を見られない。
- * 誰も繋がなくても、これを過ぎたら動かし始める。止めたままにすると、持ち時間が尽きるまで対戦が残る。
+ * 誰も繋がなくても、これを過ぎたら動かし始める。止めたままにすると、対戦がいつまでも残る。
  */
 const WATCH_START_MS = 30_000;
+
+/**
+ * 手を持つ座席が接続を持たないまま、これだけ続いたら時間切れにする（3.4 節）。
+ * 回線が切れた人が繋ぎ直せる長さにする。
+ */
+export const ABSENCE_LIMIT_MS = 10 * 60_000;
+
+/**
+ * 手を持つ座席が、繋いでいてもこれだけ指さなければ時間切れにする（3.4 節）。考える時間を縛るためではなく、
+ * 画面を開いたまま忘れられた対戦を終わらせるためなので、考えていて届く長さにはしない。
+ */
+export const IDLE_LIMIT_MS = 60 * 60_000;
 
 export class MatchHub {
   /** 対戦 ID → 座席 → 接続。1 座席に 1 本だけ持つ。 */
   private readonly sockets = new Map<string, Map<Player, SeatSocket>>();
+  /** 対戦 ID → 座席 → その座席の接続が最後に切れた時刻。 */
+  private readonly leftAtMs = new Map<string, Map<Player, number>>();
   /** 対戦 ID → 観戦者の接続。 */
   private readonly spectators = new Map<string, Set<SeatSocket>>();
   /** 観戦者の接続 → 対戦 ID。観戦者の数はこの大きさで数え、別の数え方を持たない。 */
@@ -194,6 +208,7 @@ export class MatchHub {
       console.error(`対戦を始められなかった（${pending.matchId}）:`, error);
       this.options.registry.dropPending(pending);
       this.sockets.delete(pending.matchId);
+      this.leftAtMs.delete(pending.matchId);
       for (const socket of perMatch?.values() ?? []) {
         send(socket, { t: "error", message: "対戦を始められなかった" });
         socket.close();
@@ -247,7 +262,11 @@ export class MatchHub {
     }
     for (const [matchId, perMatch] of this.sockets) {
       for (const [seat, held] of perMatch) {
-        if (held === socket) perMatch.delete(seat);
+        if (held !== socket) continue;
+        perMatch.delete(seat);
+        const left = this.leftAtMs.get(matchId) ?? new Map<Player, number>();
+        left.set(seat, this.now());
+        this.leftAtMs.set(matchId, left);
       }
       if (perMatch.size === 0) this.sockets.delete(matchId);
     }
@@ -391,7 +410,7 @@ export class MatchHub {
    * その座席トークンの対戦で AI の番なら、AI を動かす。
    *
    * シェアを出さずに入った対戦はロビーの中で始まり、ハブを通らない。AI が先に選ぶ局面から始まると、
-   * 人が繋ぐまで誰も AI を動かさず、AI の持ち時間だけが流れる。席を渡した直後に呼ぶ。
+   * 人が繋ぐまで誰も AI を動かさない。席を渡した直後に呼ぶ。
    */
   wakeBot(seatToken: string): void {
     const ref = this.options.registry.bySeatToken(seatToken);
@@ -462,7 +481,7 @@ export class MatchHub {
    *
    * **AI が指せなかったら、AI の投了で終える。** 方策が投げたときも、手が断られたときも同じである。
    * 代わりに一様に選んだ手を指すと、方策が選んでいない手が `source: "bot"` として記録に混ざる。
-   * 止めたまま待たせると、人は AI の持ち時間が尽きるまで待たされる。
+   * 止めたまま待たせると、人は指さない AI を待ち続ける。
    */
   private botMove(match: Match, seat: Player, bot: Bot): void {
     // 待っているあいだに終わった対戦（投了、時間切れ）には指さない。
@@ -527,6 +546,7 @@ export class MatchHub {
       socket.close();
     }
     this.sockets.delete(match.matchId);
+    this.leftAtMs.delete(match.matchId);
     /**
      * 観戦者の接続は、決着を伝えたら閉じる。数から外すだけで開いたままにすると、
      * 対戦を開いて観戦者を積んでは終わらせることを繰り返すだけで、上限に数えられない
@@ -561,29 +581,47 @@ export class MatchHub {
   }
 
   /**
-   * 期限を過ぎた始まる前の対戦を進め、持ち時間の尽きた対戦を終わらせる。呼ぶのは起動側の定期処理である。
+   * 期限を過ぎた始まる前の対戦を進め、放置された対戦を終わらせる。呼ぶのは起動側の定期処理である。
    * シェアを開く期限を過ぎたらコイントスをし、選ぶ期限を過ぎたら勝った座席を先攻にする（2.5 節）。
    *
    * **1 局ずつ切り離す。** 1 局の後始末で投げると、同じスイープで終わらせるはずだった
-   * ほかの対戦が、時計を過ぎたまま残り続ける。
+   * ほかの対戦が、期限を過ぎたまま残り続ける。
    */
   sweepTimeouts(): void {
-    // 始めた対戦では、来ない座席の時計が流れる（3.4 節）。
-    for (const pending of this.options.registry.overdue(this.now())) {
+    const { registry } = this.options;
+    for (const pending of registry.overdue(this.now())) {
       const { toss } = pending;
       this.advancePending(pending, () =>
         toss === null
-          ? this.options.registry.toss(pending, this.now())
-          : this.options.registry.start(pending, this.now(), toss.winner),
+          ? registry.toss(pending, this.now())
+          : registry.start(pending, this.now(), toss.winner),
       );
     }
-    for (const match of this.options.registry.sweepTimeouts(this.now())) {
+    for (const match of registry.live()) {
+      const seat = toMove(match);
+      if (seat === null || !this.abandoned(match, seat)) continue;
       try {
-        this.endMatch(match);
+        if (abandon(match, seat, this.now())) this.endMatch(match);
       } catch (error) {
         console.error(`対戦を終われなかった（${match.matchId}）:`, error);
       }
     }
+  }
+
+  /**
+   * 手を持つ座席が対戦を放置しているか（3.4 節）。
+   *
+   * 離れていた長さは、手を持った時刻より前を数えない。数えると、相手の番のあいだに離れていた座席は、
+   * 相手が長く考えたあとで番が来たとたんに負ける。AI の座席は接続を持たないが、離れてもいない。
+   */
+  private abandoned(match: Match, seat: Player): boolean {
+    const sinceMs = match.turnStartedAtMs;
+    if (this.now() - sinceMs >= IDLE_LIMIT_MS) return true;
+    if (match.bots[seat] !== null || this.sockets.get(match.matchId)?.has(seat) === true) {
+      return false;
+    }
+    const leftAtMs = this.leftAtMs.get(match.matchId)?.get(seat) ?? sinceMs;
+    return this.now() - Math.max(leftAtMs, sinceMs) >= ABSENCE_LIMIT_MS;
   }
 
   /** `moved` は AI どうしの対戦で、いま指された手である。観戦者にはその対戦でだけ見せる（7.4 節）。 */
@@ -621,7 +659,7 @@ export class MatchHub {
       mulligans: match.mulligans,
       firstPlayer: match.firstPlayer,
       toss: match.tossWinner,
-      clock: clockView(match, this.now()),
+      toMove: toMove(match),
       seedCommit: match.seedCommitment.commit,
       spectatorToken: match.spectatorToken,
     };
@@ -641,7 +679,7 @@ export class MatchHub {
       attacks: attacksFor(match, seat),
       // マリガンは準備の中でしか起きないので、対戦が始まったあとは送り直さない。
       ...(match.state.phase === "setup" ? { mulligans: match.mulligans } : {}),
-      clock: clockView(match, this.now()),
+      toMove: toMove(match),
     };
   }
 
@@ -653,7 +691,7 @@ export class MatchHub {
       view: spectatorViewFor(match),
       firstPlayer: match.firstPlayer,
       toss: match.tossWinner,
-      clock: clockView(match, this.now()),
+      toMove: toMove(match),
       seats: [
         { displayName: first.displayName, rating: first.rating },
         { displayName: second.displayName, rating: second.rating },
@@ -672,7 +710,7 @@ export class MatchHub {
       stateVersion: match.version,
       events: eventsFor(events, "spectator"),
       view: spectatorViewFor(match),
-      clock: clockView(match, this.now()),
+      toMove: toMove(match),
       ...this.openViews(match),
       ...(moved !== null && botsOnly(match) ? { moved } : {}),
     };

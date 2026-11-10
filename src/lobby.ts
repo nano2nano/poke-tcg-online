@@ -287,7 +287,7 @@ export class Lobby {
    * AI との対戦を断る理由。無ければ null。呼び手は重みを読む前に一度これを通す（読み込みは Durable Object を止める）。
    *
    * **AI との対戦は 1 人 1 局までにする。** AI の座席は重みを抱え、放っておかれた対戦も
-   * 持ち時間が尽きるまでメモリに残る。何局でも開けると、1 人で Durable Object のメモリを埋められる。
+   * 時間切れになるまでメモリに残る。何局でも開けると、1 人で Durable Object のメモリを埋められる。
    */
   refuseBot(request: BotJoinRequest, known: Account | null, botDeck: DeckList): JoinOutcome | null {
     if (known === null) return accountMissing();
@@ -304,7 +304,7 @@ export class Lobby {
    * 終わっていない対戦があれば断り、その席を返す（7.1 節）。無ければ null。
    *
    * 席が決まってから引き換えに来るまでに入り直すと、降ろす待ちのチケットが無いので、断らなければ 2 局目が始まる。
-   * 席を返さないと、画面を失った人は座席トークンを持たず、その対戦の持ち時間が尽きるまで次を始められない。
+   * 席を返さないと、画面を失った人は座席トークンを持たず、その対戦が時間切れになるまで次を始められない。
    * AI の重みを読んでいる途中もまだ席は無いが断る。読み終えたときに、あとから始まった対戦と重なる。
    */
   private refuseLive(playerId: string): JoinOutcome | null {
@@ -560,7 +560,7 @@ export class Lobby {
 
   /**
    * 座席を決める。どちらかがシェアのコミットを送っていれば、対戦はまだ始めない。
-   * シェアが開くまで `seed` が決まらないので、局面も時計もまだ無い（6.4 節）。
+   * シェアが開くまで `seed` が決まらないので、局面はまだ無い（6.4 節）。
    */
   private start(first: Ticket, second: Ticket): [Seated, Seated] {
     return this.open(

@@ -17,7 +17,6 @@ import {
   type SeedCommitment,
   type SeedShares,
 } from "./fingerprint.js";
-import { consume, createClock, moveRemainingMs } from "./clock.js";
 import { createMatch, tossWinner, type BotSeats, type Match, type SeatInfo } from "./match.js";
 
 /**
@@ -28,12 +27,17 @@ import { createMatch, tossWinner, type BotSeats, type Match, type SeatInfo } fro
  */
 export const SHARE_REVEAL_DEADLINE_MS = 30_000;
 
+/**
+ * 先攻か後攻かを選ぶのを待つ長さ。過ぎたら、勝った座席を先攻にして対戦を始める。
+ *
+ * 始まる前の対戦は投了で出られないので、繋いだまま選ばない相手を待つ人が、次の対戦を始められなくなる。
+ */
+export const TURN_ORDER_DEADLINE_MS = 10 * 60_000;
+
 export interface Toss {
   /** シェアを混ぜたあとの組。これより後に届いたシェアは混ぜない。 */
   seedCommitment: SeedCommitment;
   winner: Player;
-  /** 勝った座席が選び始めた時刻。選ぶのに使った時間は、その座席の持ち時間から引く。 */
-  atMs: number;
 }
 
 export interface PendingMatch {
@@ -76,15 +80,12 @@ export function allRevealed(pending: PendingMatch): boolean {
   );
 }
 
-/**
- * `seed` を決めてコイントスをする。開かなかった座席のシェアは null のまま混ぜる。
- * 選ぶ期限は、勝った座席の持ち時間が尽きるまでである。
- */
+/** `seed` を決めてコイントスをする。開かなかった座席のシェアは null のまま混ぜる。 */
 export function tossCoin(pending: PendingMatch, nowMs: number): void {
   const seedCommitment = commitSeed(pending.server.nonce, [...pending.shares]);
   const winner = tossWinner(seedCommitment.seed, pending.decks);
-  pending.toss = { seedCommitment, winner, atMs: nowMs };
-  pending.deadlineMs = nowMs + moveRemainingMs(createClock(), 0);
+  pending.toss = { seedCommitment, winner };
+  pending.deadlineMs = nowMs + TURN_ORDER_DEADLINE_MS;
 }
 
 /**
@@ -96,11 +97,10 @@ export function botTurnOrder({ toss, bots }: PendingMatch): Player | null {
   return opponent(toss.winner);
 }
 
-/** 先攻を決めて始める。勝った座席が選ぶのに使った時間は、ふだんの 1 手と同じく持ち時間から引く。 */
 export function startPending(pending: PendingMatch, nowMs: number, firstPlayer: Player): Match {
   const { toss } = pending;
   if (toss === null) throw new Error(`コイントスの前に始めようとした: ${pending.matchId}`);
-  const match = createMatch({
+  return createMatch({
     matchId: pending.matchId,
     decks: pending.decks,
     seats: pending.seats,
@@ -113,6 +113,4 @@ export function startPending(pending: PendingMatch, nowMs: number, firstPlayer: 
     bots: pending.bots,
     firstPlayer,
   });
-  match.clocks[toss.winner] = consume(match.clocks[toss.winner], nowMs - toss.atMs);
-  return match;
 }

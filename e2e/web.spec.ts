@@ -1064,7 +1064,6 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
     localStorage.setItem("poke-seat", JSON.stringify({ seat, seatToken: "差し替えた座席" }));
   }, view.viewer);
   const choices = { setup: null, deckPlacement: null, answerDestinations: null };
-  const clock = { bankMs: [600_000, 600_000], moveRemainingMs: null, toMove: null };
   let version = 1;
   let socket: WebSocketRoute | null = null;
   const sent: Move[] = [];
@@ -1098,7 +1097,7 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
           firstPlayer: view.viewer,
           // 相手がトスに勝って後攻を選んだ、AI との対戦の始まりと同じ形にする。
           toss: view.viewer === 0 ? 1 : 0,
-          clock,
+          toMove: null,
           seedCommit: "0".repeat(64),
           spectatorToken: "差し替えた観戦",
         }),
@@ -1118,7 +1117,7 @@ async function mockSeat(page: Page, view: PlayerView, offered: Move[] | null = n
         ...choices,
         revealedDeck: null,
         attacks: null,
-        clock,
+        toMove: null,
       }),
     );
   };

@@ -92,7 +92,7 @@ export function useWatch(token: string): Watching {
               stateVersion: message.stateVersion,
               ...board(message.view, seatViews),
               shuffled: [],
-              clock: message.clock,
+              toMove: message.toMove,
               moved: null,
               lines: notices,
             });
@@ -118,7 +118,7 @@ export function useWatch(token: string): Watching {
               stateVersion: message.stateVersion,
               ...board(message.view, seatViews),
               shuffled: shuffledDecks(message.events),
-              clock: message.clock,
+              toMove: message.toMove,
               moved,
               lines: notices,
             });

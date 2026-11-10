@@ -12,7 +12,8 @@ import { createApp, SILENCE_LIMIT_MS, type AppSocket } from "../src/app.js";
 import type { AccountStore } from "../src/accounts.js";
 import type { DeckStore } from "../src/decks.js";
 import type { MatchArchive } from "../src/archive.js";
-import { concede } from "../src/match.js";
+import type { Player } from "../src/engine.js";
+import { concede, toMove } from "../src/match.js";
 import { ensureCards, legalDecks, newMatch } from "./helpers.js";
 
 let worker: TestWorker;
@@ -121,8 +122,9 @@ describe("黙ったままの接続", () => {
         this.closedWith = code ?? 1000;
       },
     };
+    // 手を持つ座席で繋ぐ。繋がない座席に手を持たせると、離れたままの対戦として終わる（3.4 節）。
     const connection = app.connect(
-      new URLSearchParams({ seatToken: match.seatTokens[0] }),
+      new URLSearchParams({ seatToken: match.seatTokens[toMove(match) as Player] }),
       socket,
     )!;
     return {
@@ -157,7 +159,7 @@ describe("黙ったままの接続", () => {
     expect(app.idle()).toBe(true);
   });
 
-  it("持ち時間の側で投げても、黙った接続は切る", () => {
+  it("対戦の側で投げても、黙った接続は切る", () => {
     const { app, socket, advance } = arena();
     app.hub.sweepTimeouts = () => {
       throw new Error("壊れた対戦");

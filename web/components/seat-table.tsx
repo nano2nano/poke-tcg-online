@@ -11,7 +11,7 @@ import {
 } from "react";
 import type { Choice, Move, Player } from "../../src/engine.js";
 import { useCardData } from "../lib/cards.js";
-import { kindRank, nameOf, seatClockText } from "../lib/describe.js";
+import { kindRank, nameOf, seatTurnText } from "../lib/describe.js";
 import {
   choicePrompt,
   describeMove,
@@ -219,17 +219,17 @@ export function SeatTable({
   }, [left, onLeave]);
   if (left !== null) return null;
 
-  const { clock, ended } = state;
-  const clockText =
+  const { ended } = state;
+  const turnText =
     ended !== null
       ? "対戦は終わりました"
-      : clock !== null
-        ? seatClockText(clock, state.seat)
+      : view !== null
+        ? seatTurnText(state.toMove, state.seat)
         : // コイントスに勝った座席が先攻か後攻かを選ぶまで、局面は届かない。
           state.toss === null
           ? "相手が席に着くのを待っています"
           : state.toss === state.seat
-            ? "先攻か後攻かを選んでください（選ぶ時間は持ち時間から引かれます）"
+            ? "先攻か後攻かを選んでください"
             : "相手が先攻か後攻かを選んでいます";
 
   return (
@@ -279,8 +279,8 @@ export function SeatTable({
         }}
       >
         <div className="table-status">
-          <div id="clock" className="clock">
-            {clockText}
+          <div id="turn" className="turn">
+            {turnText}
           </div>
           {connection !== null && (
             <output id="connection" className="connection" data-state={connection.state}>

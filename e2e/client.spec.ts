@@ -923,7 +923,7 @@ test("追い越して届いた古い局面では描き直さない", async ({ br
  * 切断からの繋ぎ直し（仕様 3.3 節）。
  *
  * サーバ側の繋ぎ直しは座席トークンだけで済むが、**それを画面が持っていなければ使えない。**
- * 切断中も時計は流れる（3.4 節）ので、戻れないことはそのまま時間切れ負けになる。
+ * 離れたままだと時間切れになる（3.4 節）ので、戻れないことはそのまま負けになる。
  */
 test("読み込み直しても、指していた座席へ戻る", async ({ browser, pageErrors }) => {
   const room = `もどる-${Date.now()}`;
@@ -942,7 +942,7 @@ test("読み込み直しても、指していた座席へ戻る", async ({ brows
   // 盤面が描けたことまで見る。`#table` が出るのは繋ぐ前なので、見えただけでは座席に就けていない。
   await expect(a.locator("#join")).toBeHidden();
   await expect(a.locator("#table")).toBeVisible();
-  await expect(a.locator("#clock")).not.toBeEmpty();
+  await expect(a.locator("#turn")).not.toBeEmpty();
 
   /**
    * **戻った座席から指せることまで見る。** 盤面はサーバが送ってくるので、描けただけなら
@@ -1137,7 +1137,7 @@ function gate(): { wait: Promise<void>; open: () => void } {
 }
 
 /**
- * 切断中も時計は流れる（3.4 節）。読み込み直すまで戻れないと、気付かないうちに時間切れで負ける。
+ * 離れたままだと時間切れになる（3.4 節）。読み込み直すまで戻れないと、気付かないうちに負ける。
  */
 test("対戦中に切れたら、読み込み直さずに同じ座席へ繋ぎ直す", async ({ browser, pageErrors }) => {
   const room = `つなぎなおす-${Date.now()}`;
@@ -2541,7 +2541,7 @@ function crowdedSync(handSize: number): object {
     mulligans: [],
     firstPlayer: 0,
     toss: 0,
-    clock: { bankMs: [600_000, 600_000], moveRemainingMs: 60_000, toMove: 0 },
+    toMove: 0,
     seedCommit: "0".repeat(64),
     spectatorToken: "観戦",
   };
@@ -2578,7 +2578,7 @@ const ZONES = ["hand", "prizes", "active", "bench", "deck", "discard", "lost"];
 /**
  * FHD のモニターでブラウザを最大化し、ブックマークバーまで出したときのビューポート、
  * 同じモニターを 125% に拡大したときのビューポート、縦に置いた FHD のモニター。
- * どれでも、ページをスクロールせずに両者の盤面と手札、指せる手、時計が見えていること。
+ * どれでも、ページをスクロールせずに両者の盤面と手札、指せる手、手番の表示が見えていること。
  */
 for (const viewport of [
   { width: 1920, height: 900 },
@@ -2607,10 +2607,10 @@ for (const viewport of [
     // 対戦ログは右の欄に置き、盤面に重ねない。
     const log = (await page.locator("#event-log").boundingBox()) as Box;
     expect(overlaps(log, board)).toBe(false);
-    // 一覧を開いても、時計、投了、対戦ログを画面の外へ押し出さない。
+    // 一覧を開いても、手番の表示、投了、対戦ログを画面の外へ押し出さない。
     await page.click("#all-moves > summary");
     const screen = { x: 0, y: 0, ...viewport };
-    for (const selector of ["#clock", "#concede-button", "#moves button >> nth=0", "#event-log"]) {
+    for (const selector of ["#turn", "#concede-button", "#moves button >> nth=0", "#event-log"]) {
       await expectInside(page, selector, screen);
     }
 
@@ -2647,12 +2647,12 @@ for (const viewport of [
   });
 }
 
-test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる", async ({ page }) => {
+test("観戦の画面でも、両者の盤面と手番の表示が 1 画面に収まる", async ({ page }) => {
   const viewport = { width: 1920, height: 900 };
   await page.setViewportSize(viewport);
-  const { view, clock } = crowdedSync(20) as {
+  const { view, toMove } = crowdedSync(20) as {
     view: { self: { hand: unknown[] }; opponent: object; stadium: object };
-    clock: object;
+    toMove: number;
   };
   const { hand, ...shown } = view.self;
   await page.routeWebSocket(/\/ws\?/, (ws) =>
@@ -2668,7 +2668,7 @@ test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる",
           { displayName: "長い名前を付けたプレイヤー".repeat(3), rating: 1500 },
           { displayName: "ななし", rating: 1500 },
         ],
-        clock,
+        toMove,
       }),
     ),
   );
@@ -2681,7 +2681,7 @@ test("観戦の画面でも、両者の盤面と時計が 1 画面に収まる",
       await expectInside(page, `${side} [data-zone="${zone}"] .card`, board);
   }
   await expectInside(page, '#watch-stadium [data-zone="stadium"] .card', board);
-  await expectInside(page, "#watch-clock", { x: 0, y: 0, ...viewport });
+  await expectInside(page, "#watch-turn", { x: 0, y: 0, ...viewport });
   const log = (await page.locator("#watch-event-log").boundingBox()) as Box;
   expect(overlaps(log, board)).toBe(false);
   // 長い名前は省いて、手札に重ねない。
@@ -3188,7 +3188,7 @@ test("盤面のカードやポケモンを右クリックすると、そこで�
   // バトル場のポケモンにはワザも出す。外を押すと閉じる。
   await pokemon(active.inPlayId).click({ button: "right" });
   await expect(items).toHaveCount(3);
-  await page.locator("#clock").click();
+  await page.locator("#turn").click();
   await expect(menu).toBeHidden();
 
   // 指せる手の無いカードでは開かない。

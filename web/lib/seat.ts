@@ -20,7 +20,7 @@ export type StoredSeat = Pick<Seated, "seat" | "seatToken"> &
  * 指している座席を置く localStorage のキー。
  *
  * **持たずに閉じると、その対戦には二度と入れない。** 繋ぎ直しに要るのは座席トークンだけ
- * （3.3 節）で、切断中も時計は流れる（3.4 節）ので、戻れないまま時間切れで負ける。
+ * （3.3 節）で、離れたままだと時間切れになる（3.4 節）ので、戻れないまま負ける。
  */
 const SEAT_KEY = "poke-seat";
 
@@ -44,7 +44,7 @@ export function storedSeat(): StoredSeat | null {
     localStorage.removeItem(SEAT_KEY);
     return null;
   }
-  // 座席トークンが無ければ繋ぎようがない。座席の番号は時計と手札の向きに使う。
+  // 座席トークンが無ければ繋ぎようがない。座席の番号は手番の表示と手札の向きに使う。
   const { seatToken, seat } = (seated ?? {}) as Partial<StoredSeat>;
   if (typeof seatToken !== "string" || (seat !== 0 && seat !== 1)) {
     localStorage.removeItem(SEAT_KEY);

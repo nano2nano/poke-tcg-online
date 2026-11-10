@@ -5,12 +5,12 @@ import type { Player } from "../../src/engine.js";
 import {
   answerDestinationsFor,
   attacksFor,
-  clockView,
   deckPlacementFor,
   legalMovesFor,
   revealedDeckFor,
   setupViewFor,
   spectatorViewFor,
+  toMove,
   viewFor,
   type Match,
 } from "../../src/match.js";
@@ -65,7 +65,7 @@ function syncOf(match: Match, seat: Player): SyncMessage {
     mulligans: match.mulligans,
     firstPlayer: match.firstPlayer,
     toss: match.tossWinner,
-    clock: clockView(match, 0),
+    toMove: toMove(match),
     seedCommit: match.seedCommitment.commit,
     spectatorToken: match.spectatorToken,
   };
@@ -84,7 +84,7 @@ function deltaOf(sync: SyncMessage): DeltaMessage {
     answerDestinations: sync.answerDestinations,
     revealedDeck: sync.revealedDeck,
     attacks: sync.attacks,
-    clock: sync.clock,
+    toMove: sync.toMove,
   };
 }
 
@@ -208,7 +208,7 @@ describe("観戦の状態", () => {
     view: spectatorViewFor(match),
     firstPlayer: match.firstPlayer,
     toss: match.tossWinner,
-    clock: clockView(match, 0),
+    toMove: toMove(match),
     seats: [
       { displayName: "あ", rating: 1500 },
       { displayName: "い", rating: null },
@@ -222,7 +222,7 @@ describe("観戦の状態", () => {
       stateVersion: sync.stateVersion + 1,
       events: [],
       view: sync.view,
-      clock: sync.clock,
+      toMove: sync.toMove,
     });
     expect(next.seats).toBe(sync.seats);
     expect(next.firstPlayer).toBe(match.firstPlayer);

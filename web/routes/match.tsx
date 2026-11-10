@@ -10,8 +10,7 @@ export const Route = createFileRoute("/match")({ component: Match });
 /**
  * 座席の卓。ロビーから渡された座席か、覚えている座席へ繋ぐ。
  *
- * **カードの名前の表を待たずに繋ぐ。** 指していないあいだも時計は流れるので（3.4 節）、
- * 取りに行っているあいだに手番が終わる。
+ * **カードの名前の表を待たずに繋ぐ。** 待つと、取りに行っているあいだ席に着けない。
  */
 function Match() {
   const queryClient = useQueryClient();
