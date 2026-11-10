@@ -35,7 +35,7 @@ import {
 import { MatchRegistry } from "./registry.js";
 import { RateLimit, type RateLimitOptions } from "./ratelimit.js";
 
-/** 持ち時間のスイープ。手番側が考えている限り時計は進むので、定期に見る必要がある。 */
+/** 定期処理の間隔。対戦の期限と黙った接続は、誰も何も送らなくても過ぎるので、定期に見る必要がある。 */
 export const TICK_MS = 5_000;
 
 /** 要求の本文と、WebSocket の 1 通の上限。デッキ 60 枚の JSON で足りる大きさに抑える。 */
@@ -46,7 +46,7 @@ const MAX_BODY_BYTES = 64 * 1024;
  *
  * **短くしすぎない。** Chrome は 5 分より長く隠れたタブのタイマーを 1 分に 1 回へ間引くので、
  * 別のタブで相手の手番を待っている人の `ping` は 1 分おきになる。詰まっているだけで、
- * 待てば戻る接続も切ることになる。切られた側は繋ぎ直せる（3.3 節）が、そのあいだも時計は流れる（3.4 節）。
+ * 待てば戻る接続も切ることになる。切られた側は繋ぎ直せる（3.3 節）が、手を持っていれば時間切れまでの時間が減る（3.4 節）。
  * 見つけたいのは戻ってこない接続だけである。
  */
 export const SILENCE_LIMIT_MS = 150_000;
@@ -109,7 +109,7 @@ export interface App {
   fetch(request: Request, origin: string): Promise<Response>;
   /** `/ws` の検索部から、接続を座席か観戦へ就ける。就けなければ接続を閉じて null を返す。 */
   connect(params: URLSearchParams, socket: AppSocket): Connection | null;
-  /** 定期処理。持ち時間の尽きた対戦を終わらせ、黙ったままの接続を切る。 */
+  /** 定期処理。期限を過ぎた対戦を進めるか終わらせ、黙ったままの接続を切る。 */
   tick(): void;
   /** 定期処理で見るものが無い。対戦も、開いた接続も無い。 */
   idle(): boolean;
@@ -260,11 +260,11 @@ export function createApp(options: AppOptions): App {
       return handle;
     },
     tick: () => {
-      // 持ち時間の側で投げても、黙った接続は切る。切らないと接続が残り続け、定期処理も止まらない。
+      // 対戦の側で投げても、黙った接続は切る。切らないと接続が残り続け、定期処理も止まらない。
       try {
         hub.sweepTimeouts();
       } catch (error) {
-        console.error("持ち時間を見られなかった:", error);
+        console.error("対戦の期限を見られなかった:", error);
       }
       /**
        * **閉じるだけでなく、こちらで席から外す。** 線の向こうが消えていると、閉じる合図の

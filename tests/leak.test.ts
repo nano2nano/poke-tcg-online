@@ -11,7 +11,6 @@
 import { describe, expect, it } from "vitest";
 import type { Player, PlayerEvent, Viewer } from "../src/engine.js";
 import {
-  clockView,
   eventsFor,
   legalMovesFor,
   setupViewFor,
@@ -38,7 +37,7 @@ function seatPayload(match: Match, seat: Player): string {
     legalMoves: legalMovesFor(match, seat),
     setup: setupViewFor(match, seat),
     mulligans: match.mulligans,
-    clock: clockView(match, 0),
+    toMove: toMove(match),
   });
 }
 
@@ -98,7 +97,7 @@ describe("座席へ配る値", () => {
 
 /** 観戦者へ実際に出る値。`hub.ts` の `spectatorSyncFor` と同じ組み合わせにする。 */
 function spectatorPayload(match: Match): string {
-  return JSON.stringify({ view: spectatorViewFor(match), clock: clockView(match, 0) });
+  return JSON.stringify({ view: spectatorViewFor(match), toMove: toMove(match) });
 }
 
 describe("観戦者へ配る値", () => {

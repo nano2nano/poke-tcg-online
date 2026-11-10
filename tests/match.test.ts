@@ -2,15 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { legalMoves, type Move, type Player } from "../src/engine.js";
-import { MOVE_ALLOWANCE_MS } from "../src/clock.js";
-import {
-  applyTimeout,
-  concede,
-  engineOutcome,
-  submitMove,
-  toMove,
-  type Match,
-} from "../src/match.js";
+import { abandon, concede, engineOutcome, submitMove, toMove, type Match } from "../src/match.js";
 import { ensureCards, newMatch, playToEnd } from "./helpers.js";
 
 function firstLegal(match: ReturnType<typeof newMatch>): Move {
@@ -106,13 +98,11 @@ describe("決着", () => {
     expect(toMove(match)).toBeNull();
   });
 
-  it("持ち時間が尽きた座席の負けにし、自動の手を指さない", () => {
+  it("席を離れたままの座席の負けにし、自動の手を指さない", () => {
     ensureCards();
     const match = newMatch("finish-3");
     const mover = toMove(match) as Player;
-    expect(applyTimeout(match, MOVE_ALLOWANCE_MS)).toBe(false);
-    const overrun = MOVE_ALLOWANCE_MS + match.clocks[mover].bankMs;
-    expect(applyTimeout(match, overrun)).toBe(true);
+    expect(abandon(match, mover, 5_000)).toBe(true);
     expect(match.result).toEqual({
       kind: "timeout",
       winner: 1 - mover,

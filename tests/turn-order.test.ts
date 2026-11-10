@@ -10,9 +10,8 @@ import { botFromBytes } from "../src/bots.js";
 import { encodePpoWeights, newPpoWeightsFile, opponent, type Player } from "../src/engine.js";
 import { MatchHub, type SeatSocket } from "../src/hub.js";
 import { Lobby, type Seated } from "../src/lobby.js";
-import { BANK_MS, MOVE_ALLOWANCE_MS } from "../src/clock.js";
+import { TURN_ORDER_DEADLINE_MS } from "../src/pending.js";
 import type { ServerMessage } from "../src/protocol.js";
-import { toMove } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
 import { ensureCards, legalDecks } from "./helpers.js";
 import { startStorage } from "./worker.js";
@@ -81,13 +80,9 @@ describe("先攻と後攻を選ぶ", () => {
     expect(sockets[loser].sent.at(-1)?.t).toBe("error");
     expect(arena.registry.live()).toHaveLength(0);
 
-    // 選ぶのに使った時間は、ふだんの 1 手と同じく、1 手の猶予を越えたぶんが勝った座席の持ち時間から減る。
-    arena.clock.now = MOVE_ALLOWANCE_MS + 5_000;
     arena.hub.handle(sockets[winner], seats[winner].seatToken, { t: "turn-order", first: false });
     const [match] = arena.registry.live();
     expect(match?.firstPlayer).toBe(loser);
-    expect(match?.clocks[winner].bankMs).toBe(BANK_MS - 5_000);
-    expect(match?.clocks[loser].bankMs).toBe(BANK_MS);
     for (const socket of sockets) {
       expect(socket.sent.at(-1)).toMatchObject({ t: "sync", firstPlayer: loser, toss: winner });
     }
@@ -98,35 +93,19 @@ describe("先攻と後攻を選ぶ", () => {
     expect(match?.firstPlayer).toBe(loser);
   });
 
-  it("勝った座席の持ち時間が尽きるまで選ばなければ、その座席を先攻にして始める", async () => {
+  it("期限まで選ばなければ、勝った座席を先攻にして始める", async () => {
     const arena = newArena();
     const { sockets, winner } = await seatBoth(arena);
-    const deadline = MOVE_ALLOWANCE_MS + BANK_MS;
 
-    arena.clock.now = deadline - 1;
+    arena.clock.now = TURN_ORDER_DEADLINE_MS - 1;
     arena.hub.sweepTimeouts();
     expect(arena.registry.live()).toHaveLength(0);
 
-    arena.clock.now = deadline;
+    arena.clock.now = TURN_ORDER_DEADLINE_MS;
     arena.hub.sweepTimeouts();
     const [match] = arena.registry.live();
     expect(match?.firstPlayer).toBe(winner);
-    expect(match?.clocks[winner].bankMs).toBe(0);
     expect(sockets[0].sent.at(-1)).toMatchObject({ t: "sync", firstPlayer: winner });
-
-    // 戻らなければ、最初に答える座席の時間切れになる。たいていは持ち時間を使い切った先攻で、1 手の猶予を過ぎたところで切れる。
-    // 後攻が先にバトル場を選ぶ対戦もあり、そのときは後攻の持ち時間も尽きてから切れる。
-    if (match === undefined) throw new Error("対戦が始まっていない");
-    const mover = toMove(match);
-    if (mover === null) throw new Error("答える座席がいない");
-    expect(match.clocks[mover].bankMs).toBe(mover === winner ? 0 : BANK_MS);
-    const expiry = deadline + MOVE_ALLOWANCE_MS + match.clocks[mover].bankMs;
-    arena.clock.now = expiry - 1;
-    arena.hub.sweepTimeouts();
-    expect(match.result).toBeNull();
-    arena.clock.now = expiry;
-    arena.hub.sweepTimeouts();
-    expect(match.result).toMatchObject({ kind: "timeout", winner: opponent(mover) });
   });
 
   // 開き直すたびに対戦を作るので、既定の 5 秒では足りないことがある。

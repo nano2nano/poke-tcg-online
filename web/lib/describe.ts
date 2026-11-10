@@ -14,7 +14,7 @@ import type {
   Zone,
 } from "../../src/engine.js";
 import type { MatchSummary } from "../../src/archive.js";
-import type { ClockView, EndedMessage, RejectReason, SpectatorSeat } from "../../src/protocol.js";
+import type { EndedMessage, RejectReason, SpectatorSeat } from "../../src/protocol.js";
 import type { CardBrief, CardTable } from "./cards.js";
 
 /** 1 人ぶんの場。手札の中身が見えるのは自分の座席だけで、ほかは枚数だけが届く。 */
@@ -122,27 +122,13 @@ export function seatDisplayName(seats: readonly SpectatorSeat[] | null, player: 
   return seats?.[player]?.displayName ?? `座席 ${player}`;
 }
 
-function moveRemainingText(clock: ClockView): string {
-  return clock.moveRemainingMs === null
-    ? ""
-    : `（この手の残り ${Math.round(clock.moveRemainingMs / 1000)} 秒）`;
+/** 決着した局面では、どちらの番でもない。 */
+export function seatTurnText(toMove: Player | null, seat: Player): string {
+  return toMove === null ? "" : toMove === seat ? "あなたの番です" : "相手が考えています";
 }
 
-export function seatClockText(clock: ClockView, seat: Player): string {
-  const mine = Math.round(clock.bankMs[seat] / 1000);
-  const theirs = Math.round(clock.bankMs[seat === 0 ? 1 : 0] / 1000);
-  // 決着した局面では、どちらの番でもない。
-  const turn =
-    clock.toMove === null ? "" : clock.toMove === seat ? "あなたの番です" : "相手が考えています";
-  return `${turn}${moveRemainingText(clock)} ／ 持ち時間 自分 ${mine} 秒・相手 ${theirs} 秒`;
-}
-
-export function watchClockText(clock: ClockView, who: (player: Player) => string): string {
-  const turn = clock.toMove === null ? "" : `${who(clock.toMove)} が考えています`;
-  const banks = ([0, 1] as const)
-    .map((player) => `${who(player)} ${Math.round(clock.bankMs[player] / 1000)} 秒`)
-    .join("・");
-  return `${turn}${moveRemainingText(clock)} ／ 持ち時間 ${banks}`;
+export function watchTurnText(toMove: Player | null, who: (player: Player) => string): string {
+  return toMove === null ? "" : `${who(toMove)} が考えています`;
 }
 
 export function watchEndText(

@@ -53,9 +53,8 @@ import type {
   Zone,
 } from "./engine.js";
 import { randomBytes } from "node:crypto";
-import { consume, createClock, isTimedOut, moveRemainingMs, type Clock } from "./clock.js";
 import { commitSeed, noShares, type SeedCommitment, type SeedShares } from "./fingerprint.js";
-import type { ClockView, RejectReason } from "./protocol.js";
+import type { RejectReason } from "./protocol.js";
 import type { Bot, BotIdentity } from "./bots.js";
 
 export interface SeatInfo {
@@ -182,7 +181,6 @@ export interface Match {
   answerDestinations: (AnswerDestination | null)[] | null;
   /** 1 手の適用ごとに 1 増える。`state.eventSeq` を流用しない（2.2 節）。 */
   version: number;
-  clocks: [Clock, Clock];
   moves: LoggedMove[];
   /** 手番側が今の手を考え始めた時刻。 */
   turnStartedAtMs: number;
@@ -203,7 +201,6 @@ export interface CreateMatchOptions {
   seedShareCommits?: SeedShares;
   /** コイントスに勝った座席が選んだ先攻（2.5 節）。省くと、勝った座席が先攻になる。 */
   firstPlayer?: Player;
-  bankMs?: number;
   bots?: BotSeats;
 }
 
@@ -240,7 +237,6 @@ export function createMatch(options: CreateMatchOptions): Match {
     effectReveals: null,
     answerDestinations: null,
     version: 0,
-    clocks: [createClock(options.bankMs), createClock(options.bankMs)],
     moves: [],
     turnStartedAtMs: options.nowMs,
     result: null,
@@ -290,7 +286,6 @@ export function submitMove(
   const elapsedMs = Math.max(0, nowMs - match.turnStartedAtMs);
   const events = record(match, seat, move, legal, chosen, {
     elapsedMs,
-    chargedMs: elapsedMs,
     nowMs,
     offered: normalizeOffered(offered, legal.length),
     source,
@@ -307,7 +302,6 @@ function record(
   chosen: number,
   timing: {
     elapsedMs: number;
-    chargedMs: number;
     nowMs: number;
     offered: number[] | null;
     source: LoggedMove["source"];
@@ -333,7 +327,6 @@ function record(
     chosen,
     offered: timing.offered,
   });
-  match.clocks[seat] = consume(match.clocks[seat], timing.chargedMs);
   match.turnStartedAtMs = timing.nowMs;
   match.setupSinceMs[seat] = timing.nowMs;
   match.mulligans.push(...revealedHands(applied.events));
@@ -538,7 +531,6 @@ export function submitSetup(
  * 預かった準備の答えを、エンジンの順番が来たぶんだけ流す。
  *
  * 流す時点でも合法手と突き合わせる。合わなければその座席の残りを捨て、1 手ずつ答えてもらう。
- * 時計は、答えを出したときにその座席の時計が流れていたぶんだけ引く。
  */
 function drainSetupPlans(match: Match, nowMs: number): DomainEvent[] {
   const events: DomainEvent[] = [];
@@ -559,11 +551,9 @@ function drainSetupPlans(match: Match, nowMs: number): DomainEvent[] {
     plan.steps.shift();
     const first = !plan.started;
     plan.started = true;
-    const running = Math.max(0, nowMs - match.turnStartedAtMs);
     events.push(
       ...record(match, seat, move, legal, legal.indexOf(move), {
         elapsedMs: first ? plan.elapsedMs : 0,
-        chargedMs: first ? Math.min(running, plan.elapsedMs) : 0,
         nowMs,
         offered: null,
         source: "human",
@@ -580,17 +570,13 @@ export function concede(match: Match, seat: Player, nowMs: number): boolean {
 }
 
 /**
- * 手番側の持ち時間が尽きていれば、その座席の時間切れ負けで終える（3.4 節）。
+ * 手を持ったまま対戦を放置した座席の負けで終える（3.4 節）。放置かどうかを見るのは配信層である。
  *
  * 自動の手は指さない。その人が選んでいない手を、その人の座席の名前でログへ混ぜないためである。
- * 切断中も時計は流れるので、この判定に接続の生死は要らない。
  */
-export function applyTimeout(match: Match, nowMs: number): boolean {
-  const mover = toMove(match);
-  if (mover === null) return false;
-  const elapsedMs = Math.max(0, nowMs - match.turnStartedAtMs);
-  if (!isTimedOut(match.clocks[mover], elapsedMs)) return false;
-  finish(match, { kind: "timeout", winner: opponent(mover), timedOut: mover }, nowMs);
+export function abandon(match: Match, seat: Player, nowMs: number): boolean {
+  if (match.result !== null) return false;
+  finish(match, { kind: "timeout", winner: opponent(seat), timedOut: seat }, nowMs);
   return true;
 }
 
@@ -1251,16 +1237,6 @@ function nextEffectReveals(
     else result.pinned.push(...event.cards);
   }
   return result;
-}
-
-export function clockView(match: Match, nowMs: number): ClockView {
-  const mover = toMove(match);
-  const elapsedMs = Math.max(0, nowMs - match.turnStartedAtMs);
-  return {
-    bankMs: [match.clocks[0].bankMs, match.clocks[1].bankMs],
-    moveRemainingMs: mover === null ? null : moveRemainingMs(match.clocks[mover], elapsedMs),
-    toMove: mover,
-  };
 }
 
 function finish(match: Match, result: MatchResult, nowMs: number): void {

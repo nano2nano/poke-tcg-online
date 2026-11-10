@@ -240,7 +240,7 @@ export function Lobby({
     const outcome = await postJson<JoinOutcome>(path, request);
     const live = liveSeatOf(outcome);
     if (live !== null) {
-      // ページを移っていても、続いている対戦の卓へ移る。その対戦の時計は流れている。
+      // ページを移っていても、続いている対戦の卓へ移る。離れたままだと時間切れになる。
       onSeated(withShare(live, shareFor(live, sentShares.current)));
       return null;
     }

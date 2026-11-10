@@ -2,9 +2,10 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { D1Database } from "@cloudflare/workers-types/index.ts";
-import { MatchHub, type SeatSocket } from "../src/hub.js";
+import { ABSENCE_LIMIT_MS, MatchHub, type SeatSocket } from "../src/hub.js";
 import { Lobby, MATCH_LIVE, type JoinOutcome, type JoinRequest } from "../src/lobby.js";
 import { AccountStore } from "../src/accounts.js";
+import { concede } from "../src/match.js";
 import { MatchRegistry } from "../src/registry.js";
 import { SEAT_NOT_FOUND, SEAT_REPLACED, type ServerMessage } from "../src/protocol.js";
 import { ensureCards, legalDecks, startTossed } from "./helpers.js";
@@ -251,9 +252,9 @@ describe("席の引き換え", () => {
     if (!first.ok) throw new Error("入れていない");
     const seat = seatOf(lobby, first.ticket);
 
-    // 時間切れで終わらせる。持ち時間は 1 手ぶんとバンクで 16 分あるので、そこを越える。
-    const [ended] = registry.sweepTimeouts(60 * 60_000);
-    if (ended === undefined) throw new Error("対戦が終わっていない");
+    const [ended] = registry.live();
+    if (ended === undefined) throw new Error("対戦が始まっていない");
+    concede(ended, 0, 0);
     registry.retire(ended);
     expect(registry.bySeatToken(seat.seatToken)).toBeUndefined();
 
@@ -334,7 +335,10 @@ describe("席の引き換え", () => {
     // 終わった席を 2 つ作る。古いほう（さき）から捨てられる。
     const older = await seat("さき");
     const newer = await seat("あと");
-    for (const ended of registry.sweepTimeouts(60 * 60_000)) registry.retire(ended);
+    for (const ended of registry.live()) {
+      concede(ended, 0, 0);
+      registry.retire(ended);
+    }
     const started = lobby.claim(older);
     if (started.kind !== "finished") throw new Error("終わっていない");
     const olderMatchId = started.matchId;
@@ -468,7 +472,7 @@ describe("続いている対戦", () => {
     };
     await join(arena, await player(arena, "a", "おちる"));
     await expect(join(arena, await player(arena, "b", "おちる"))).rejects.toThrow("トスで落ちる");
-    expect(arena.registry.overdue(Infinity)).toEqual([]);
+    expect(arena.registry.liveCount()).toBe(0);
   });
 
   it("デッキが通らなくても、表示名を書き換えずに席を返す", async () => {
@@ -503,7 +507,7 @@ describe("続いている対戦", () => {
 });
 
 /**
- * 決着の後始末は、持ち時間のスイープと WebSocket の処理から呼ばれる。そこから例外が漏れると
+ * 決着の後始末は、定期処理と WebSocket の処理から呼ばれる。そこから例外が漏れると
  * 走っているもの全体が止まり、**同じスイープで終わらせるはずだった別の対戦まで残る。**
  * 保存先へ書けないことは本番で普通に起こる（D1 や R2 が一時的に応えない、など）。
  */
@@ -540,8 +544,8 @@ describe("決着の後始末で落ちない", () => {
     let seen = 0;
     const hub = new MatchHub({
       registry,
-      // 持ち時間（60 秒 + 15 分）を越えるところまで進めて、2 局とも時間切れにする。
-      now: () => 60 * 60 * 1000,
+      // どちらの座席も繋がないまま期限まで進めて、2 局とも時間切れにする。
+      now: () => ABSENCE_LIMIT_MS,
       onFinish: () => {
         seen++;
         if (seen === 1) throw new Error("ストアへ書けない");

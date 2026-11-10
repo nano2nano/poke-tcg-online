@@ -7,7 +7,7 @@ import {
   describeSummary,
   noticesToShow,
   rejectText,
-  seatClockText,
+  seatTurnText,
   seatEndText,
 } from "./describe.js";
 
@@ -395,14 +395,9 @@ describe("seatEndText", () => {
   });
 });
 
-describe("seatClockText", () => {
+describe("seatTurnText", () => {
   it("決着した局面では、相手が考えているとは出さない", () => {
-    const clock = {
-      bankMs: [60_000, 60_000] as [number, number],
-      moveRemainingMs: null,
-      toMove: null,
-    };
-    expect(seatClockText(clock, 0)).not.toContain("相手が考えています");
+    expect(seatTurnText(null, 0)).toBe("");
   });
 });
 

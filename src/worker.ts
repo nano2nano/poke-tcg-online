@@ -99,7 +99,7 @@ export class Server {
     // Cloudflare が付ける接続元のアドレス。送り手には書き換えられない。
     const origin = request.headers.get("cf-connecting-ip") ?? "unknown";
     const response = await this.app.fetch(request, origin);
-    // 対戦を始める要求のあとに、時計を回し始める。
+    // 対戦を始める要求のあとに、定期処理を回し始める。
     this.keepTicking();
     return response;
   }

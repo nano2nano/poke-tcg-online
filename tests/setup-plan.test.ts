@@ -113,20 +113,6 @@ describe("対戦準備をまとめて出す", () => {
     expect(result.applied).toBe(match.moves.length);
   });
 
-  it("番が来ていない座席の時計は、先に出した答えのぶんを引かない", () => {
-    const match = matchReadyForPlans("plan-clock");
-    const first = toMove(match) as Player;
-    const second = (1 - first) as Player;
-    const bank = match.clocks[second].bankMs;
-    const plan = planOf(match, second);
-    // 1 手の猶予を大きく越えてから出しても、そのあいだ後攻の時計は流れていない。
-    submitSetup(match, second, plan.active, plan.bench, 10 * 60_000);
-    const own = planOf(match, first);
-    submitSetup(match, first, own.active, own.bench, 10 * 60_000);
-    expect(match.clocks[second].bankMs).toBe(bank);
-    expect(match.clocks[first].bankMs).toBeLessThan(bank);
-  });
-
   it("手番側が 1 手ずつ答えても、預かった相手の答えはその順番で流れる", () => {
     const match = matchReadyForPlans("plan-step");
     const first = toMove(match) as Player;

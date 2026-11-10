@@ -41,16 +41,6 @@ export const SEAT_REPLACED = "seat-replaced";
 /** 手を受理しなかった理由（2.2 節の検査 1〜3 に対応する）。 */
 export type RejectReason = "not-your-turn" | "stale-version" | "illegal-move" | "match-over";
 
-/** 座席から見た持ち時間。残りはミリ秒。 */
-export interface ClockView {
-  /** 座席ごとのバンクの残り。 */
-  bankMs: [number, number];
-  /** 手番側が今の手に使ってよい残り時間。手番が無ければ null。 */
-  moveRemainingMs: number | null;
-  /** 手番側の座席。決着後は null。 */
-  toMove: Player | null;
-}
-
 /**
  * 座席から届く 1 通（3.2 節）。**形を見るのはここだけである。**
  *
@@ -133,7 +123,8 @@ export interface SyncMessage {
   firstPlayer: Player;
   /** コイントスに勝った座席（2.5 節）。トスを見る前に対戦が始まっていた座席にも、だれが選んだかを見せる。 */
   toss: Player;
-  clock: ClockView;
+  /** 手を持つ座席。決着後は null。 */
+  toMove: Player | null;
   /** シャッフルの公正さのコミット（6.4 節）。対戦中に seed そのものは渡さない。 */
   seedCommit: string;
   /** 渡すかどうかは座席の側が決める（3.6 節）。 */
@@ -154,7 +145,8 @@ export interface DeltaMessage {
   attacks: AttackView[] | null;
   /** 対戦準備のあいだだけ載せる。無ければ、前に届いたものから変わっていない。 */
   mulligans?: MulliganReveal[];
-  clock: ClockView;
+  /** 手を持つ座席。決着後は null。 */
+  toMove: Player | null;
 }
 
 /** 対戦が終わった。ここで初めて seed を明かす（1 節の S-3）。 */
@@ -183,7 +175,8 @@ export interface SpectatorSyncMessage {
   firstPlayer: Player;
   /** コイントスに勝った座席（2.5 節）。 */
   toss: Player;
-  clock: ClockView;
+  /** 手を持つ座席。決着後は null。 */
+  toMove: Player | null;
   /**
    * 公開 id は渡さない。観戦トークンは座席の外へ配られる値なので、それを持つだけで
    * 対局ログと人を結び付けられる形にしない。
@@ -200,7 +193,8 @@ export interface SpectatorDeltaMessage {
   stateVersion: number;
   events: PlayerEvent[];
   view: SpectatorView;
-  clock: ClockView;
+  /** 手を持つ座席。決着後は null。 */
+  toMove: Player | null;
   /** 両座席とも AI の対戦でだけ載る（7.4 節）。 */
   seatViews?: [PlayerView, PlayerView];
   /** 両座席とも AI の対戦でだけ載る、いま指された手と指した座席（7.4 節）。 */
