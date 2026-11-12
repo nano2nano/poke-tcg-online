@@ -26,7 +26,7 @@ import {
   disguised,
   movedTo,
   ownsDestination,
-  revealedDeckFor,
+  revealedCardsFor,
   submitMove,
   toMove,
   type AnswerDestination,
@@ -241,6 +241,34 @@ function topCardsToHand(): Played {
         toHandAnswers(played).length > 0,
     );
   if (found == null) throw new Error("上から何枚かを見せて手札に加える効果が見つからない");
+  return found;
+}
+
+/** 相手の手札を見て、そこから選ぶトレーナーズを使ったところ。 */
+function pickingFromRivalHand(): Played {
+  ensureCards();
+  const found = [...loadGeneratedCards()]
+    .filter(
+      (def) =>
+        def.kind === "trainer" &&
+        (def.trainerKind === "supporter" || def.trainerKind === "item") &&
+        classifyDefId(def.defId) === "implemented",
+    )
+    .map((def) => def.defId)
+    .sort()
+    .map((trainer) => afterPlaying(trainer))
+    .find((played) => {
+      const prompt = played?.match.state.choices.at(-1)?.prompt;
+      return (
+        played != null &&
+        prompt?.kind === "selectFromHiddenZone" &&
+        prompt.zone.kind === "hand" &&
+        prompt.zone.player !== played.seat &&
+        played.match.effectReveals?.rivalHand.length ===
+          played.match.state.players[prompt.zone.player].hand.length
+      );
+    });
+  if (found == null) throw new Error("相手の手札を見て選ぶ効果が見つからない");
   return found;
 }
 
@@ -487,8 +515,8 @@ describe("山札から選ぶあいだに見せる山札", () => {
     let searched = 0;
     let otherwise = 0;
     walk(played, ({ match, seat }) => {
-      expect(revealedDeckFor(match, (1 - seat) as Player)).toBeNull();
-      const shown = revealedDeckFor(match, seat);
+      expect(revealedCardsFor(match, (1 - seat) as Player)).toBeNull();
+      const shown = revealedCardsFor(match, seat);
       if (!searchingDeck(match, seat)) {
         // ポケモンにつける先を選ぶ段などでは出さない。
         expect(shown).toBeNull();
@@ -501,7 +529,7 @@ describe("山札から選ぶあいだに見せる山札", () => {
     expect(searched).toBeGreaterThanOrEqual(1);
     expect(otherwise).toBeGreaterThanOrEqual(1);
     // 効果を終えたら出さない。
-    expect(revealedDeckFor(played.match, played.seat)).toBeNull();
+    expect(revealedCardsFor(played.match, played.seat)).toBeNull();
   });
 
   it("見せたあとに山札を出たカードは除き、あとから入ったカードは足さない", () => {
@@ -513,7 +541,7 @@ describe("山札から選ぶあいだに見せる山札", () => {
     const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
     players[seat] = { ...side, deck: [...rest, entered], hand, discard: [...side.discard, left] };
     match.state = { ...match.state, players };
-    expect([...(revealedDeckFor(match, seat) ?? [])].sort()).toEqual(defIdsOf(rest));
+    expect([...(revealedCardsFor(match, seat) ?? [])].sort()).toEqual(defIdsOf(rest));
   });
 
   it("山札の上から何枚かを見せた効果では、見たカードのうち今も山札にあるものを渡す", () => {
@@ -521,9 +549,9 @@ describe("山札から選ぶあいだに見せる山札", () => {
     let searched = 0;
     walk(played, ({ match, seat }) => {
       if (!searchingDeck(match, seat)) return;
-      expect(revealedDeckFor(match, (1 - seat) as Player)).toBeNull();
+      expect(revealedCardsFor(match, (1 - seat) as Player)).toBeNull();
       const deck = match.state.players[seat].deck;
-      const shown = revealedDeckFor(match, seat) ?? [];
+      const shown = revealedCardsFor(match, seat) ?? [];
       expect(shown.length).toBeGreaterThan(0);
       expect(shown.length).toBeLessThan(deck.length);
       // 選ばなかったカードは、見た順のまま山札の上に残っている。
@@ -544,7 +572,24 @@ describe("山札から選ぶあいだに見せる山札", () => {
       discard: [...side.discard, ...side.deck.filter((card) => shown.has(card.instanceId))],
     };
     match.state = { ...match.state, players };
-    expect(revealedDeckFor(match, seat)).toBeNull();
+    expect(revealedCardsFor(match, seat)).toBeNull();
+  });
+
+  it("相手の手札を見て選ぶ効果では、選ぶ座席にだけ、見た手札のうち今も手札にあるものを渡す", () => {
+    const { match, seat } = pickingFromRivalHand();
+    const rival = (1 - seat) as Player;
+    const side = match.state.players[rival];
+    expect(side.hand.length).toBeGreaterThan(0);
+    expect([...(revealedCardsFor(match, seat) ?? [])].sort()).toEqual(defIdsOf(side.hand));
+    expect(revealedCardsFor(match, rival)).toBeNull();
+
+    const [left, ...rest] = side.hand;
+    const [entered, ...deck] = side.deck;
+    if (left === undefined || entered === undefined) throw new Error("手札か山札が空");
+    const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
+    players[rival] = { ...side, hand: [...rest, entered], deck, discard: [...side.discard, left] };
+    match.state = { ...match.state, players };
+    expect([...(revealedCardsFor(match, seat) ?? [])].sort()).toEqual(defIdsOf(rest));
   });
 });
 

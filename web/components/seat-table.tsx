@@ -880,8 +880,9 @@ function pokemonMoves(buttons: readonly ListedMove[]): Map<string, Move> {
  * 効果の選択を盤面の上に出す。カードを選ぶ選択では、候補を大きく並べ、押して選ばせる。
  * 使うかどうかや、どの効果にするかのようなカードを選ばない選択は、答えのボタンだけを並べる。
  *
- * 山札を見て選ぶ効果では、見ている山札をすべて並べ、選べないカードは暗くする。エンジンの候補は条件に
- * 合うカードだけなので、候補だけでは山札に何が残っていて何がサイドに落ちたかを読めない。
+ * 自分の山札や相手の手札を見て選ぶ効果では、見ているカードをすべて並べ、選べないカードは暗くする。
+ * エンジンの候補は条件に合うカードだけなので、候補だけでは山札に何が残っていて何がサイドに落ちたかも、
+ * 相手の手札に何があるかも読めない。
  * 盤面のカードは押すと拡大するが、ここの候補は押すと選ぶ。印刷の文字は、マウスを載せるか長押しで読む。
  */
 function ChoiceSheet({
@@ -902,8 +903,9 @@ function ChoiceSheet({
   // 選ぶカードを隠して盤面を見られるようにする。次の選択に移ったら、部品ごと作り直して開く。
   const [folded, setFolded] = useState(false);
   const table = context.cards;
-  const { revealedDeck, deckPlacement: placement } = state;
-  const source = state.view?.choices.at(-1)?.context?.source ?? null;
+  const { revealedCards, deckPlacement: placement } = state;
+  const choice = state.view?.choices.at(-1);
+  const source = choice?.context?.source ?? null;
   const prompt = placement !== null ? placementPrompt(placement, table) : choicePrompt(context);
   const picks: { defId: string; button: ListedMove }[] = [];
   const others: ListedMove[] = [];
@@ -912,12 +914,12 @@ function ChoiceSheet({
     if (defId === null) others.push(button);
     else picks.push({ defId, button });
   }
-  // 山札を並べるときは、同じカードを 1 枚にまとめて枚数を添え、種類と名前で並べ直す。サーバの並びは見せた順で、
-  // 探すときの手がかりにならない。
+  // 見ているカードを並べるときは、同じカードを 1 枚にまとめて枚数を添え、種類と名前で並べ直す。
+  // サーバの並びは見せた順で、探すときの手がかりにならない。
   const counts = new Map<string, number>();
-  for (const defId of revealedDeck ?? []) counts.set(defId, (counts.get(defId) ?? 0) + 1);
+  for (const defId of revealedCards ?? []) counts.set(defId, (counts.get(defId) ?? 0) + 1);
   const tiles: { defId: string; button: ListedMove | undefined }[] =
-    revealedDeck === null
+    revealedCards === null
       ? picks
       : [
           ...[...counts.keys()]
@@ -932,14 +934,17 @@ function ChoiceSheet({
             })),
           ...picks.filter(({ defId }) => !counts.has(defId)),
         ];
-  // サーバが送るのは見たカードだけなので、並べた枚数が山札の枚数より少ないことがある。
-  const deckCount = state.view?.self.deckCount;
+  const rivalHand =
+    choice?.prompt?.kind === "selectFromHiddenZone" && choice.prompt.zone.kind === "hand";
+  const zoneName = rivalHand ? "相手の手札" : "山札";
+  // サーバが送るのは見たカードだけなので、並べた枚数がそのゾーンの枚数より少ないことがある。
+  const zoneCount = rivalHand ? state.view?.opponent.handCount : state.view?.self.deckCount;
   const heading =
-    revealedDeck === null
+    revealedCards === null
       ? null
-      : deckCount === undefined || deckCount === revealedDeck.length
-        ? `山札 ${revealedDeck.length} 枚`
-        : `山札 ${deckCount} 枚のうち、見た ${revealedDeck.length} 枚`;
+      : zoneCount === undefined || zoneCount === revealedCards.length
+        ? `${zoneName} ${revealedCards.length} 枚`
+        : `${zoneName} ${zoneCount} 枚のうち、見た ${revealedCards.length} 枚`;
 
   return (
     <section id="choice-sheet" className="choice-sheet" aria-label="効果の選択">
@@ -965,9 +970,9 @@ function ChoiceSheet({
           ) && <p className="choice-empty">選べるものはありません。</p>}
         {!folded && tiles.length > 0 && (
           <div
-            id={revealedDeck === null ? undefined : "revealed-deck"}
+            id={revealedCards === null ? undefined : "revealed-cards"}
             className="choice-cards"
-            data-count={revealedDeck?.length}
+            data-count={revealedCards?.length}
           >
             {tiles.map(({ defId, button }) => {
               const count = counts.get(defId);
@@ -977,7 +982,7 @@ function ChoiceSheet({
                   <CardFace
                     defId={defId}
                     pickable={false}
-                    zoom={{ title: "山札", defIds: [defId] }}
+                    zoom={{ title: zoneName, defIds: [defId] }}
                   />
                   {shown}
                 </div>
