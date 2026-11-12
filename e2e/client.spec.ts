@@ -2710,8 +2710,15 @@ interface CrowdedSync {
   legalMoves: object[];
 }
 
-/** 局面を 1 通の `sync` で直に送る画面を開く。返す配列に、画面が送った手が溜まる。 */
-async function openWith(page: Page, sync: object): Promise<{ move: object; offered?: number[] }[]> {
+/**
+ * 局面を 1 通の `sync` で直に送る画面を開く。返す配列に、画面が送った手が溜まる。
+ * `reply` があれば、手が届くたびに、それが返したメッセージをサーバの返事として送る。
+ */
+async function openWith(
+  page: Page,
+  sync: object,
+  reply?: (move: object) => object,
+): Promise<{ move: object; offered?: number[] }[]> {
   const sent: { move: object; offered?: number[] }[] = [];
   await page.goto("./");
   await page.evaluate(() =>
@@ -2720,7 +2727,9 @@ async function openWith(page: Page, sync: object): Promise<{ move: object; offer
   await page.routeWebSocket(/\/ws\?/, (ws) => {
     ws.onMessage((raw) => {
       const message = JSON.parse(String(raw));
-      if (message.t === "move") sent.push(message);
+      if (message.t !== "move") return;
+      sent.push(message);
+      if (reply !== undefined) ws.send(JSON.stringify(reply(message.move)));
     });
     ws.send(JSON.stringify(sync));
   });
@@ -3185,6 +3194,102 @@ test("カードを選ばない選択も、盤面の上の選ぶ画面に答え�
   await expect.poll(() => sent.length).toBe(1);
   expect(sent[0]!.move).toEqual(sync.legalMoves[0]);
 });
+
+for (const [title, picked, cut, answers] of [
+  ["2 個を押すと、その数になるまで続けて答える", 2, null, ["1 個 accept", "2 個 decline"]],
+  ["3 個を押すと、その数になるまで続けて答える", 3, null, ["1 個 accept", "2 個 accept"]],
+  ["答えの途中で選択が無くなったら、続きを答えない", 3, "gap", ["1 個 accept", "EndTurn"]],
+  ["答えの途中で別の効果の選択に替わったら、続きを答えない", 3, "other", ["1 個 accept"]],
+] as const) {
+  test(`個数を選ぶ選択は、選べる数を並べ、${title}`, async ({ page }) => {
+    const sync = crowdedSync(10) as CrowdedSync & {
+      view: { opponent: { active: { inPlayId: string } } };
+    };
+    const { self, opponent } = sync.view;
+    // エンジンは 1 個目を選んだことにして、2 個目から「もう 1 個選ぶか」を確かめる。
+    const asking = (chosen: number, step = "数を選ぶ") => ({
+      choices: [
+        {
+          choiceId: `${chosen} 個`,
+          owner: 0,
+          kind: "card-effect",
+          optional: true,
+          prompt: { kind: "confirm", count: 1 },
+          context: {
+            source: { defId: self.hand[0]!.defId, label: "効果の元", instanceId: null },
+            sourceRole: "ability",
+            step,
+            min: 1,
+            max: 3,
+            remaining: 3 - chosen,
+            picked: null,
+            pickedInPlay: [
+              { target: self.active.inPlayId, role: "from", count: 1 },
+              { target: opponent.active.inPlayId, role: "to", count: 1 },
+            ],
+            destination: null,
+            revealsResult: null,
+            window: null,
+          },
+        },
+      ],
+      legalMoves: ["accept", "decline"].map((kind) => ({
+        type: "AnswerChoice",
+        player: 0,
+        choiceId: `${chosen} 個`,
+        answer: { kind },
+      })),
+    });
+    let chosen = 1;
+    let version = 1;
+    Object.assign(sync.view, { choices: asking(chosen).choices });
+    sync.legalMoves = asking(chosen).legalMoves;
+    const delta = (next: { choices: object[]; legalMoves: object[] }) => ({
+      ...sync,
+      t: "delta",
+      stateVersion: ++version,
+      events: [],
+      view: { ...sync.view, choices: next.choices },
+      legalMoves: next.legalMoves,
+    });
+    const sent = await openWith(page, sync, (move) => {
+      const kind = (move as { answer?: { kind: string } }).answer?.kind;
+      chosen += 1;
+      // 選び終えたら、続けて別の効果が同じ形の選択を積んだことにする。
+      if (kind === "decline" || chosen === 3) chosen = 1;
+      if (cut === null || version > 1) return delta(asking(chosen));
+      if (cut === "other") return delta(asking((chosen = 1), "別の効果"));
+      // 選択の無い局面を挟む。次に手を指したら、同じ効果がまた選択を積んだことにする。
+      chosen = 0;
+      return delta({ choices: [], legalMoves: [{ type: "EndTurn", player: 0 }] });
+    });
+    const sheet = page.locator("#choice-sheet");
+    await expect(sheet.locator("#moves button")).toHaveCount(3);
+    // のせ替えの元と先は、数を選ぶあいだ囲んでおく。
+    await expect(page.locator("#table .pokemon.aimed")).toHaveCount(2);
+    await sheet
+      .locator("#moves button")
+      .nth(picked - 1)
+      .click();
+    if (cut === "gap") await page.click("#end-turn");
+    // 次に届いた選択には、押すまで答えない。押した 1 個は、選び終える答えだけで済む。
+    const arrived = (count: number) =>
+      expect(page.locator("#table")).toHaveAttribute("data-state-version", String(count));
+    await arrived(answers.length + 1);
+    await sheet.locator("#moves button").first().click();
+    await arrived(answers.length + 2);
+    expect(
+      sent.map(({ move }) => {
+        const { type, choiceId, answer } = move as {
+          type: string;
+          choiceId?: string;
+          answer?: { kind: string };
+        };
+        return answer === undefined ? type : `${choiceId} ${answer.kind}`;
+      }),
+    ).toEqual([...answers, "1 個 decline"]);
+  });
+}
 
 test("盤面のカードやポケモンを右クリックすると、そこでできる手をその場に出して選べる", async ({
   page,

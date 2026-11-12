@@ -5,7 +5,7 @@ import { attacksFor, toMove, viewFor } from "../../src/match.js";
 import { ensureCards, finishSetup, newMatch } from "../../tests/helpers.js";
 import type { CardTable } from "./cards.js";
 import { readerView } from "./describe.js";
-import { choicePrompt, describeMove, replayStatusText } from "./describe-move.js";
+import { choicePrompt, countChoice, describeMove, replayStatusText } from "./describe-move.js";
 
 const answering = (answer: ChoiceAnswer) =>
   describeMove(
@@ -180,8 +180,57 @@ describe("choicePrompt", () => {
   });
 
   it("カードやポケモンを選ぶのでなければ、枚数を書かない", () => {
-    const confirm = { ...shape, picked: null };
+    const confirm = { ...shape, max: null, remaining: null, picked: null };
     expect(promptFor({ kind: "confirm", count: 1 }, confirm)).toBe("効果の元：選んでください。");
+  });
+
+  it("上限と残りの数がある確認は、個数を選ぶ選択として、上限を書く", () => {
+    const counting = { ...shape, min: 0, max: 9, remaining: 9, picked: null };
+    expect(promptFor({ kind: "confirm", count: 1 }, counting)).toBe(
+      "効果の元：いくつにするかを選んでください（9 個まで）。",
+    );
+  });
+
+  it("のせ替える個数を選ぶ選択は、先に選んだ元と先を書き、答えは増やしたあとの数で出す", () => {
+    ensureCards();
+    const match = newMatch("describe-move-count");
+    finishSetup(match);
+    const view = viewFor(match, 0);
+    const from = view.self.active!.inPlayId;
+    const to = (view.opponent.active as { inPlayId: string }).inPlayId;
+    const choice = {
+      choiceId: "c1",
+      owner: 0,
+      kind: "card-effect",
+      optional: true,
+      prompt: { kind: "confirm", count: 1 },
+      context: {
+        ...shape,
+        min: 1,
+        max: 3,
+        remaining: 2,
+        picked: null,
+        pickedInPlay: [
+          { target: from, role: "from", count: 1 },
+          { target: to, role: "to", count: 1 },
+        ],
+      },
+    };
+    const cards = cardIndex() as unknown as CardTable;
+    const context = { view: { ...view, choices: [choice] } as PlayerView, cards };
+    const name = (side: "self" | "opponent") =>
+      cards[(view[side].active as { stack: { defId: string }[] }).stack.at(-1)!.defId]!.name;
+    expect(countChoice(context.view)).toMatchObject({ chosen: 1, max: 3, from, to });
+    expect(choicePrompt(context)).toBe(
+      `効果の元：自分のバトル場の${name("self")} から 相手のバトル場の${name("opponent")} へのせ替えるダメカンの数を選んでください（3 個まで）。`,
+    );
+    const answer = (kind: "accept" | "decline") =>
+      describeMove({ type: "AnswerChoice", player: 0, choiceId: "c1", answer: { kind } }, context);
+    expect(answer("accept")).toBe("2 個に増やす");
+    expect(answer("decline")).toBe("1 個で決める");
+    // リプレイでは、相手の選択の中身も見える。
+    choice.owner = 1;
+    expect(answer("accept")).toBe("2 個に増やす");
   });
 
   it("選ぶのをやめる答えは、先に選んだカードがあれば「選び終える」、無ければ「選ばない」", () => {

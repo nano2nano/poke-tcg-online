@@ -14,6 +14,7 @@ import { useCardData } from "../lib/cards.js";
 import { kindRank, nameOf, seatTurnText } from "../lib/describe.js";
 import {
   choicePrompt,
+  countChoice,
   describeMove,
   foldMoves,
   handCardName,
@@ -21,6 +22,7 @@ import {
   moveTargets,
   placementPrompt,
   setupPrompt,
+  type CountChoice,
   type MoveContext,
 } from "../lib/describe-move.js";
 import { NO_DROPS, planDrops } from "../lib/card-drops.js";
@@ -89,6 +91,13 @@ export function SeatTable({
   const [menu, setMenu] = useState<Menu | null>(null);
   // にげる先やつける先を、盤面のポケモンを押して選んでいるところ。一覧が変わったらやめる。
   const [picking, setPicking] = useState<TargetPick | null>(null);
+  // 個数を選ぶ選択で選んだ数。エンジンは 1 個ずつ確かめるので、その数になるまで続けて答える。
+  // 別の効果が同じ形の選択を積んでも、そちらには答えない。
+  const [goal, setGoal] = useState<ListedMove["count"]>();
+  const toGoal = listed.buttons.find(
+    ({ count }) =>
+      goal !== undefined && count?.value === goal.value && count.effect === goal.effect,
+  );
   const closeMenu = useCallback(() => setMenu(null), []);
   // 先を選び始めたら、落とした先で絞った一覧は戻す。記録には、右の欄に出した手をすべて見せたと残す。
   const startPick = useCallback((pick: TargetPick) => {
@@ -137,21 +146,32 @@ export function SeatTable({
     const aiming = (key: string | null) =>
       key !== null && (key === aim.hovered || key === aim.focused);
     const targets = listed.buttons
-      .filter(({ key, move }) => aiming(key) || aiming(pickKey(move)))
+      // 個数を選ぶあいだは、ボタンに載せなくても元と先を囲む。案内の文だけでは、盤面のどのポケモンかを目で探すことになる。
+      .filter(({ key, move, count }) => count !== undefined || aiming(key) || aiming(pickKey(move)))
       .flatMap((button) => button.targets);
     // 空の集合を毎回作ると、盤面の memo が効かず、狙いの無いボタンに載せるたびに盤面を描き直す。
     return targets.length === 0 ? NOTHING_AIMED : new Set(targets);
   }, [listed, aim]);
   const onAim = (kind: keyof Aim, key: string | null) =>
     setAim((current) => (current[kind] === key ? current : { ...current, [kind]: key }));
-  const onPlay = (move: Move) => {
-    if (!seating.awaiting) playMove(seating, listed.offered, move);
+  const onPlay = (move: Move, count?: ListedMove["count"]) => {
+    if (seating.awaiting) return;
+    // 最後の答えを送ったら、選んだ数を忘れる。残すと、続けて届いた別の個数の選択にも答えてしまう。
+    if (count !== undefined) setGoal(count.more ? count : undefined);
+    playMove(seating, listed.offered, move);
   };
   // 描き直すたびに作り直す `onPlay` を渡すと、盤面のポケモンを全部描き直す。いまの値はここから読む。
   const latestPlay = useRef(onPlay);
   useLayoutEffect(() => {
     latestPlay.current = onPlay;
   });
+  // 答えの途中で個数の選択が無くなったら、選んだ数を忘れる。残すと、同じ効果があとで積んだ選択に答えてしまう。
+  // 返事を待つあいだは、まだ前の局面を見ている。
+  if (goal !== undefined && toGoal === undefined && !seating.awaiting) setGoal(undefined);
+  useEffect(() => {
+    // 返事を待つあいだは `onPlay` が送らないので、押した直後に同じ答えを重ねて送ることはない。
+    if (toGoal !== undefined && !disabled) latestPlay.current(toGoal.move, toGoal.count);
+  }, [toGoal, disabled]);
   // カードを大きく出したら、そのカードでできる手も並べる。右クリックのメニューと同じ手を出す。
   const showZoomMoves = use(ZoomMovesContext);
   useEffect(() => {
@@ -551,6 +571,11 @@ interface ListedMove {
   key: string;
   label: string;
   targets: string[];
+  /**
+   * 個数を選ぶ選択で、このボタンが選ぶ数。`move` はその数へ向けて最初に答える手で、`more` は、
+   * そのあとも答えが要るか。`effect` は `CountChoice` のもの。
+   */
+  count?: { value: number; more: boolean; effect: string };
 }
 
 interface Listed {
@@ -580,6 +605,10 @@ function listMoves(
   if (moves === null || setup !== null) {
     return { buttons: [], endTurn: undefined, offered: undefined };
   }
+  const counting = countChoice(context.view);
+  if (counting !== null) {
+    return { buttons: countButtons(moves, counting), endTurn: undefined, offered: undefined };
+  }
   const folded = foldMoves(moves, context);
   const buttons = folded.map(({ move, index, key }) => ({
     move,
@@ -593,6 +622,33 @@ function listMoves(
     endTurn: buttons.find(({ move }) => move.type === "EndTurn"),
     offered: folded.length === moves.length ? undefined : folded.map(({ index }) => index),
   };
+}
+
+/**
+ * 個数を選ぶ選択の答え。「もう 1 個選びますか」の「はい」「いいえ」を並べると、いくつ選んだのかが
+ * 読めないので、選べる数を並べる。
+ */
+function countButtons(moves: readonly Move[], { effect, chosen, max, from, to }: CountChoice) {
+  const answerIndex = (kind: "accept" | "decline") =>
+    moves.findIndex((move) => move.type === "AnswerChoice" && move.answer.kind === kind);
+  const more = answerIndex("accept");
+  const stop = answerIndex("decline");
+  const buttons: ListedMove[] = [];
+  for (let count = chosen; count <= max; count += 1) {
+    const index = count === chosen ? stop : more;
+    const move = moves[index];
+    if (move === undefined) continue;
+    buttons.push({
+      move,
+      index,
+      key: `count ${count}`,
+      label: `${count} 個`,
+      targets: [from, to].filter((id) => id !== null),
+      // 上限まで選ぶと、エンジンはそこで選び終える。上限より少なく選ぶなら、選び終えるとも答える。
+      count: { value: count, more: count > chosen && chosen + 1 < max, effect },
+    });
+  }
+  return buttons;
 }
 
 /** `offered` は、見せた手の `legalMoves` での位置。すべて見せたなら undefined。 */
@@ -898,7 +954,7 @@ function ChoiceSheet({
   buttons: readonly ListedMove[];
   disabled: boolean;
   awaiting: boolean;
-  onPlay: (move: Move) => void;
+  onPlay: (move: Move, count?: ListedMove["count"]) => void;
 }) {
   // 選ぶカードを隠して盤面を見られるようにする。次の選択に移ったら、部品ごと作り直して開く。
   const [folded, setFolded] = useState(false);
@@ -1007,12 +1063,12 @@ function ChoiceSheet({
         )}
         {others.length > 0 && (
           <div className="moves">
-            {others.map(({ move, key, label }) => (
+            {others.map(({ move, key, label, count }) => (
               <button
                 key={key}
                 disabled={disabled}
                 aria-disabled={awaiting}
-                onClick={() => onPlay(move)}
+                onClick={() => onPlay(move, count)}
               >
                 {label}
               </button>
