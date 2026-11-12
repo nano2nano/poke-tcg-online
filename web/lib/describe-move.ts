@@ -452,8 +452,12 @@ const CHOICE_DESTINATIONS: Record<string, string> = {
   prizes: "prizes",
 };
 
-/** 個数を選ぶ選択。`chosen` は選んである数、`from` と `to` はのせ替えの元と先の場のポケモン。 */
+/**
+ * 個数を選ぶ選択。`effect` は同じ効果の選択のあいだ変わらない値、`chosen` は選んである数、
+ * `from` と `to` はのせ替えの元と先の場のポケモン。
+ */
 export interface CountChoice {
+  effect: string;
   chosen: number;
   max: number;
   from: string | null;
@@ -467,11 +471,12 @@ export interface CountChoice {
 export function countChoice(view: ReaderView | null): CountChoice | null {
   const choice = view?.choices.at(-1);
   const shape = choice?.context;
-  if (choice?.owner !== view?.viewer || choice?.prompt?.kind !== "confirm") return null;
+  if (choice?.prompt?.kind !== "confirm") return null;
   if (shape == null || shape.max === null || shape.remaining === null) return null;
   const picked = (role: "from" | "to") =>
     shape.pickedInPlay?.find((each) => each.role === role)?.target ?? null;
   return {
+    effect: `${shape.source?.instanceId} ${shape.step}`,
     chosen: shape.max - shape.remaining,
     max: shape.max,
     from: picked("from"),

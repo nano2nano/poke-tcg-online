@@ -3196,9 +3196,10 @@ test("カードを選ばない選択も、盤面の上の選ぶ画面に答え�
 });
 
 for (const [title, picked, cut, answers] of [
-  ["2 個を押すと、その数になるまで続けて答える", 2, false, ["1 個 accept", "2 個 decline"]],
-  ["3 個を押すと、その数になるまで続けて答える", 3, false, ["1 個 accept", "2 個 accept"]],
-  ["答えの途中で選択が無くなったら、続きを答えない", 3, true, ["1 個 accept", "EndTurn"]],
+  ["2 個を押すと、その数になるまで続けて答える", 2, null, ["1 個 accept", "2 個 decline"]],
+  ["3 個を押すと、その数になるまで続けて答える", 3, null, ["1 個 accept", "2 個 accept"]],
+  ["答えの途中で選択が無くなったら、続きを答えない", 3, "gap", ["1 個 accept", "EndTurn"]],
+  ["答えの途中で別の効果の選択に替わったら、続きを答えない", 3, "other", ["1 個 accept"]],
 ] as const) {
   test(`個数を選ぶ選択は、選べる数を並べ、${title}`, async ({ page }) => {
     const sync = crowdedSync(10) as CrowdedSync & {
@@ -3206,7 +3207,7 @@ for (const [title, picked, cut, answers] of [
     };
     const { self, opponent } = sync.view;
     // エンジンは 1 個目を選んだことにして、2 個目から「もう 1 個選ぶか」を確かめる。
-    const asking = (chosen: number) => ({
+    const asking = (chosen: number, step = "数を選ぶ") => ({
       choices: [
         {
           choiceId: `${chosen} 個`,
@@ -3217,7 +3218,7 @@ for (const [title, picked, cut, answers] of [
           context: {
             source: { defId: self.hand[0]!.defId, label: "効果の元", instanceId: null },
             sourceRole: "ability",
-            step: null,
+            step,
             min: 1,
             max: 3,
             remaining: 3 - chosen,
@@ -3256,8 +3257,9 @@ for (const [title, picked, cut, answers] of [
       chosen += 1;
       // 選び終えたら、続けて別の効果が同じ形の選択を積んだことにする。
       if (kind === "decline" || chosen === 3) chosen = 1;
-      if (!cut || version > 1) return delta(asking(chosen));
-      // 選択の無い局面を挟む。次に手を指したら、別の効果が同じ形の選択を積んだことにする。
+      if (cut === null || version > 1) return delta(asking(chosen));
+      if (cut === "other") return delta(asking((chosen = 1), "別の効果"));
+      // 選択の無い局面を挟む。次に手を指したら、同じ効果がまた選択を積んだことにする。
       chosen = 0;
       return delta({ choices: [], legalMoves: [{ type: "EndTurn", player: 0 }] });
     });
@@ -3269,11 +3271,13 @@ for (const [title, picked, cut, answers] of [
       .locator("#moves button")
       .nth(picked - 1)
       .click();
-    if (cut) await page.click("#end-turn");
+    if (cut === "gap") await page.click("#end-turn");
     // 次に届いた選択には、押すまで答えない。押した 1 個は、選び終える答えだけで済む。
-    await expect(page.locator("#table")).toHaveAttribute("data-state-version", "3");
+    const arrived = (count: number) =>
+      expect(page.locator("#table")).toHaveAttribute("data-state-version", String(count));
+    await arrived(answers.length + 1);
     await sheet.locator("#moves button").first().click();
-    await expect(page.locator("#table")).toHaveAttribute("data-state-version", "4");
+    await arrived(answers.length + 2);
     expect(
       sent.map(({ move }) => {
         const { type, choiceId, answer } = move as {

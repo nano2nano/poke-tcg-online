@@ -220,7 +220,7 @@ describe("choicePrompt", () => {
     const context = { view: { ...view, choices: [choice] } as PlayerView, cards };
     const name = (side: "self" | "opponent") =>
       cards[(view[side].active as { stack: { defId: string }[] }).stack.at(-1)!.defId]!.name;
-    expect(countChoice(context.view)).toEqual({ chosen: 1, max: 3, from, to });
+    expect(countChoice(context.view)).toMatchObject({ chosen: 1, max: 3, from, to });
     expect(choicePrompt(context)).toBe(
       `効果の元：自分のバトル場の${name("self")} から 相手のバトル場の${name("opponent")} へのせ替えるダメカンの数を選んでください（3 個まで）。`,
     );
@@ -228,6 +228,9 @@ describe("choicePrompt", () => {
       describeMove({ type: "AnswerChoice", player: 0, choiceId: "c1", answer: { kind } }, context);
     expect(answer("accept")).toBe("2 個に増やす");
     expect(answer("decline")).toBe("1 個で決める");
+    // リプレイでは、相手の選択の中身も見える。
+    choice.owner = 1;
+    expect(answer("accept")).toBe("2 個に増やす");
   });
 
   it("選ぶのをやめる答えは、先に選んだカードがあれば「選び終える」、無ければ「選ばない」", () => {
