@@ -1025,11 +1025,13 @@ export function answerDestinationsOf(
   // あとの選択までたどり、その先で山札の外の見えないカードに触れうるので、相手のカードも混ぜる。
   // この効果で山札全体を見せたなら、座席は山札に何があるかを知っているので、サイドとは混ぜない。
   // 混ぜると、山札にあるカードを無いことにしてしまう。並びのまま見せたカードは位置を動かさない。
+  // 見せた相手の手札も動かさない。混ぜると、手札から選ぶ答えが手札に無いカードを指してしまう。
   const scope: DisguiseScope = { ownPrizes: shown?.wholeDeck == null, rival: true };
+  const kept = [...(shown?.pinned ?? []), ...(shown?.rivalHand ?? [])];
   const legal = legalMoves(state);
   let found: (AnswerDestination | null)[] = legal.map(() => null);
   for (let tried = 0; tried < DISGUISE_TRIES; tried++) {
-    const current = disguised(state, choice.owner, shown?.pinned ?? [], scope);
+    const current = disguised(state, choice.owner, kept, scope);
     const each = legal.map((move, index) =>
       tried > 0 && found[index] === null ? null : destinationOf(state, current, move, known),
     );

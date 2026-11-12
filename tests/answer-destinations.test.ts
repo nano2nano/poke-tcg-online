@@ -119,10 +119,9 @@ function walk({ match, seat }: Played, onStep?: (played: Played) => void): Answe
   return steps;
 }
 
-/** 手札に加える選択のすぐあとに、ポケモンにつける選択が続くトレーナーズ。 */
-function handThenAttach(): CardDefId {
+function implementedTrainers(): CardDefId[] {
   ensureCards();
-  const found = [...loadGeneratedCards()]
+  return [...loadGeneratedCards()]
     .filter(
       (def) =>
         def.kind === "trainer" &&
@@ -130,18 +129,22 @@ function handThenAttach(): CardDefId {
         classifyDefId(def.defId) === "implemented",
     )
     .map((def) => def.defId)
-    .sort()
-    .find((trainer) => {
-      const played = afterPlaying(trainer);
-      if (played === null) return false;
-      const steps = walk(played);
-      return steps.some(
-        (step, index) =>
-          step.length > 0 &&
-          step.every((each) => each.to === "hand") &&
-          (steps[index + 1] ?? []).some((each) => each.to === "attached"),
-      );
-    });
+    .sort();
+}
+
+/** 手札に加える選択のすぐあとに、ポケモンにつける選択が続くトレーナーズ。 */
+function handThenAttach(): CardDefId {
+  const found = implementedTrainers().find((trainer) => {
+    const played = afterPlaying(trainer);
+    if (played === null) return false;
+    const steps = walk(played);
+    return steps.some(
+      (step, index) =>
+        step.length > 0 &&
+        step.every((each) => each.to === "hand") &&
+        (steps[index + 1] ?? []).some((each) => each.to === "attached"),
+    );
+  });
   if (found === undefined) throw new Error("条件に合うトレーナーズが見つからない");
   return found;
 }
@@ -222,16 +225,7 @@ function toHandAnswers({ match, seat }: Played): number[] {
 
 /** 山札の上から何枚かを並びのまま見せて、そこから手札に加えるトレーナーズを使ったところ。 */
 function topCardsToHand(): Played {
-  ensureCards();
-  const found = [...loadGeneratedCards()]
-    .filter(
-      (def) =>
-        def.kind === "trainer" &&
-        (def.trainerKind === "supporter" || def.trainerKind === "item") &&
-        classifyDefId(def.defId) === "implemented",
-    )
-    .map((def) => def.defId)
-    .sort()
+  const found = implementedTrainers()
     .map((trainer) => afterPlaying(trainer))
     .find(
       (played) =>
@@ -244,32 +238,22 @@ function topCardsToHand(): Played {
   return found;
 }
 
-/** 相手の手札を見て、そこから選ぶトレーナーズを使ったところ。 */
-function pickingFromRivalHand(): Played {
-  ensureCards();
-  const found = [...loadGeneratedCards()]
-    .filter(
-      (def) =>
-        def.kind === "trainer" &&
-        (def.trainerKind === "supporter" || def.trainerKind === "item") &&
-        classifyDefId(def.defId) === "implemented",
-    )
-    .map((def) => def.defId)
-    .sort()
-    .map((trainer) => afterPlaying(trainer))
-    .find((played) => {
-      const prompt = played?.match.state.choices.at(-1)?.prompt;
-      return (
-        played != null &&
-        prompt?.kind === "selectFromHiddenZone" &&
-        prompt.zone.kind === "hand" &&
-        prompt.zone.player !== played.seat &&
-        played.match.effectReveals?.rivalHand.length ===
-          played.match.state.players[prompt.zone.player].hand.length
-      );
-    });
-  if (found == null) throw new Error("相手の手札を見て選ぶ効果が見つからない");
-  return found;
+/** 相手の手札を見て、そこから選ぶトレーナーズを使ったところ。`pickable` なら、選べるカードがあるもの。 */
+function pickingFromRivalHand(pickable = false): Played {
+  for (const trainer of implementedTrainers()) {
+    const played = afterPlaying(trainer);
+    const prompt = played?.match.state.choices.at(-1)?.prompt;
+    if (
+      played != null &&
+      prompt?.kind === "selectFromHiddenZone" &&
+      prompt.zone.kind === "hand" &&
+      prompt.zone.player !== played.seat &&
+      (!pickable || prompt.candidates.length > 0)
+    ) {
+      return played;
+    }
+  }
+  throw new Error("相手の手札を見て選ぶ効果が見つからない");
 }
 
 describe("効果の選択で選んだカードの行き先", () => {
@@ -498,7 +482,28 @@ describe("あとの選択でたどる行き先の持ち主", () => {
   });
 });
 
-describe("山札から選ぶあいだに見せる山札", () => {
+it("相手の手札を見て選ぶ効果では、見た手札を混ぜずに行き先を求める", () => {
+  const { match, seat } = pickingFromRivalHand(true);
+  const rival = (1 - seat) as Player;
+  const side = match.state.players[rival];
+  const prompt = match.state.choices.at(-1)?.prompt;
+  if (prompt?.kind !== "selectFromHiddenZone") throw new Error("見て選ぶ選択ではない");
+  const candidates = new Set(prompt.candidates);
+  const other = side.hand.find((card) => !candidates.has(card.defId));
+  if (other === undefined) throw new Error("選べないカードが相手の手札に無い");
+  // 選べるカードを相手の手札だけに残す。手札を混ぜる実装では、選ぶ答えが手札の外を指して行き先が消える。
+  const plain = (cards: readonly CardInstance[]): CardInstance[] =>
+    cards.map((card) => (candidates.has(card.defId) ? { ...card, defId: other.defId } : card));
+  const players: GameState["players"] = [match.state.players[0], match.state.players[1]];
+  players[rival] = { ...side, deck: plain(side.deck), prizes: plain(side.prizes) };
+  match.state = { ...match.state, players };
+  for (let tried = 0; tried < 5; tried++) {
+    const destinations = answerDestinationsOf(match.state, match.effectReveals) ?? [];
+    expect(destinations.filter((each) => each !== null).length).toBeGreaterThan(0);
+  }
+});
+
+describe("見て選ぶあいだに見せるカード", () => {
   const defIdsOf = (cards: readonly CardInstance[]): CardDefId[] =>
     cards.map((card) => card.defId).sort();
   const searchingDeck = (match: Match, seat: Player): boolean => {
