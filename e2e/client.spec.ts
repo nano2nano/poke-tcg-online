@@ -2536,7 +2536,7 @@ function crowdedSync(handSize: number): object {
     setup: null,
     deckPlacement: null,
     answerDestinations: null,
-    revealedDeck: null,
+    revealedCards: null,
     attacks: null,
     mulligans: [],
     firstPlayer: 0,
@@ -2705,6 +2705,7 @@ interface CrowdedSync {
       active: { inPlayId: string; attached: HeldCard[] };
       deckCount: number;
     };
+    opponent: { handCount: number };
   };
   legalMoves: object[];
 }
@@ -2963,7 +2964,7 @@ test("効果の選択では、選んだカードの行き先をボタンに出�
 test("山札全体を見て選ぶあいだは、見ている山札を並べ、選べないカードは暗くする", async ({
   page,
 }) => {
-  const sync = crowdedSync(10) as CrowdedSync & { revealedDeck: string[] | null };
+  const sync = crowdedSync(10) as CrowdedSync & { revealedCards: string[] | null };
   const defIds = [...new Set(sync.view.self.hand.map((card) => card.defId))];
   const [a, b, c, d] = defIds as [string, string, string, string];
   const choiceId = "山札から選ぶ";
@@ -2986,11 +2987,11 @@ test("山札全体を見て選ぶあいだは、見ている山札を並べ、�
     choiceId,
     answer: { kind: "cardDef", defId },
   }));
-  const deck = page.locator("#revealed-deck");
+  const deck = page.locator("#revealed-cards");
   const shown = deck.locator(".choice-card");
 
-  sync.revealedDeck = [a, c, a, d, b];
-  sync.view.self.deckCount = sync.revealedDeck.length;
+  sync.revealedCards = [a, c, a, d, b];
+  sync.view.self.deckCount = sync.revealedCards.length;
   await openWith(page, sync);
   await expect(deck).toBeVisible();
   await expect(deck).toHaveAttribute("data-count", "5");
@@ -3015,10 +3016,40 @@ test("山札全体を見て選ぶあいだは、見ている山札を並べ、�
   await expect(shown).toHaveCount(4);
   await expect(page.locator("#moves button")).toHaveCount(1);
 
-  sync.revealedDeck = null;
+  sync.revealedCards = null;
   await openWith(page, sync);
   await expect(page.locator("#moves button")).toHaveCount(1);
   await expect(deck).toBeHidden();
+});
+
+test("相手の手札を見て選ぶあいだは、見ている手札を並べ、選べないカードは暗くする", async ({
+  page,
+}) => {
+  const sync = crowdedSync(10) as CrowdedSync & { revealedCards: string[] | null };
+  const defIds = [...new Set(sync.view.self.hand.map((card) => card.defId))];
+  const [a, b, c] = defIds as [string, string, string];
+  const choiceId = "相手の手札から選ぶ";
+  sync.view.choices = [
+    {
+      choiceId,
+      owner: 0,
+      kind: "card-effect",
+      optional: false,
+      prompt: { kind: "selectFromHiddenZone", zone: { kind: "hand", player: 1 }, candidates: [a] },
+    },
+  ];
+  sync.legalMoves = [
+    { type: "AnswerChoice", player: 0, choiceId, answer: { kind: "cardDef", defId: a } },
+  ];
+  sync.revealedCards = [a, b, c, b];
+  sync.view.opponent.handCount = sync.revealedCards.length;
+  await openWith(page, sync);
+
+  const hand = page.locator("#revealed-cards");
+  await expect(page.locator("#choice-sheet h3")).toHaveText("相手の手札 4 枚");
+  await expect(hand.locator(".choice-card")).toHaveCount(3);
+  await expect(hand.locator('.card[data-pickable="true"]')).toHaveCount(1);
+  await expect(hand.locator("button.choice-card")).toHaveCount(1);
 });
 
 test("効果でカードを選ぶあいだは、候補を盤面の上に大きく並べ、押したカードを選ぶ。隠して盤面も見られる", async ({

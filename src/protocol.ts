@@ -113,8 +113,8 @@ export interface SyncMessage {
   deckPlacement: DeckPlacementView | null;
   /** 効果の選択なら、`legalMoves` と同じ並びで、その答えで選んだカードの行き先。選ぶ座席にだけ入る（3.2 節）。 */
   answerDestinations: (AnswerDestination | null)[] | null;
-  /** 山札を見せる効果で山札から選んでいるなら、見せた山札のうちまだ山札にあるカード。選ぶ座席にだけ入る（3.2 節）。 */
-  revealedDeck: CardDefId[] | null;
+  /** 自分の山札か相手の手札を見て選ぶ効果なら、見せたカードのうちまだそのゾーンにあるもの。選ぶ座席にだけ入る（3.2 節）。 */
+  revealedCards: CardDefId[] | null;
   /** バトルポケモンが宣言できるワザ。`Attack` の `attackIndex` はこの表の位置である。手番側の座席にだけ入る（3.2 節）。 */
   attacks: AttackView[] | null;
   /** 対戦準備で引き直すときに見せた手札。両座席に同じものが入る（2.4 節）。 */
@@ -141,7 +141,7 @@ export interface DeltaMessage {
   setup: SetupView | null;
   deckPlacement: DeckPlacementView | null;
   answerDestinations: (AnswerDestination | null)[] | null;
-  revealedDeck: CardDefId[] | null;
+  revealedCards: CardDefId[] | null;
   attacks: AttackView[] | null;
   /** 対戦準備のあいだだけ載せる。無ければ、前に届いたものから変わっていない。 */
   mulligans?: MulliganReveal[];

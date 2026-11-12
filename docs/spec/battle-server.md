@@ -34,7 +34,7 @@
 コアの C-1 から C-5 を前提に、サーバ側で追加して守る性質である。
 
 - **S-1 権威はサーバが持つ `GameState` にある。** クライアントは盤面もダメージもサイドの枚数も申告しない（コア C-5 の運用側）。クライアントから来る値は「どの手を選んだか」だけである。
-- **S-2 クライアントへ出る値は、必ず射影を通る。** `ApplyResult.state` と `ApplyResult.events` をそのまま配信する経路を作らない。座席へ出てよいのは `playerView(state, seat)` と `projectEvents(events, seat)` の戻り値、および**手番側だけへ送る合法手**と、その座席の手札から導く対戦準備の状態（`setup`）、選んでいるカードを山札のどこへ置くか（`deckPlacement`）、効果の選択で選んだカードの行き先（`answerDestinations`）、山札を見て選ぶあいだに見ている山札のカード（`revealedDeck`）、バトルポケモンが宣言できるワザ（`attacks`）である（3.2 節）。観戦者へ出てよいのは `spectatorView(state)` と `projectEvents(events, "spectator")` の戻り値だけである（3.6 節）。この規律はコア §9.1 が明示的にサーバ側の責務としたものである。
+- **S-2 クライアントへ出る値は、必ず射影を通る。** `ApplyResult.state` と `ApplyResult.events` をそのまま配信する経路を作らない。座席へ出てよいのは `playerView(state, seat)` と `projectEvents(events, seat)` の戻り値、および**手番側だけへ送る合法手**と、その座席の手札から導く対戦準備の状態（`setup`）、選んでいるカードを山札のどこへ置くか（`deckPlacement`）、効果の選択で選んだカードの行き先（`answerDestinations`）、自分の山札か相手の手札を見て選ぶあいだに見ているカード（`revealedCards`）、バトルポケモンが宣言できるワザ（`attacks`）である（3.2 節）。観戦者へ出てよいのは `spectatorView(state)` と `projectEvents(events, "spectator")` の戻り値だけである（3.6 節）。この規律はコア §9.1 が明示的にサーバ側の責務としたものである。
 - **S-3 seed は対戦が終わるまで公開しない。** seed はシャッフルを完全に決めるので、対戦中に渡すと相手の山札とサイドがすべて割れる。
 - **S-4 対局ログは seed と先攻と move 列で足りる。** 局面もイベントも保存しない。コア C-4（同一 seed ＋同一 move 列 → 同一の状態列とイベント列）がこれを保証する。先攻は `createGame` の設定で、move ではない（2.5 節）。
 - **S-5 エンジンへ時刻と通信を持ち込まない。** 時間切れ、切断、投了はすべてサーバの語彙であり、`Move` にも `GameState` にも `WinReason` にも足さない（コア D-3）。
@@ -204,15 +204,15 @@ Durable Object はメモリから降ろされ、生きている対戦ごと消�
 
 サーバ → クライアント
 
-| `t`       | 中身                                                                                                                                                                                                             | 意味                                                                                                                                                 |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedDeck`, `attacks`, `mulligans`, `firstPlayer`, `toss`, `toMove`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る                                             |
-| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedDeck`, `attacks`, `mulligans`, `toMove`                                                                 | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                                                                 |
-| `reject`  | `reason`, `stateVersion`                                                                                                                                                                                         | 手を受理しなかった。理由は 2.2 節の 3 値                                                                                                             |
-| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                                                                                                              | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                                                                    |
-| `pending` | `toss`                                                                                                                                                                                                           | 席は取れたが、対戦がまだ始まっていない。`toss` はコイントスに勝った座席で、シェアがそろうまで（6.4 節）は `null`。勝った座席が選ぶと始まる（2.5 節） |
-| `pong`    | なし                                                                                                                                                                                                             |                                                                                                                                                      |
-| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                                                                                                                      | 受け取れなかった。接続は切らない                                                                                                                     |
+| `t`       | 中身                                                                                                                                                                                                              | 意味                                                                                                                                                 |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sync`    | `matchId`, `seat`, `stateVersion`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedCards`, `attacks`, `mulligans`, `firstPlayer`, `toss`, `toMove`, `seedCommit`, `spectatorToken` | 局面一式。`hello` の直後、`stale-version` と準備の答えを断ったときの応答、準備の答えを預かったときに送る                                             |
+| `delta`   | `stateVersion`, `events`, `view`, `legalMoves`, `setup`, `deckPlacement`, `answerDestinations`, `revealedCards`, `attacks`, `mulligans`, `toMove`                                                                 | 手が適用された。預かった準備の答えが続けて流れると、複数手ぶんになる                                                                                 |
+| `reject`  | `reason`, `stateVersion`                                                                                                                                                                                          | 手を受理しなかった。理由は 2.2 節の 3 値                                                                                                             |
+| `ended`   | `matchResult`, `outcome`, `seed`, `seedNonce`, `seedShares`, `view`                                                                                                                                               | 対戦が終わった。ここで初めて seed を明かす（S-3）                                                                                                    |
+| `pending` | `toss`                                                                                                                                                                                                            | 席は取れたが、対戦がまだ始まっていない。`toss` はコイントスに勝った座席で、シェアがそろうまで（6.4 節）は `null`。勝った座席が選ぶと始まる（2.5 節） |
+| `pong`    | なし                                                                                                                                                                                                              |                                                                                                                                                      |
+| `error`   | `message`, `code`（3.3 節の合図のときだけ）                                                                                                                                                                       | 受け取れなかった。接続は切らない                                                                                                                     |
 
 **形の違う 1 通は、受け手へ渡す前に断る。** 【決定】
 座席に就いた相手は、対戦が終わるまで何度でも送れる。`t` を読むだけで落ちる値（`null` など）を
@@ -274,14 +274,15 @@ Durable Object はメモリから降ろされ、生きている対戦ごと消�
 無いことにしてしまう。山札全体を見せたかは、見せたカードがその手のあとの山札をすべて含むかで決める。
 `later` のためにたどる答えの数には上限があり、越えたら付けない。AI の座席には画面が無いので求めない。
 
-`revealedDeck` は、自分の山札を見せたカード効果で自分の山札から選んでいるあいだだけ、選ぶ座席へ入れる。
-運ぶのは、その効果で見せた山札のうち今も山札にあるカードの `defId` で、並びは見せた順である。
+`revealedCards` は、自分の山札か相手の手札を見せたカード効果で、そのゾーンから選んでいるあいだだけ、選ぶ座席へ入れる。
+運ぶのは、その効果で見せたカードのうち今もそのゾーンにあるカードの `defId` で、並びは見せた順である。
+どちらのゾーンかは、`view` の選択の `prompt.zone` で分かる。
 山札全体を見せた効果も、山札の上から何枚かのように一部だけを見せた効果も同じに扱う。
-選択の候補は条件に合うカードだけなので、画面はこれが無いと、選べないカードや見ている山札の残りを並べられない。
+選択の候補は条件に合うカードだけなので、画面はこれが無いと、選べないカードや見ているゾーンの残りを並べられない。
 `events` の `cards-revealed` は見せた手でしか届かず、繋ぎ直した座席には無いので、局面から求めて毎回送る。
-見せたあとに山札へ入ったカードは、どこから入ったかで座席が正体を知っているかが変わるので入れない。
+見せたあとにそのゾーンへ入ったカードは、どこから入ったかで座席が正体を知っているかが変わるので入れない。
 山札の端へ順に置く選択で置き終えたカードは、山札に残ってももう選ばないので入れない。
-入れるカードが無いときと、山札から選んでいない段（ポケモンにつける先を選ぶなど）では `null` である。
+入れるカードが無いときと、見せたゾーンから選んでいない段（ポケモンにつける先を選ぶなど）では `null` である。
 
 `attacks` は、手番側の座席のバトルポケモンが宣言できるワザの表で、ワザの名前（`name`）、バトルポケモンが
 持っているワザか（`own`）、そのワザを印刷している場のカードのインスタンス ID（`card`）を並べる。`Attack` の
@@ -295,7 +296,7 @@ Durable Object はメモリから降ろされ、生きている対戦ごと消�
 起きるので、`events` だけでは届かない座席がある。インスタンス ID を入れないのは、見せたカードが山札へ
 戻るからである。山札のカードのインスタンス ID は座席へ出さない。
 
-`legalMoves`、`deckPlacement`、`answerDestinations`、`revealedDeck`、`attacks` は**手番側の座席へだけ**値を入れ、他方へは `null` を入れる（S-2）。
+`legalMoves`、`deckPlacement`、`answerDestinations`、`revealedCards`、`attacks` は**手番側の座席へだけ**値を入れ、他方へは `null` を入れる（S-2）。
 `view` は `playerView` の戻り値そのもの、`events` は `projectEvents` の戻り値そのものである。
 この 3 つを組み立てるのは `src/hub.ts` の `syncFor` と `deltaFor` だけとし、
 ほかの経路から座席へ値を送らない。
@@ -490,7 +491,7 @@ Cloudflare Workers にはサーバから WebSocket の ping を送る手段が�
 ### 4.1 座席ごとの payload 【決定】
 
 1 手ごとに、サーバは座席 `p` について次の 3 つを作る。これ以外の値を座席へ出さない
-（対戦準備の `setup` と `mulligans`、山札へ置く選択の `deckPlacement`、選んだカードの行き先の `answerDestinations`、見ている山札の `revealedDeck`、宣言できるワザの `attacks` は 3.2 節）。
+（対戦準備の `setup` と `mulligans`、山札へ置く選択の `deckPlacement`、選んだカードの行き先の `answerDestinations`、見て選ぶあいだの `revealedCards`、宣言できるワザの `attacks` は 3.2 節）。
 
 ```
 view       = playerView(state, p)

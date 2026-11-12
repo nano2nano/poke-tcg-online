@@ -954,36 +954,39 @@ export function attacksFor(match: Match, seat: Player): AttackView[] | null {
 }
 
 /**
- * 山札から選んでいるあいだ、この効果で見せた山札のうち、まだ山札にあるカード（3.2 節の `revealedDeck`）。
- * 並びは見せた順。山札を見せていない効果、渡すカードが無いとき、ほかの局面では null。
+ * 見て選ぶ効果で選んでいるあいだ、この効果で見せたカードのうち、まだそのゾーンにあるもの
+ * （3.2 節の `revealedCards`）。選ぶゾーンは自分の山札か相手の手札で、並びは見せた順。
+ * 見せていない効果、渡すカードが無いとき、ほかの局面では null。
  *
- * 選択の候補は条件に合うカードだけなので、画面はこれが無いと、山札を見て選ぶ効果で
+ * 選択の候補は条件に合うカードだけなので、画面はこれが無いと、見て選ぶ効果で
  * 選べないカードや残りの中身を座席へ見せられない。
  */
-export function revealedDeckFor(match: Match, seat: Player): CardDefId[] | null {
+export function revealedCardsFor(match: Match, seat: Player): CardDefId[] | null {
   const choice = match.state.choices.at(-1);
   const reveals = match.effectReveals;
-  const shown = reveals?.wholeDeck ?? reveals?.pinned ?? [];
   if (
     toMove(match) !== seat ||
     choice === undefined ||
-    shown.length === 0 ||
-    choice.prompt.kind !== "selectFromHiddenZone" ||
-    choice.prompt.zone.kind !== "deck" ||
-    choice.prompt.zone.player !== seat
+    reveals === null ||
+    choice.prompt.kind !== "selectFromHiddenZone"
   ) {
     return null;
   }
-  // 見せたあとに山札へ入ったカードは足さない。どこから入ったかで、座席が正体を知っているかが変わる。
-  const inDeck = new Set(match.state.players[seat].deck.map((card) => card.instanceId));
+  const { zone } = choice.prompt;
+  let shown: CardInstance[];
+  if (zone.kind === "deck" && zone.player === seat) shown = reveals.wholeDeck ?? reveals.pinned;
+  else if (zone.kind === "hand" && zone.player !== seat) shown = reveals.rivalHand;
+  else return null;
+  // 見せたあとにそのゾーンへ入ったカードは足さない。どこから入ったかで、座席が正体を知っているかが変わる。
+  const inZone = new Set(cardsInZone(match.state, zone).map((card) => card.instanceId));
   // 山札の端へ置き終えたカードは山札に残るが、もう選ばない。
-  for (const card of match.deckStack?.placed ?? []) inDeck.delete(card.instanceId);
+  for (const card of match.deckStack?.placed ?? []) inZone.delete(card.instanceId);
   // 同じカードを見せ直す効果があるので、1 枚は 1 度だけ数える。
-  const left = shown.filter((card) => inDeck.delete(card.instanceId)).map((card) => card.defId);
+  const left = shown.filter((card) => inZone.delete(card.instanceId)).map((card) => card.defId);
   return left.length === 0 ? null : left;
 }
 
-/** 1 つの効果の選択が続くあいだに、選ぶ座席へ山札から見せたカード。 */
+/** 1 つの効果の選択が続くあいだに、選ぶ座席へ見せたカード。 */
 export interface EffectReveals {
   owner: Player;
   /** 効果を起こしたカードのインスタンス ID。 */
@@ -996,6 +999,8 @@ export interface EffectReveals {
   wholeDeck: CardInstance[] | null;
   /** 山札の一部として見せたカード（上から何枚かなど）。座席は位置も知っている。 */
   pinned: CardInstance[];
+  /** 相手の手札から見せたカード。 */
+  rivalHand: CardInstance[];
 }
 
 /**
@@ -1020,11 +1025,13 @@ export function answerDestinationsOf(
   // あとの選択までたどり、その先で山札の外の見えないカードに触れうるので、相手のカードも混ぜる。
   // この効果で山札全体を見せたなら、座席は山札に何があるかを知っているので、サイドとは混ぜない。
   // 混ぜると、山札にあるカードを無いことにしてしまう。並びのまま見せたカードは位置を動かさない。
+  // 見せた相手の手札も動かさない。混ぜると、手札から選ぶ答えが手札に無いカードを指してしまう。
   const scope: DisguiseScope = { ownPrizes: shown?.wholeDeck == null, rival: true };
+  const kept = [...(shown?.pinned ?? []), ...(shown?.rivalHand ?? [])];
   const legal = legalMoves(state);
   let found: (AnswerDestination | null)[] = legal.map(() => null);
   for (let tried = 0; tried < DISGUISE_TRIES; tried++) {
-    const current = disguised(state, choice.owner, shown?.pinned ?? [], scope);
+    const current = disguised(state, choice.owner, kept, scope);
     const each = legal.map((move, index) =>
       tried > 0 && found[index] === null ? null : destinationOf(state, current, move, known),
     );
@@ -1205,7 +1212,7 @@ function continuesEffect(reveals: EffectReveals, choice: Choice): boolean {
 
 /**
  * 手を 1 つ適用したあとの `effectReveals`。同じ効果の選択が続くあいだだけ、
- * 選ぶ座席へ山札から見せたカードを足していく。
+ * 選ぶ座席へ見せたカードを足していく。
  */
 function nextEffectReveals(
   reveals: EffectReveals | null,
@@ -1220,17 +1227,16 @@ function nextEffectReveals(
     defIds: [...(kept?.defIds ?? [])],
     wholeDeck: kept?.wholeDeck ?? null,
     pinned: [...(kept?.pinned ?? [])],
+    rivalHand: [...(kept?.rivalHand ?? [])],
   };
   const deck = applied.state.players[next.owner].deck;
   for (const event of applied.events) {
-    if (
-      event.kind !== "cards-revealed" ||
-      event.player !== next.owner ||
-      event.zone.kind !== "deck" ||
-      event.zone.player !== next.owner
-    ) {
+    if (event.kind !== "cards-revealed" || event.player !== next.owner) continue;
+    if (event.zone.kind === "hand" && event.zone.player !== next.owner) {
+      result.rivalHand.push(...event.cards);
       continue;
     }
+    if (event.zone.kind !== "deck" || event.zone.player !== next.owner) continue;
     result.defIds.push(...event.cards.map((card) => card.defId));
     const shown = new Set(event.cards.map((card) => card.instanceId));
     if (deck.every((card) => shown.has(card.instanceId))) result.wholeDeck = [...event.cards];

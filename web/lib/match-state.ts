@@ -36,7 +36,7 @@ export interface SeatState {
   setup: SetupView | null;
   deckPlacement: DeckPlacementView | null;
   answerDestinations: (AnswerDestination | null)[] | null;
-  revealedDeck: CardDefId[] | null;
+  revealedCards: CardDefId[] | null;
   attacks: AttackView[] | null;
   mulligans: MulliganReveal[];
   /** 対戦が始まる前に届く、コイントスに勝った座席。 */
@@ -69,7 +69,7 @@ export function initialSeatState(seat: Player): SeatState {
     setup: null,
     deckPlacement: null,
     answerDestinations: null,
-    revealedDeck: null,
+    revealedCards: null,
     attacks: null,
     mulligans: [],
     toss: null,
@@ -99,7 +99,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
         setup: action.setup,
         deckPlacement: action.deckPlacement,
         answerDestinations: action.answerDestinations,
-        revealedDeck: action.revealedDeck,
+        revealedCards: action.revealedCards,
         attacks: action.attacks,
         // delta が運ぶのは準備のあいだだけで、無ければ前のものから変わっていない。
         mulligans: action.mulligans ?? state.mulligans,
@@ -127,7 +127,7 @@ export function seatReducer(state: SeatState, action: SeatAction): SeatState {
           setup: null,
           deckPlacement: null,
           answerDestinations: null,
-          revealedDeck: null,
+          revealedCards: null,
           attacks: null,
           shuffled: [],
           spectatorToken: null,
