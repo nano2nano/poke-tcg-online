@@ -285,6 +285,9 @@ function describeAnswer(
   if (answer.kind === "decline" && rule?.decline !== undefined) return rule.decline;
   const moved = destination === null ? null : destinationText(answer, destination, context);
   if (moved !== null) return moved;
+  const counting = countChoice(view);
+  if (counting !== null && answer.kind === "accept") return `${counting.chosen + 1} 個に増やす`;
+  if (counting !== null && answer.kind === "decline") return `${counting.chosen} 個で決める`;
   switch (answer.kind) {
     case "accept":
       return "はい";
@@ -449,6 +452,33 @@ const CHOICE_DESTINATIONS: Record<string, string> = {
   prizes: "prizes",
 };
 
+/** 個数を選ぶ選択。`chosen` は選んである数、`from` と `to` はのせ替えの元と先の場のポケモン。 */
+export interface CountChoice {
+  chosen: number;
+  max: number;
+  from: string | null;
+  to: string | null;
+}
+
+/**
+ * いまの選択が個数を選ぶものなら、その中身。エンジンは個数を「もう 1 個選ぶか」の確認の繰り返しで
+ * 選ばせるので、確認に上限と残りの数が書いてあれば、個数を選んでいる。
+ */
+export function countChoice(view: ReaderView | null): CountChoice | null {
+  const choice = view?.choices.at(-1);
+  const shape = choice?.context;
+  if (choice?.owner !== view?.viewer || choice?.prompt?.kind !== "confirm") return null;
+  if (shape == null || shape.max === null || shape.remaining === null) return null;
+  const picked = (role: "from" | "to") =>
+    shape.pickedInPlay?.find((each) => each.role === role)?.target ?? null;
+  return {
+    chosen: shape.max - shape.remaining,
+    max: shape.max,
+    from: picked("from"),
+    to: picked("to"),
+  };
+}
+
 /**
  * 選択で何を選んでいるのか。カードの効果の選択では、どのカードの効果か、あと何枚選ぶのかも書く。エンジンは
  * 1 枚ずつ選ばせるので、書かないとボタンからは読めない。枚数と行き先は、エンジンが書いた効果でだけ出す。
@@ -485,6 +515,15 @@ export function choicePrompt(context: MoveContext): string {
   const shape = choice.context;
   const source = shape?.source;
   if (shape == null || source == null) return "";
+  const counting = countChoice(view);
+  if (counting !== null) {
+    const { from, to, max } = counting;
+    const what =
+      from === null || to === null
+        ? "いくつにするか"
+        : `${pokemonLabel(from, context, true)} から ${pokemonLabel(to, context, true)} へのせ替えるダメカンの数`;
+    return `${source.label}：${what}を選んでください（${max} 個まで）。`;
+  }
   let what = "選んでください";
   let unit: string | null = null;
   if (prompt.kind === "selectInPlay") {
