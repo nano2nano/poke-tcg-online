@@ -987,7 +987,7 @@ test("場から手札へもどるカードも、ほかのカードの上に描�
   if (active === null || "concealed" in active || !("hand" in back[0]!.self)) {
     throw new Error("バトル場にポケモンがいないか、手札が見えない");
   }
-  back[0]!.self.hand.push(...active.stack.map((card) => ({ ...card, identified: false })));
+  back[0]!.self.hand.push(...active.stack);
   back[0]!.self.active = null;
   await openPlacing(page, placed, back);
   await page.click("#replay-next");
