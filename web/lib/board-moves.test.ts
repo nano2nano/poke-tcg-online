@@ -116,7 +116,7 @@ describe("boardMoves", () => {
     const [under, top] = handOf(before).splice(0, 2);
     before.self.discard.push(under!, top!);
     const after = structuredClone(before);
-    handOf(after).push({ ...after.self.discard.pop()!, identified: false });
+    handOf(after).push(after.self.discard.pop()!);
     expect(moves(before, after).arrivals.has(under!.instanceId)).toBe(false);
   });
 
